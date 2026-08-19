@@ -1,0 +1,54 @@
+name: Supabase keep-alive ping
+
+# Supabase free-tier projects pause after 7 consecutive idle days. For a league
+# that plays once a week, that WILL bite mid-season: every device silently
+# falls back to local-only behaviour, reads fail, writes are dropped, and
+# nobody is told. This job exists to stop that happening.
+#
+# Setup, and how to check it is actually working, is documented in
+# docs/DEPLOYMENT.md. It needs two repository secrets: SUPABASE_URL and
+# SUPABASE_ANON_KEY.
+
+on:
+  schedule:
+    # Every 3 days at 09:00 UTC. Comfortably inside the 7-day window even if
+    # one run is skipped, which GitHub does on very quiet repositories.
+    - cron: '0 9 */3 * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    name: Ping the database
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the secrets are set
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_URL}" ] || [ -z "${SUPABASE_ANON_KEY}" ]; then
+            echo "::error::Set the SUPABASE_URL and SUPABASE_ANON_KEY repository secrets first. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+
+      - name: POST /rest/v1/rpc/ping
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /tmp/body.txt -w '%{http_code}' \
+            -X POST "${SUPABASE_URL}/rest/v1/rpc/ping" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+            -H 'Content-Type: application/json' \
+            --max-time 30 \
+            -d '{}')
+          echo "HTTP ${code} - body: $(cat /tmp/body.txt)"
+          if [ "${code}" != "200" ]; then
+            echo "::error::ping RPC failed with status ${code}. The project may be paused, the anon key may have been rotated, or the ping() function may be missing."
+            exit 1
+          fi
+          echo "Project is awake."
