@@ -1,0 +1,21 @@
+node_modules/
+dist/
+build/
+coverage/
+.expo/
+.expo-shared/
+*.tsbuildinfo
+
+# Secrets. Never commit these.
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/*
+!.vscode/extensions.json
