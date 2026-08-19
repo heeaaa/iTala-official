@@ -1,0 +1,5 @@
+node_modules
+dist
+.expo
+pnpm-lock.yaml
+APP_CONTEXT_UPDATED.md
