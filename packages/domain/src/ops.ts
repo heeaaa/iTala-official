@@ -10,7 +10,7 @@
  * Here the reducer, which knows exactly what changed, says so explicitly. The
  * sync layer is dumb and does what it is told.
  */
-import type { Game, GameEvent, League, Player, Team } from './types.js';
+import type { Game, GameEvent, League, Player, Team } from './types';
 
 export type Table = 'leagues' | 'teams' | 'players' | 'games' | 'events';
 

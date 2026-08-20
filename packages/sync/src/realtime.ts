@@ -11,7 +11,7 @@
  * mechanism.
  */
 import type { Op, Table } from '@itala/domain';
-import { rowKey, type Row } from './types.js';
+import { rowKey, type Row } from './types';
 
 export interface RealtimeChange {
   table: Table;

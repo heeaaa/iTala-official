@@ -6,7 +6,7 @@
  * code and recording what it produced. That is the whole point: these tests
  * are the spec made executable.
  */
-import type { EventType, Game, GameEvent, League, Player, Team } from '../types.js';
+import type { EventType, Game, GameEvent, League, Player, Team } from '../types';
 
 type EvSpec = [
   period: number,

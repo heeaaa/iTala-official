@@ -13,7 +13,7 @@
  * drains, local wins.
  */
 import type { Op, Table } from '@itala/domain';
-import { SYNC_TABLES, rowKey, type RemoteSnapshot } from './types.js';
+import { SYNC_TABLES, rowKey, type RemoteSnapshot } from './types';
 
 export interface ReconcilePlan {
   ops: Op[];

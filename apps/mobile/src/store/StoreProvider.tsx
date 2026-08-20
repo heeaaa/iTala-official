@@ -41,9 +41,9 @@ import {
   type DrainReport,
   type Row,
 } from '@itala/sync';
-import { SqliteStore, openLocalDb } from '../db/sqlite.js';
-import { SYNC_ENABLED, getSupabase } from '../sync/client.js';
-import { SupabaseRemote } from '../sync/remote.js';
+import { SqliteStore, openLocalDb } from '../db/sqlite';
+import { SYNC_ENABLED, getSupabase } from '../sync/client';
+import { SupabaseRemote } from '../sync/remote';
 
 export interface SyncStatus {
   enabled: boolean;

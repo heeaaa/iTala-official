@@ -190,3 +190,16 @@ by `nextAttemptAt`, which meant a backed-off entry could be overtaken by the
 entries behind it, and a team could reach the server before the league it
 belongs to. Ordering here is causal, not a preference. There is a named
 regression test for it.
+
+## D-18. `finishedAt` is stamped once and never restamped
+
+**Spec:** 7.1 action 17 and F-29. v1 set `finishedAt = Date.now()` on every
+transition into `final`. It never came up, because v1 had no way to un-finish a
+game.
+**v2:** the first finish wins. Reopening a game and finishing it again keeps the
+original timestamp.
+**Why:** v2 does allow reopening, because the finish dialog promises editing
+afterwards and v1 did not keep that promise (hole H-5). Standings order,
+streaks and day grouping all key off `finishedAt`, so restamping would move a
+corrected game to the end of the season and silently rewrite the streak of
+every team it played.

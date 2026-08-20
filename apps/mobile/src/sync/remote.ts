@@ -14,7 +14,7 @@
 import type { PostgrestError, SupabaseClient } from '@supabase/supabase-js';
 import type { Op } from '@itala/domain';
 import type { RemoteClient, RemoteResult, RemoteSnapshot, Row } from '@itala/sync';
-import { TIMEOUTS, withTimeout } from './client.js';
+import { TIMEOUTS, withTimeout } from './client';
 
 /** Postgres SQLSTATEs we can reason about. */
 const UNIQUE_VIOLATION = '23505';

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { initialState, project, reduce, type Action, type AppState } from '@itala/domain';
-import { drainOnce, planReconcile, planRealtime, backoffDelay } from '../index.js';
-import { FakeRemote, FakeServer, MemoryStore } from './fakes.js';
+import { drainOnce, planReconcile, planRealtime, backoffDelay } from '../index';
+import { FakeRemote, FakeServer, MemoryStore } from './fakes';
 
 /**
  * A device: local store, its own view of the world, and a link to the server

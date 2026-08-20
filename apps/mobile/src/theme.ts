@@ -88,3 +88,33 @@ export const fonts = {
   bodyMed: 'DMSans_500Medium',
   bodyBold: 'DMSans_700Bold',
 } as const;
+
+/**
+ * The complete text scale. There are exactly seven kinds; if a screen needs an
+ * eighth, that is a signal to reuse one rather than to add one.
+ */
+export const textKinds = {
+  display: { fontFamily: fonts.display, fontSize: 40, letterSpacing: 0.5, color: colors.text },
+  h1: { fontFamily: fonts.display, fontSize: 28, color: colors.text },
+  h2: { fontFamily: fonts.displaySemi, fontSize: 20, color: colors.text },
+  body: { fontFamily: fonts.body, fontSize: 15, color: colors.text },
+  label: {
+    fontFamily: fonts.bodyMed,
+    fontSize: 12,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    color: colors.muted,
+  },
+  stat: { fontFamily: fonts.displaySemi, fontSize: 16, color: colors.text },
+  statBig: { fontFamily: fonts.display, fontSize: 34, color: colors.text },
+} as const;
+
+export type TextKind = keyof typeof textKinds;
+
+/**
+ * Breakpoint. The scorekeepers work on an iPad in landscape, so that is a
+ * first-class layout rather than a stretched phone. v1 was portrait-locked and
+ * phone-shaped throughout, which is the clearest mismatch between the old app
+ * and who actually uses it.
+ */
+export const TABLET_MIN_WIDTH = 700;

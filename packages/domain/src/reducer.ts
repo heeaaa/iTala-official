@@ -9,21 +9,22 @@
  * v1 called Date.now() inside the reducer and generated IDs there too. Callers
  * now supply both. See docs/SPEC_DEVIATIONS.md D-8.
  */
-import { MAX_PERIOD, TEAM_COLORS } from './constants.js';
-import { foulLimit } from './stats.js';
-import type { Op } from './ops.js';
-import { eventRow, gameRow, leagueRow, playerRow, teamRow } from './ops.js';
+import { LINEUP_SIZE, MAX_PERIOD, TEAM_COLORS } from './constants';
+import { foulLimit } from './stats';
+import type { Op } from './ops';
+import { eventRow, gameRow, leagueRow, playerRow, teamRow } from './ops';
 import type {
   AppState,
   EventType,
   Game,
   GameEvent,
+  GameStatus,
   League,
   LeagueKind,
   Player,
   Side,
   Team,
-} from './types.js';
+} from './types';
 
 export type Action =
   /** Replaces the whole tree. Never produces sync operations. */
@@ -71,7 +72,32 @@ export type Action =
       period: number;
       note?: string | null;
     }
-  | { t: 'UNDO_EVENT'; leagueId: string; gameId: string };
+  | { t: 'UNDO_EVENT'; leagueId: string; gameId: string }
+  | {
+      t: 'SUBSTITUTE';
+      leagueId: string;
+      gameId: string;
+      side: Side;
+      /** NO_ONE_OUT when filling an empty slot rather than swapping. */
+      outId: string;
+      inId: string;
+    }
+  | { t: 'SET_PERIOD'; leagueId: string; gameId: string; period: number }
+  | { t: 'SET_GAME_STATUS'; leagueId: string; gameId: string; now: number; status: GameStatus }
+  | {
+      t: 'UPDATE_LEAGUE_SETTINGS';
+      leagueId: string;
+      trackMisses?: boolean;
+      trackTurnovers?: boolean;
+      foulOutLimit?: number;
+      regulationPeriods?: 2 | 4;
+    };
+
+/**
+ * Passed as `outId` when a slot on the court is empty, so nobody is coming
+ * out. v1 used the same sentinel string and the reducer branch depends on it.
+ */
+export const NO_ONE_OUT = '__none__';
 
 export interface ReduceResult {
   state: AppState;
@@ -266,6 +292,95 @@ export function reduce(state: AppState, action: Action): ReduceResult {
           events: l.events.filter((e) => e.id !== last.id),
         })),
         ops: [{ op: 'delete', table: 'events', id: last.id }],
+      };
+    }
+
+    case 'SUBSTITUTE': {
+      const target = state.leagues.find((l) => l.id === action.leagueId);
+      const game = target?.games.find((g) => g.id === action.gameId);
+      if (!target || !game) return { state, ops: [] };
+
+      const key = action.side === 'home' ? 'homeOnCourt' : 'awayOnCourt';
+      const current = [...game[key]];
+      const idx = current.indexOf(action.outId);
+
+      if (idx === -1) {
+        // Nobody is coming out: this is the fill-an-empty-slot case. Append
+        // only if there is room and the player is not already on.
+        if (current.length >= LINEUP_SIZE || current.includes(action.inId)) {
+          return { state, ops: [] };
+        }
+        current.push(action.inId);
+      } else {
+        // Replace IN PLACE, so the incoming player takes the outgoing one's
+        // row on the tracker rather than jumping to the bottom.
+        current[idx] = action.inId;
+      }
+
+      const next: Game = { ...game, [key]: current };
+      return {
+        state: mapLeague(state, action.leagueId, (l) => ({
+          ...l,
+          games: l.games.map((g) => (g.id === next.id ? next : g)),
+        })),
+        ops: [{ op: 'upsert', table: 'games', row: gameRow(next) }],
+      };
+    }
+
+    case 'SET_PERIOD': {
+      const target = state.leagues.find((l) => l.id === action.leagueId);
+      const game = target?.games.find((g) => g.id === action.gameId);
+      if (!target || !game) return { state, ops: [] };
+      const period = clampPeriod(action.period);
+      if (period === game.period) return { state, ops: [] };
+      const next: Game = { ...game, period };
+      return {
+        state: mapLeague(state, action.leagueId, (l) => ({
+          ...l,
+          games: l.games.map((g) => (g.id === next.id ? next : g)),
+        })),
+        ops: [{ op: 'upsert', table: 'games', row: gameRow(next) }],
+      };
+    }
+
+    case 'SET_GAME_STATUS': {
+      const target = state.leagues.find((l) => l.id === action.leagueId);
+      const game = target?.games.find((g) => g.id === action.gameId);
+      if (!target || !game) return { state, ops: [] };
+
+      const next: Game = {
+        ...game,
+        status: action.status,
+        // Stamped the FIRST time a game is finished and never again.
+        //
+        // Standings order, streaks and date grouping all key off finishedAt.
+        // Reopening a game to correct a box score and finishing it again must
+        // not move it to the end of the season. See SPEC_DEVIATIONS D-18.
+        finishedAt: action.status === 'final' ? (game.finishedAt ?? action.now) : game.finishedAt,
+      };
+      return {
+        state: mapLeague(state, action.leagueId, (l) => ({
+          ...l,
+          games: l.games.map((g) => (g.id === next.id ? next : g)),
+        })),
+        ops: [{ op: 'upsert', table: 'games', row: gameRow(next) }],
+      };
+    }
+
+    case 'UPDATE_LEAGUE_SETTINGS': {
+      const target = state.leagues.find((l) => l.id === action.leagueId);
+      if (!target) return { state, ops: [] };
+
+      const next: League = {
+        ...target,
+        trackMisses: action.trackMisses ?? target.trackMisses,
+        trackTurnovers: action.trackTurnovers ?? target.trackTurnovers,
+        foulOutLimit: action.foulOutLimit ?? target.foulOutLimit,
+        regulationPeriods: action.regulationPeriods ?? target.regulationPeriods,
+      };
+      return {
+        state: { ...state, leagues: state.leagues.map((l) => (l.id === next.id ? next : l)) },
+        ops: [{ op: 'upsert', table: 'leagues', row: leagueRow(next) }],
       };
     }
   }

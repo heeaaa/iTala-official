@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { initialState, reduce, type Action } from '../reducer.js';
-import { project, eventFromRow, leagueFromRow, teamFromRow, type RowSet } from '../project.js';
-import { gameScore, standings, teamBoxScore } from '../stats.js';
-import type { AppState, Table } from '../index.js';
+import { initialState, reduce, type Action } from '../reducer';
+import { project, eventFromRow, leagueFromRow, teamFromRow, type RowSet } from '../project';
+import { gameScore, standings, teamBoxScore } from '../stats';
+import type { AppState, Table } from '../index';
 
 /**
  * Runs a script of actions and collects the rows the ops would have written,
