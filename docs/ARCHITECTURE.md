@@ -89,6 +89,28 @@ Three properties fall out of this and each fixes a named defect in v1:
 | Write permission    | the database    | Row-level security. Every UI check is cosmetic.                                               |
 | Conflict resolution | last write wins | Two scorekeepers should not be on the same game. Events never collide because IDs are unique. |
 
+## Verification strategy
+
+`packages/domain` and `packages/sync` are pure so they can be tested
+exhaustively and instantly. But **the tests are the inner ring, not the
+boundary**. Typechecking and unit tests together have never caught any of the
+failures that actually reached the user in this project: those were module
+resolution, dependency versions, file modes, and delivery.
+
+So verification is layered, and `pnpm preflight` runs all of it:
+
+| Layer          | Command                      | Catches                                                          |
+| -------------- | ---------------------------- | ---------------------------------------------------------------- |
+| Types          | `pnpm typecheck`             | shape errors                                                     |
+| Logic          | `pnpm test`                  | every rule in specification section 7                            |
+| Database       | `bash supabase/tests/run.sh` | row-level security, lockout, constraints                         |
+| Project health | `expo:doctor`                | SDK version mismatches, invalid config, duplicate native modules |
+| Buildability   | `bundle:check`               | imports, resolution, Metro config                                |
+| Hardware       | `docs/VERIFY.md`             | the offline game, undo across devices, the two-tap flow          |
+
+The rule and the incident log that produced it are at the top of
+[`AGENTS.md`](../AGENTS.md). Read that before changing anything.
+
 ## Testing strategy
 
 `packages/domain` is tested exhaustively because it is pure and because every

@@ -20,6 +20,15 @@ export default tseslint.config(
     rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
   },
   {
+    // Node scripts under tools/. They run on a developer's machine, print to
+    // stdout on purpose, and are not part of the app bundle.
+    files: ['tools/**/*.mjs', 'tools/**/*.js'],
+    languageOptions: {
+      globals: { console: 'readonly', process: 'readonly', URL: 'readonly' },
+    },
+    rules: { 'no-console': 'off' },
+  },
+  {
     // Build tooling that Metro and Babel load as CommonJS in Node, not RN.
     files: ['**/babel.config.js', '**/metro.config.js', 'eslint.config.js'],
     languageOptions: {

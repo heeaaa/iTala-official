@@ -1,5 +1,59 @@
 # Engineering rules for iTala v2
 
+## Rule zero: verify at the outermost layer you can reach
+
+Every failure that has reached the user in this project so far had the same
+shape. Something was checked at the layer it was written in, and broke at the
+layer the user actually consumes.
+
+**Before saying anything works:**
+
+```bash
+pnpm preflight          # everything checkable without a phone in your hand
+```
+
+Seven steps: format, lint, typecheck, tests, expo-doctor, a real bundle of both
+platforms, and the database harness. It prints PASS, FAIL or SKIP for each.
+**If a step is skipped, say so rather than reporting a clean run.** Use
+`pnpm preflight:quick` while iterating; run it in full before shipping.
+
+`pnpm verify` is the fast inner loop and is what a pull request needs to pass.
+It is NOT sufficient on its own: it stops at typecheck and tests, and three of
+the incidents below passed it.
+
+### The ladder
+
+Whatever you changed, check one layer further out than feels necessary.
+
+| If you changed                               | Typecheck proves | You must also                                                                     |
+| -------------------------------------------- | ---------------- | --------------------------------------------------------------------------------- |
+| Derivation, the reducer, sync logic          | the shape        | run the tests; add one that would have caught the bug                             |
+| An import, a path, a module boundary         | nothing useful   | bundle it: `pnpm --filter @itala/mobile run bundle:check`                         |
+| Any dependency, or app.json                  | nothing          | `pnpm --filter @itala/mobile run expo:doctor`                                     |
+| SQL, RLS, a constraint                       | nothing          | `bash supabase/tests/run.sh`                                                      |
+| A shell script, or anything with a file mode | nothing          | assume Windows drops the executable bit; invoke it as `bash script.sh`            |
+| Anything shipped as a zip                    | nothing          | remember extraction cannot DELETE. Ship a manifest and use `tools/sync-phase.ps1` |
+| Anything the user runs by hand               | nothing          | read your own instructions back in order, on their platform, from a cold start    |
+
+### The incident log
+
+Each of these cost real time. They are here so the reason survives the fix, the
+same way v1's best comments did.
+
+| What broke                                                                   | Looked fine because                              | The rule now                                                         |
+| ---------------------------------------------------------------------------- | ------------------------------------------------ | -------------------------------------------------------------------- |
+| Metro could not resolve `expo-modules-core`                                  | pnpm's isolated layout is invisible to typecheck | `node-linker=hoisted` in `.npmrc`. Never remove it                   |
+| Relative imports with a `.js` suffix                                         | TypeScript resolves them, Metro does not         | Relative imports stay extensionless                                  |
+| 3.9MB of unused icon and font assets                                         | nothing errors, the app just gets fat            | Import icon sets and font weights by subpath, never the barrel       |
+| `RCTPackagerConnection has no member 'shared'`, 25 minutes into an EAS build | the versions looked plausible                    | R-20. Expo packages come from `expo install`, never by hand          |
+| CI: `./supabase/tests/run.sh: Permission denied`                             | it was executable on Linux                       | Invoke scripts as `bash script.sh`                                   |
+| `format:check` failing on a machine that changed nothing                     | `^` on prettier                                  | Tooling pinned exactly. Expo SDK packages excepted, see R-20         |
+| A deleted screen kept coming back and failing lint                           | `Expand-Archive` cannot delete                   | Every drop carries `MANIFEST.txt`; apply with `tools/sync-phase.ps1` |
+| "Run `./tools/sync-phase.ps1`" when the script was inside the zip            | the instruction was written from the wrong end   | Read setup instructions back from a cold start, in order             |
+| No `eas.json`, so no build was possible at all                               | CI was green                                     | Green CI does not mean shippable. Check the whole path to the user   |
+
+---
+
 This file is the durable, load-bearing guidance for anyone (human or agent)
 working in this repository. v1 had no such file; what it had instead was a
 dozen unusually good code comments written after real production incidents.

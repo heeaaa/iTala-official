@@ -50,12 +50,20 @@ Requires Node 22 and pnpm 10.
 
 ```bash
 pnpm install
-pnpm verify     # format check, lint, typecheck, tests. Run this before pushing.
-pnpm test       # just the tests
+pnpm verify      # format, lint, typecheck, tests. What a pull request must pass.
+pnpm preflight   # all of the above PLUS expo-doctor, a real bundle, and the
+                 # database harness. Run this before saying anything works.
+pnpm test        # just the tests
 ```
 
 `pnpm verify` is exactly what CI runs. If `format:check` complains, `pnpm
 format` fixes it.
+
+`pnpm preflight` goes further and is the one that matters before shipping.
+Typechecking and unit tests have never caught the failures that actually
+reached a user here: those were dependency versions, module resolution, file
+modes and delivery. Rule zero and the incident log are at the top of
+[`AGENTS.md`](AGENTS.md).
 
 Every tool version is pinned exactly, with no ranges. A caret on a formatter
 means its rules can change without anyone touching the repository, which breaks
