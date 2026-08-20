@@ -22,5 +22,6 @@ Thumbs.db
 
 # Expo
 apps/*/.expo/
+apps/*/.expo-export-check/
 apps/*/android/
 apps/*/ios/

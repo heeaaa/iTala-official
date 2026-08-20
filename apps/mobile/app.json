@@ -7,16 +7,12 @@
     "icon": "./assets/icon.png",
     "scheme": "itala",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#18202E"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.bpbl.itala",
-      "infoPlist": { "ITSAppUsesNonExemptEncryption": false }
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.bpbl.itala",
@@ -25,6 +21,20 @@
         "backgroundColor": "#18202E"
       }
     },
-    "extra": { "eas": { "projectId": "bf4508b7-20f9-4342-a315-9b6f6121aef9" } }
+    "extra": {
+      "eas": {
+        "projectId": "bf4508b7-20f9-4342-a315-9b6f6121aef9"
+      }
+    },
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#18202E"
+        }
+      ]
+    ]
   }
 }

@@ -4,14 +4,16 @@
   "private": true,
   "main": "index.ts",
   "scripts": {
+    "android": "expo start --android",
+    "build:dev:android": "eas build --profile development --platform android",
+    "build:dev:ios": "eas build --profile development --platform ios",
+    "bundle:check": "expo export --platform ios --platform android --output-dir .expo-export-check",
+    "expo:doctor": "expo-doctor",
+    "ios": "expo start --ios",
     "start": "expo start --dev-client",
     "start:clear": "expo start --dev-client --clear",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "typecheck": "tsc --noEmit",
     "start:tunnel": "expo start --dev-client --tunnel",
-    "build:dev:ios": "eas build --profile development --platform ios",
-    "build:dev:android": "eas build --profile development --platform android"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@expo-google-fonts/dm-sans": "^0.4.1",
@@ -23,18 +25,20 @@
     "@react-navigation/native": "^7.1.6",
     "@react-navigation/native-stack": "^7.3.10",
     "@supabase/supabase-js": "^2.45.0",
-    "expo": "^56.0.0",
-    "expo-dev-client": "^6.0.0",
-    "expo-font": "^14.0.0",
-    "expo-sqlite": "^16.0.0",
-    "expo-status-bar": "^3.0.0",
+    "expo": "^57.0.14",
+    "expo-dev-client": "^57.0.13",
+    "expo-font": "^57.0.1",
+    "expo-splash-screen": "~57.0.7",
+    "expo-sqlite": "^57.0.1",
+    "expo-status-bar": "^57.0.1",
     "react": "19.2.3",
-    "react-native": "0.85.0",
-    "react-native-safe-area-context": "^5.6.0",
-    "react-native-screens": "^4.16.0"
+    "react-native": "0.86.2",
+    "react-native-safe-area-context": "^5.7.0",
+    "react-native-screens": "^4.26.2"
   },
   "devDependencies": {
     "@types/react": "~19.2.0",
-    "typescript": "5.9.3"
+    "expo-doctor": "^1.20.2",
+    "typescript": "6.0.3"
   }
 }

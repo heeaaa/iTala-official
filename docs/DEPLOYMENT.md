@@ -100,9 +100,9 @@ Both are free on a public repository. Neither talks to the real project.
 
 ## Mobile builds
 
-Expo SDK 56. **Expo Go is no longer the quick-test path**: Expo Go for SDK 56
-is not published on the App Store or Google Play, so the loop is a development
-build instead.
+Expo SDK 57. **Expo Go is no longer the quick-test path**: Expo Go for current
+SDKs is not published on the App Store or Google Play, so the loop is a
+development build instead.
 
 That sounds worse than it is, and it means fewer builds rather than more:
 
@@ -122,8 +122,16 @@ This project is a pnpm workspace, which Metro does not handle by default.
 points the resolver at both `node_modules` trees. Without it, edits to
 `packages/domain` appear to do nothing until the bundler restarts.
 
-`newArchEnabled` is **true**. v1 pinned it to false for Expo Go compatibility,
-which is no longer a constraint worth carrying.
+The new architecture is the only architecture in SDK 57, so there is no flag to
+set. v1 pinned it off for Expo Go compatibility, which is no longer a
+constraint worth carrying.
+
+**Expo package versions are chosen by `expo install`, never by hand.** They are
+versioned against the SDK rather than independently, so writing a plausible
+looking range installs a package built for a different React Native and the
+failure surfaces as a Swift compile error deep in an EAS build. CI runs
+`expo-doctor` and exports both platforms on every pull request to catch it in
+seconds instead.
 
 ## Store submission
 

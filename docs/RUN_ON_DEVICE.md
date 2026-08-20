@@ -84,8 +84,14 @@ install. You now have an app called iTala on your home screen.
 **What this build is.** A development client: your app's native shell, with the
 JavaScript loaded from your PC over Wi-Fi. It behaves the way Expo Go used to,
 and it is why you only rebuild when a native dependency changes, not when code
-changes. Expo Go itself is not an option on SDK 56, which is no longer
+changes. Expo Go itself is not an option on current SDKs, which are no longer
 published to the App Store.
+
+**Before every build, run `pnpm --filter @itala/mobile run expo:doctor`.** It
+takes seconds and catches the things that otherwise fail twenty minutes into a
+cloud build: package versions that do not match the SDK, invalid app config
+keys, duplicate native modules. CI runs it on every pull request, so it should
+already be clean.
 
 ## 6. Run it
 

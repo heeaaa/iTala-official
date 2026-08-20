@@ -15,6 +15,11 @@
   Only git-TRACKED files are ever deleted. Untracked local files - your .env,
   node_modules, scratch notes - are never touched.
 
+.NOTES
+  The very first drop that introduced this script had to be extracted by hand
+  first, because the script itself was inside the zip. From then on it is
+  already in the working tree and this is the only command needed.
+
 .EXAMPLE
   ./tools/sync-phase.ps1 -Zip _phase3.zip
 #>
@@ -26,11 +31,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-if (-not (Test-Path $Zip)) { throw "Zip not found: $Zip" }
 if (-not (Test-Path '.git')) { throw 'Run this from the repository root.' }
 
-Write-Host '==> Extracting' -ForegroundColor Cyan
-Expand-Archive -Path $Zip -DestinationPath . -Force
+# Extracting is optional: if the zip has already been unpacked by hand, carry
+# on with what is on disk rather than refusing to run.
+if (Test-Path $Zip) {
+  Write-Host '==> Extracting' -ForegroundColor Cyan
+  Expand-Archive -Path $Zip -DestinationPath . -Force
+} else {
+  Write-Host "==> $Zip not found, assuming it is already extracted" -ForegroundColor DarkGray
+}
 
 if (-not (Test-Path 'MANIFEST.txt')) {
   throw 'MANIFEST.txt missing from the zip. Cannot safely work out what was deleted.'
@@ -53,8 +63,8 @@ git ls-files | ForEach-Object {
 }
 if ($removed -eq 0) { Write-Host '    nothing to remove' -ForegroundColor DarkGray }
 
-Remove-Item 'MANIFEST.txt' -Force
-Remove-Item $Zip -Force
+Remove-Item 'MANIFEST.txt' -Force -ErrorAction SilentlyContinue
+Remove-Item $Zip -Force -ErrorAction SilentlyContinue
 
 Write-Host '==> Staging' -ForegroundColor Cyan
 git add -A

@@ -70,3 +70,35 @@ jobs:
         # not survive a zip round trip through Windows, and CI should not depend
         # on a file mode that a contributor's filesystem can silently drop.
         run: bash supabase/tests/run.sh
+
+  expo:
+    name: Expo project health and bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Catches the class of failure that only shows up 20 minutes into an EAS
+      # build: package versions that do not match the SDK, invalid app config
+      # keys, duplicate native modules, and SDK versions with known
+      # regressions. Cheap here, expensive there.
+      - name: expo-doctor
+        run: pnpm --filter @itala/mobile run expo:doctor
+
+      # Typechecking does not prove the app can be bundled. A bad import, an
+      # unresolvable module or a broken Metro config all pass tsc and fail
+      # Metro. Exporting both platforms is the closest thing to a build that
+      # runs in seconds.
+      - name: Bundle for iOS and Android
+        run: pnpm --filter @itala/mobile run bundle:check

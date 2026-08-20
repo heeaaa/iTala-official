@@ -104,7 +104,20 @@ Not in code, not in a commit message, not in documentation, not in a test
 fixture. The admin password is set by a manual SQL snippet against the database
 and exists nowhere else. `.env` is gitignored; `.env.example` carries blanks.
 
-**R-20. Deviations from the specification are deliberate and recorded.**
+**R-20. Never hand-write an Expo package version. Use `expo install`.**
+Expo's own packages are versioned against the SDK, not independently.
+Hand-writing `expo-dev-client: ^6.0.0` installed a package built for an older
+React Native, and the failure surfaced as a Swift compile error twenty minutes
+into an EAS build rather than anywhere useful. `pnpm --filter @itala/mobile run
+expo:doctor` catches all of it in seconds, and CI runs it on every pull request.
+Tooling (formatter, linter, TypeScript) is pinned exactly; Expo SDK packages
+are managed by `expo install` and left in the ranges it chooses.
+
+**R-21. Typechecking is not proof the app builds.**
+A bad import, an unresolvable module or a Metro misconfiguration all pass
+`tsc` and fail the bundler. CI exports both platforms for this reason.
+
+**R-22. Deviations from the specification are deliberate and recorded.**
 If behaviour departs from `APP_CONTEXT_UPDATED.md`, it goes in
 `docs/SPEC_DEVIATIONS.md` with a reason, and the code comment points at the
 entry. Undocumented drift is how a rebuild becomes a rewrite.
