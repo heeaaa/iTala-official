@@ -1,0 +1,29 @@
+{
+  "name": "@itala/mobile",
+  "version": "2.0.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "start:clear": "expo start --clear",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@itala/domain": "workspace:*",
+    "@itala/sync": "workspace:*",
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "expo": "^56.0.0",
+    "expo-sqlite": "^16.0.0",
+    "expo-status-bar": "^3.0.0",
+    "react": "19.2.3",
+    "react-native": "0.85.0",
+    "react-native-safe-area-context": "^5.6.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.0",
+    "typescript": "~5.9.2"
+  }
+}

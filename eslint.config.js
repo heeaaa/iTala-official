@@ -19,4 +19,13 @@ export default tseslint.config(
     files: ['**/__tests__/**/*.ts', '**/*.test.ts'],
     rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
   },
+  {
+    // Build tooling that Metro and Babel load as CommonJS in Node, not RN.
+    files: ['**/babel.config.js', '**/metro.config.js', 'eslint.config.js'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: { module: 'writable', require: 'readonly', __dirname: 'readonly' },
+    },
+    rules: { '@typescript-eslint/no-require-imports': 'off' },
+  },
 );

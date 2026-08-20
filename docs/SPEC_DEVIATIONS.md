@@ -140,11 +140,24 @@ at any rate. A short shared secret was trivially brute-forceable.
 **Spec:** F-40 and 7.3, where the entire state tree, including every base64
 logo, is serialised to AsyncStorage under `hoops.state.v1` on every mutation.
 Continuity constraint C-6.
-**v2:** `expo-sqlite`, with tables mirroring the server schema column for column.
+**v2:** `expo-sqlite`. One local table per domain table, each holding
+`(id, league_id, data)` where `data` is the row as JSON in exactly the shape the
+server stores it.
 **Why:** appending one stat becomes one row insert rather than serialising the
-whole season. It makes the outbox durable and crash-safe, and it removes v1's
-entire flatten-on-push and re-nest-on-pull translation layer along with the
-silent coercions living in it. C-6 is void because no device holds v1 data.
+whole season. It makes the outbox durable and crash-safe, and it lets the domain
+rows and the outbox entry be written in a single transaction, which is what
+makes "applied locally but never sent" impossible.
+
+Rows are stored opaquely rather than as a column per field because the local
+database is a **cache, not a query surface**: everything is projected into
+memory and derived from there, so there is nothing to index on. Keeping the row
+shape identical on both sides means there is exactly one mapping in the system
+(`project()` in `@itala/domain`), tested by round trip, instead of v1's
+hand-written per-table mappers with their unchecked casts and quiet coercions.
+If a later phase needs local SQL queries, splitting the JSON into columns is a
+mechanical change behind the same `LocalStore` interface.
+
+C-6 is void because no device holds v1 data.
 
 ## D-15. A durable outbox replaces fire-and-forget pushes
 
@@ -165,3 +178,15 @@ tables, including every logo, and the payload is discarded.
 foreground and on a timer, as a safety net rather than as the mechanism.
 **Why:** it turns an operation proportional to the whole database into a
 constant one, and it makes the device's own writes echoing back harmless.
+
+## D-17. The outbox drains in strict sequence order
+
+**Spec:** not covered. v1 had no queue at all.
+**v2:** the drainer reads the head of the queue regardless of schedule and
+**stops** when the head is not yet due, rather than skipping to the next
+entry.
+**Why:** found by a test during Phase 1. An earlier version filtered the queue
+by `nextAttemptAt`, which meant a backed-off entry could be overtaken by the
+entries behind it, and a team could reach the server before the league it
+belongs to. Ordering here is causal, not a preference. There is a named
+regression test for it.

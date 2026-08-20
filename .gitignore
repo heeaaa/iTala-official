@@ -19,3 +19,8 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Expo
+apps/*/.expo/
+apps/*/android/
+apps/*/ios/

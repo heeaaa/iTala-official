@@ -23,7 +23,18 @@ packages/domain/     Pure TypeScript. No React, no Expo, no network, no clock.
   reducer.ts         The single mutation funnel. Pure.
   __tests__/         Golden tests, written from the spec by hand.
 
-apps/mobile/         Expo app. Screens, local SQLite store, sync engine.
+packages/sync/       Pure sync engine behind two injected adapters.
+  types.ts           LocalStore and RemoteClient contracts
+  outbox.ts          the drainer: strict FIFO, retry, reject, duplicate
+  backoff.ts         exponential with a ceiling and injected jitter
+  reconcile.ts       merging a full pull without clobbering unsent work
+  realtime.ts        applying one inbound change
+  __tests__/         in-memory devices and a shared fake server
+
+apps/mobile/         Expo app. The real adapters plus React wiring.
+  src/db/sqlite.ts   LocalStore on expo-sqlite
+  src/sync/remote.ts RemoteClient on supabase-js, and error classification
+  src/store/         boot order, dispatch funnel, realtime, drain loop
 apps/web/            Read-only spectator view. Imports packages/domain.
 supabase/migrations/ Versioned SQL. The only way schema changes reach a project.
 ```

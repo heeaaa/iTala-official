@@ -69,7 +69,7 @@ Notes:
 Never paste an edited migration into a real project without running this first:
 
 ```bash
-./supabase/tests/run.sh
+bash supabase/tests/run.sh
 ```
 
 It creates a throwaway database, applies every migration, and asserts twenty

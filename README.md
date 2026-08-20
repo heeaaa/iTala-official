@@ -24,6 +24,7 @@ This repository holds **v2**, a rebuild from the specification in
 
 ```
 packages/domain      pure TypeScript: data model, stat maths, the reducer
+packages/sync        pure sync engine: outbox, reconcile, realtime
 apps/mobile          the Expo app
 apps/web             read-only spectator view
 supabase/migrations  versioned schema
