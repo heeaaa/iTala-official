@@ -1,0 +1,15 @@
+# Line endings are normalised to LF everywhere.
+#
+# Without this, Git for Windows converts tracked files to CRLF on checkout,
+# Prettier (which expects LF) then reports every one of them as badly
+# formatted, and `pnpm verify` fails for a reason that has nothing to do with
+# the code. Committing this file makes the working tree match the repository on
+# every platform.
+* text=auto eol=lf
+
+# Binary, never touched.
+*.png binary
+*.jpg binary
+*.ttf binary
+*.zip binary
+*.hbc binary
