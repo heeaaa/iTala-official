@@ -12,7 +12,7 @@
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import { SYNC_ENABLED, TIMEOUTS, getSupabase, withTimeout } from '../sync/client.js';
+import { SYNC_ENABLED, TIMEOUTS, getSupabase, withTimeout } from '../sync/client';
 
 export type UnlockResult = { ok: true } | { ok: false; message: string };
 

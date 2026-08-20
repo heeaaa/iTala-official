@@ -92,3 +92,77 @@ throwaway screen, no navigation, no real stat pad, no standings, no box-score
 sharing and no spectator mode. Those are Phases 2 to 5. Phase 1's only job is
 to prove that the architecture holds under a bad network, and it is done when
 the boxes above are ticked.
+
+---
+
+# Verifying Phase 2 on real hardware
+
+Phase 2 is the complete set-up-a-league-and-run-a-game journey. Target
+hardware: **iPad (A16)** for the scorekeeper, **iPhone 17** and **Poco X5 Pro
+5G** for everyone else.
+
+## J-1: first run
+
+- [ ] Launch with no data. The home screen shows "No leagues yet" and **no
+      create button**, because you are not admin yet.
+- [ ] Tap the padlock, enter the password. The ADMIN MODE pill appears along
+      with the New League button.
+- [ ] Create a league. You land straight on the roster screen.
+- [ ] Add two teams and a few players each. Each team's colour is assigned
+      automatically and differs from the other.
+- [ ] Tap Done. The Start Game button is enabled.
+
+## J-2: run a whole game
+
+- [ ] Start Game. Tap home, then away. A team cannot be picked as both.
+- [ ] Lineups are pre-filled with each roster's first five. Tip off.
+- [ ] **On the iPad in landscape: both teams' fives are visible at once**, and
+      tapping a stat then any player logs it to that player's team. Still two
+      taps. On a phone, tap the other side of the scoreboard to switch teams
+      first.
+- [ ] After each log the armed stat clears. Tapping the same stat twice in a
+      row requires two separate arms. This is what stops double-logging.
+- [ ] The score updates on the tap, with no perceptible delay.
+- [ ] Undo removes the last stat and the score drops.
+- [ ] Subs: tap who comes out, then who comes in. **The incoming player takes
+      the outgoing player's row rather than jumping to the bottom.**
+- [ ] With a slot empty, the dashed row opens Subs and the chosen player is
+      appended.
+- [ ] Log a fifth foul on one player. An alert names them, they leave the
+      court, and they are greyed out and unselectable in Subs.
+- [ ] Advance the period. Confirm the dialog. **Team fouls reset to zero;
+      personal fouls do not.**
+- [ ] Go back a period. The earlier team-foul count returns, because nothing
+      was ever cleared.
+- [ ] Finish the game. Box score opens, with the by-period strip and the
+      per-team table.
+
+## Settings, per league
+
+- [ ] Turn **Track missed shots** off. The three miss buttons disappear and the
+      box score switches to makes-only columns.
+- [ ] Turn **Track turnovers** on. A TOV button appears and the TO column
+      appears with it. With it off, neither exists: v1 showed a column that
+      could only ever be zero.
+- [ ] Set the foul limit to 6. A player is no longer fouled out on the fifth.
+- [ ] Set regulation to 2 halves. The box score strip reads H1, H2, OT1.
+- [ ] **Create a second league and confirm its settings are independent.** In
+      v1 this was one global switch shared by every league on every device.
+
+## Level game
+
+- [ ] Finish a game with the scores level. The dialog offers **Add a period**
+      as the primary action rather than just finishing.
+- [ ] Choose Finish anyway. It is recorded as a draw, not a home win.
+
+## Cross-device, still
+
+- [ ] Everything from the Phase 1 checklist still holds: the offline game, undo
+      staying undone, and the red banner when a write is refused.
+
+## Accessibility spot check
+
+- [ ] Turn on VoiceOver (iOS) or TalkBack (Android). Every stat button
+      announces what it does. Player rows announce name, points and fouls. The
+      padlock announces whether it locks or unlocks.
+- [ ] No control is an unlabelled emoji. v1 used fourteen.

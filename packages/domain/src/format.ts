@@ -1,4 +1,4 @@
-import { NO_VALUE } from './constants.js';
+import { NO_VALUE } from './constants';
 
 /**
  * Percentage as a display string. Zero attempts render as an em dash, NOT 0%,

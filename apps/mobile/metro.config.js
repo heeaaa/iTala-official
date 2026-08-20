@@ -20,9 +20,12 @@ config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, 'node_modules'),
   path.resolve(workspaceRoot, 'node_modules'),
 ];
-// pnpm symlinks workspace packages; Metro must follow them rather than
-// treating each as a separate project root.
+// Workspace packages are still symlinked even with a hoisted linker.
 config.resolver.unstable_enableSymlinks = true;
-config.resolver.disableHierarchicalLookup = true;
+// Hierarchical lookup stays ON: with node-linker=hoisted (see .npmrc) Metro
+// needs to walk up to the root node_modules to find Expo's transitive native
+// modules. Disabling it is what breaks the bundle with "Unable to resolve
+// module expo-modules-core".
+config.resolver.disableHierarchicalLookup = false;
 
 module.exports = config;

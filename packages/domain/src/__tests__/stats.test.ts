@@ -13,9 +13,9 @@ import {
   standings,
   teamBoxScore,
   teamPeriodFouls,
-} from '../stats.js';
-import { emptyStatLine } from '../types.js';
-import { fixtureLeague } from './fixtures.js';
+} from '../stats';
+import { emptyStatLine } from '../types';
+import { fixtureLeague } from './fixtures';
 
 const L = fixtureLeague();
 const g1 = L.games.find((g) => g.id === 'g1')!;

@@ -11,8 +11,8 @@ import type {
   RemoteResult,
   RemoteSnapshot,
   Row,
-} from '../index.js';
-import { SYNC_TABLES, opKey } from '../index.js';
+} from '../index';
+import { SYNC_TABLES, opKey } from '../index';
 
 const emptyTables = (): Map<Table, Map<string, Row>> =>
   new Map(SYNC_TABLES.map((t) => [t, new Map<string, Row>()]));

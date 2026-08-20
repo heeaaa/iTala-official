@@ -12,7 +12,7 @@
  * is validated here instead, at the boundary, and anything unrecognised is
  * dropped rather than smuggled into a typed object.
  */
-import { DEFAULT_FOUL_OUT, DEFAULT_REGULATION_PERIODS } from './constants.js';
+import { DEFAULT_FOUL_OUT, DEFAULT_REGULATION_PERIODS } from './constants';
 import type {
   AppState,
   Game,
@@ -22,8 +22,8 @@ import type {
   LeagueKind,
   Player,
   Team,
-} from './types.js';
-import { isEventType } from './types.js';
+} from './types';
+import { isEventType } from './types';
 
 export type Row = Record<string, unknown>;
 

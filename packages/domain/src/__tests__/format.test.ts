@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { avg, dayKey, pct, prettyClock, triple } from '../format.js';
-import { looksLikeId, uid } from '../ids.js';
+import { avg, dayKey, pct, prettyClock, triple } from '../format';
+import { looksLikeId, uid } from '../ids';
 
 describe('pct (spec 7.5)', () => {
   it('renders an em dash for zero attempts, never 0%', () => {

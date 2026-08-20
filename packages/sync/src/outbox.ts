@@ -6,8 +6,8 @@
  * retryable failure stops the drain rather than skipping ahead, so a
  * dependency can never be delivered after its dependant.
  */
-import type { LocalStore, RemoteClient } from './types.js';
-import { DEFAULT_BACKOFF, backoffDelay, type BackoffOptions } from './backoff.js';
+import type { LocalStore, RemoteClient } from './types';
+import { DEFAULT_BACKOFF, backoffDelay, type BackoffOptions } from './backoff';
 
 export interface DrainOptions {
   /** Entries to attempt in one pass. Keeps a huge backlog from blocking the UI. */

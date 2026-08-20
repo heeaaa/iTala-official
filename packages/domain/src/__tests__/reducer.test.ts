@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { initialState, reduce, type Action } from '../reducer.js';
-import { TEAM_COLORS } from '../constants.js';
-import { gameScore, playerFouls } from '../stats.js';
-import type { AppState } from '../types.js';
-import type { Op } from '../ops.js';
+import { initialState, reduce, type Action } from '../reducer';
+import { TEAM_COLORS } from '../constants';
+import { gameScore, playerFouls } from '../stats';
+import type { AppState } from '../types';
+import type { Op } from '../ops';
 
 /** Narrows an op to one that carries a row, so tests can assert on its shape. */
 function rowOf(op: Op | undefined): Record<string, unknown> {

@@ -6,7 +6,7 @@
  * thing to test, which is why the golden suite in __tests__ exists and why it
  * was written before this file.
  */
-import { DEFAULT_FOUL_OUT, NO_VALUE } from './constants.js';
+import { DEFAULT_FOUL_OUT, NO_VALUE } from './constants';
 import type {
   EventType,
   Game,
@@ -16,8 +16,8 @@ import type {
   StatLine,
   Team,
   TeamBoxScore,
-} from './types.js';
-import { emptyStatLine } from './types.js';
+} from './types';
+import { emptyStatLine } from './types';
 
 /* -------------------------------------------------------------------------- */
 /* Foul rules                                                                  */
