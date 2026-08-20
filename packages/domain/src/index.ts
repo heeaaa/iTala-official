@@ -5,3 +5,4 @@ export * from './format.js';
 export * from './stats.js';
 export * from './ops.js';
 export * from './reducer.js';
+export * from './project.js';

@@ -66,4 +66,7 @@ jobs:
           PGPORT: '5432'
           PGUSER: postgres
           PGPASSWORD: postgres
-        run: ./supabase/tests/run.sh
+        # Invoked through bash rather than as ./run.sh: the executable bit does
+        # not survive a zip round trip through Windows, and CI should not depend
+        # on a file mode that a contributor's filesystem can silently drop.
+        run: bash supabase/tests/run.sh

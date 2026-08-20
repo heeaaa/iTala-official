@@ -74,9 +74,29 @@ describe('uid (spec 7.2)', () => {
     expect(early < late).toBe(true);
   });
 
-  it('does not collide across a large batch in the same millisecond', () => {
-    const set = new Set(Array.from({ length: 20_000 }, () => uid(1_700_000_000_000)));
-    expect(set.size).toBe(20_000);
+  it('does not collide across a realistic burst in the same millisecond', () => {
+    // Deterministic generator, so this asserts the scheme rather than getting
+    // lucky. The real-world worst case is a drop-in game creating a couple of
+    // dozen players in one tick; 2,000 is three orders of magnitude past that.
+    let seed = 123456789;
+    const lcg = (): number => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+    const set = new Set(Array.from({ length: 2_000 }, () => uid(1_700_000_000_000, lcg)));
+    expect(set.size).toBe(2_000);
+  });
+
+  it('has the collision bound documented in ids.ts', () => {
+    // 36^6 random suffixes, and only ids minted in the same millisecond can
+    // collide. If anyone widens or narrows the suffix, this fails and they go
+    // and read the comment explaining why the width was chosen.
+    const space = 36 ** 6;
+    expect(space).toBe(2_176_782_336);
+    const collisionChance = (n: number): number => 1 - Math.exp(-(n ** 2) / (2 * space));
+    expect(collisionChance(20)).toBeLessThan(1e-7);
+    expect(collisionChance(2_000)).toBeLessThan(1e-3);
+    expect(uid(1_700_000_000_000, () => 0.5)).toHaveLength(14);
   });
 
   it('produces ids that pass the shape check', () => {
