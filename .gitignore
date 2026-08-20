@@ -6,7 +6,7 @@ coverage/
 .expo-shared/
 *.tsbuildinfo
 
-# Secrets. Never commit these.
+# Secrets. Never commit these. apps/mobile/.env is the one the app reads.
 .env
 .env.local
 .env.*.local

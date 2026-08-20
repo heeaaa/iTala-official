@@ -30,6 +30,20 @@ apps/web             read-only spectator view
 supabase/migrations  versioned schema
 ```
 
+## Applying a phase drop
+
+Each phase arrives as a zip in the repository root. Apply it with:
+
+```powershell
+./tools/sync-phase.ps1 -Zip _phase3.zip
+pnpm install
+pnpm verify
+```
+
+Use the script rather than `Expand-Archive` directly: extraction alone cannot
+remove a file that the phase deleted, so a stale module survives, gets
+committed, and then breaks lint for no visible reason.
+
 ## Working on it
 
 Requires Node 22 and pnpm 10.
@@ -40,7 +54,12 @@ pnpm verify     # format check, lint, typecheck, tests. Run this before pushing.
 pnpm test       # just the tests
 ```
 
-`pnpm verify` is exactly what CI runs.
+`pnpm verify` is exactly what CI runs. If `format:check` complains, `pnpm
+format` fixes it.
+
+Every tool version is pinned exactly, with no ranges. A caret on a formatter
+means its rules can change without anyone touching the repository, which breaks
+`verify` at random on whichever machine installed last.
 
 ## The rule that matters most
 
