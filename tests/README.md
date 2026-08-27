@@ -130,6 +130,23 @@ loads the old layout (`legacy_admin`) then the current one on top and asserts th
 plaintext column is dropped, the existing password is carried across as a hash so
 nobody is locked out, throttling is live, and a second re-run is a no-op.
 
+`settings_backfill.test.sql` and `settings_backfill_fresh.test.sql` cover removing
+the app-wide `trackMisses` toggle. Stat tracking is per-league now
+(`leagues.track_misses`), with a per-game override for drop-in games; the old
+global lived in an `app_settings` key/value row and is gone. A null
+`track_misses` means "row predates the column", so the migration has to carry the
+old global onto those rows *before* dropping the table - otherwise a project
+whose global was `false` silently gets miss tracking switched back on for every
+pre-migration league. The first suite asserts the value carries across and that an
+explicitly-set league is never overwritten; the second runs the same migration with
+no `app_settings` table at all, which is both a fresh install and every re-run of
+`schema.sql`, and is what the `to_regclass` guard exists for.
+
+The client half of the same migration is covered by GROUP N in
+`reducer.test.js`: a device upgrading from an older build still has the global in
+its saved state, and `HYDRATE` reads it once to seed leagues that predate the
+column.
+
 The remaining suites have no `@requires` marker yet and are **skipped** by the
 runner, which reports them as manual: run without their RPC sections loaded they
 would query empty tables and pass without asserting anything. Run them by hand:

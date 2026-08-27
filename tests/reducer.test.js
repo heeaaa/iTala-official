@@ -14,7 +14,7 @@ function eq(name, actual, expected) {
   ok(name, a === e, `expected ${e}, got ${a}`);
 }
 
-const S0 = { leagues: [], settings: { trackMisses: true } };
+const S0 = { leagues: [] };
 const d = (state, action) => reducer(state, action);
 const L = (s, id = 'lg1') => s.leagues.find(x => x.id === id);
 
@@ -134,15 +134,14 @@ ok('D7 surviving-game team kept', L(sh).teams.some(t => t.id === 'tn'));
 // GROUP E — HYDRATE guard (the drop-in vanishing fix)
 // ===========================================================================
 // Simulate: local state has a fresh rec bundle; server snapshot lacks it.
-const serverSnapshot = { leagues: [ { ...L(sr, 'rec-shared'), games: [], teams: [], players: [] } ],
-                         settings: { trackMisses: true } };
+const serverSnapshot = { leagues: [ { ...L(sr, 'rec-shared'), games: [], teams: [], players: [] } ] };
 const afterHydrate = d(sr, { t: 'HYDRATE', state: serverSnapshot });
 const hy = L(afterHydrate, 'rec-shared');
 // NOTE: the guard is armed by dispatch(), not the raw reducer, so a raw
 // reducer HYDRATE legitimately takes the server value. This test documents
 // that boundary rather than asserting the guard.
 ok('E1 HYDRATE runs without throwing', !!hy);
-eq('E2 HYDRATE keeps settings', afterHydrate.settings.trackMisses, true);
+ok('E2 HYDRATE produces no app-wide settings key', !('settings' in afterHydrate));
 // HYDRATE must never produce dangling references in whatever it returns
 for (const lg of afterHydrate.leagues) {
   const tIds = new Set(lg.teams.map(t => t.id));
@@ -577,6 +576,53 @@ catch (e) { ok('J9 leagueAwards empty league no throw', false, e.message); }
 try { standings(L(d(S0, { t: 'ADD_LEAGUE', id: 'lq', name: 'q', season: 's' }), 'lq'));
       ok('J10 standings empty league no throw', true); }
 catch (e) { ok('J10 standings empty league no throw', false, e.message); }
+
+// ===========================================================================
+// GROUP N — legacy app-wide trackMisses migration. Before leagues.track_misses
+// existed, one global toggle governed every league on every device. The column
+// replaced it and the global is now gone, but a device upgrading from an older
+// build still carries the old value in its saved state, so HYDRATE reads it
+// once to seed leagues that predate the column. Getting this wrong silently
+// flips a scorekeeper's setting back on for every pre-migration league.
+// ===========================================================================
+const legacyLeague = (id, extra = {}) => ({
+  id, name: 'Legacy', season: 'S1',
+  teams: [], players: [], games: [], events: [], createdAt: 1,
+  ...extra,
+});
+const hydrateLegacy = (leagues, settings) =>
+  d(S0, { t: 'HYDRATE', state: settings === undefined ? { leagues } : { leagues, settings } });
+
+// The case that matters. A scorekeeper who turned misses OFF must not have them
+// turned back on by the upgrade.
+const nFalse = hydrateLegacy([legacyLeague('lgN1')], { trackMisses: false });
+eq('N1 legacy false seeds a pre-migration league', L(nFalse, 'lgN1').trackMisses, false);
+
+const nTrue = hydrateLegacy([legacyLeague('lgN2')], { trackMisses: true });
+eq('N2 legacy true seeds a pre-migration league', L(nTrue, 'lgN2').trackMisses, true);
+
+// An explicit per-league value always wins over the legacy global, in both
+// directions - the column is the source of truth once it is set.
+const nExplicitTrue = hydrateLegacy([legacyLeague('lgN3', { trackMisses: true })], { trackMisses: false });
+eq('N3 explicit per-league true beats a legacy false', L(nExplicitTrue, 'lgN3').trackMisses, true);
+
+const nExplicitFalse = hydrateLegacy([legacyLeague('lgN4', { trackMisses: false })], { trackMisses: true });
+eq('N4 explicit per-league false beats a legacy true', L(nExplicitFalse, 'lgN4').trackMisses, false);
+
+// The normal case from now on: no legacy key at all.
+const nNone = hydrateLegacy([legacyLeague('lgN5')], undefined);
+eq('N5 missing legacy key defaults to true', L(nNone, 'lgN5').trackMisses, true);
+
+// The global must not come back into state by any route.
+ok('N6 HYDRATE produces no settings key', !('settings' in nFalse));
+ok('N7 an ordinary action produces no settings key',
+   !('settings' in d(S0, { t: 'ADD_LEAGUE', id: 'lgN6', name: 'x', season: 'y' })));
+
+// trackTurnovers never had a global, so the migration must leave it untouched
+// rather than inventing a value for it.
+eq('N8 trackTurnovers untouched by the legacy migration',
+   L(nFalse, 'lgN1').trackTurnovers, undefined);
+
 
 // ===========================================================================
 console.log('='.repeat(64));

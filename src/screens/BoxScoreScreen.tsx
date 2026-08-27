@@ -20,7 +20,7 @@ const EV_LABEL: Record<EventType, string> = {
 
 export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxScore'>) {
   const { leagueId, gameId } = route.params;
-  const { state, dispatch } = useStore();
+  const { dispatch } = useStore();
   const { role, canScore, signInWithGoogle, appleAvailable, signInWithApple, authBusy, lastError, canScoreGame } = useAdmin();
   const league = useLeague(leagueId);
   const game = league?.games.find(g => g.id === gameId);
@@ -277,7 +277,7 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
         <View style={{ height: space(3) }} />
 
         {/* Box score table */}
-        <BoxTable lines={box.lines} total={box.total} nameOf={playerName} trackMisses={game.trackMisses ?? league.trackMisses ?? state.settings.trackMisses} trackTurnovers={game.trackTurnovers ?? league.trackTurnovers ?? true} />
+        <BoxTable lines={box.lines} total={box.total} nameOf={playerName} trackMisses={game.trackMisses ?? league.trackMisses ?? true} trackTurnovers={game.trackTurnovers ?? league.trackTurnovers ?? true} />
 
         {/* Play-by-play */}
         <Txt k="label" style={{ marginTop: space(5), marginBottom: 8 }}>Play-by-play</Txt>

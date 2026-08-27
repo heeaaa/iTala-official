@@ -111,7 +111,7 @@ class Device {
   // which is what a slow refetch that overlaps an undo actually does.
   async snapshot() { return fetchAllState(this.client); }
   applySnapshot(remote) {
-    this.dispatch({ t: 'HYDRATE', state: { leagues: remote.leagues, settings: remote.settings || this.state.settings } });
+    this.dispatch({ t: 'HYDRATE', state: { leagues: remote.leagues } });
   }
 
   league(id = 'lg1') { return this.state.leagues.find(l => l.id === id); }
