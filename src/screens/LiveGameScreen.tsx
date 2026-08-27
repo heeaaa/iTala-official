@@ -90,10 +90,11 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   const score = useMemo(() => (league && game ? gameScore(league, game) : { home: 0, away: 0 }), [state, leagueId, gameId]);
 
   // Stat pad respects the LEAGUE's settings: the miss row and the TOV button
-  // appear only when enabled for this league. Misses fall back to the legacy
-  // global for old data; turnovers default on.
-  // Per-game overrides (drop-in games) win; otherwise the league setting.
-  const trackMisses = game?.trackMisses ?? league?.trackMisses ?? state.settings.trackMisses;
+  // appear only when enabled for this league. Per-game overrides (drop-in
+  // games) win; otherwise the league setting; otherwise both default on. There
+  // is no app-wide setting any more - HYDRATE seeds League.trackMisses from the
+  // old global once, for saved states that predate the column.
+  const trackMisses = game?.trackMisses ?? league?.trackMisses ?? true;
   const trackTurnovers = game?.trackTurnovers ?? league?.trackTurnovers ?? true;
   const PAD: PadBtn[][] = (() => {
     const rows = trackMisses ? [PAD_MAKES, MISS_ROW, ...PAD_OTHER] : [PAD_MAKES, ...PAD_OTHER];

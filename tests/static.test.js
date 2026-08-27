@@ -90,7 +90,17 @@ ok('non-null assertion scan ran', true);
 // sync layer forgets silently fails to persist.
 // ---------------------------------------------------------------------------
 const store = read('src/store/StoreProvider.tsx');
-const actionUnion = store.slice(store.indexOf('export type Action ='), store.indexOf('const defaultSettings'));
+// Both boundaries are checked. This slice used to end at `const defaultSettings`,
+// and when that constant was deleted indexOf returned -1, so slice(start, -1)
+// silently truncated the union: the check would still report "pass" while
+// verifying almost nothing. Fail loudly instead.
+const unionStart = store.indexOf('export type Action =');
+const unionEnd = store.indexOf('const initial: AppState');
+if (unionStart < 0 || unionEnd < 0) {
+  console.error('FATAL: could not locate the Action union boundaries in StoreProvider.tsx');
+  process.exit(2);
+}
+const actionUnion = store.slice(unionStart, unionEnd);
 const actions = [...actionUnion.matchAll(/t:\s*'([A-Z_]+)'/g)].map(m => m[1]);
 ok('action union parsed', actions.length > 20, `found ${actions.length}`);
 const reducerBody = store.slice(store.indexOf('export function reducer'));
@@ -99,7 +109,7 @@ for (const a of actions) {
   ok(`reducer handles ${a}`, reducerBody.includes(`case '${a}'`), 'no case in reducer');
 }
 // sync coverage: local-only actions legitimately have no server write
-const localOnly = new Set(['HYDRATE', 'SET_SETTINGS']);
+const localOnly = new Set(['HYDRATE']);
 // NOTE: UNDO_EVENT/REDO_EVENT must persist — a local-only undo reappears on the next pull.
 for (const a of actions) {
   if (localOnly.has(a)) continue;

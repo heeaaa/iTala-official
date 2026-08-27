@@ -19,6 +19,18 @@ export interface Player {
   // to remember which player this copy came from, so a future cross-league
   // career-profile feature can link seasons retroactively with zero guesswork.
   // Points at the ULTIMATE origin (chains stay flat across many seasons).
+  //
+  // This is LINEAGE, not identity: it means "this row was copied from that
+  // row". It is NOT a grouping key for one human. A player added fresh in a
+  // second league has no link to the same person elsewhere, because nothing
+  // outside Duplicate League ever sets it.
+  //
+  // If cross-league careers get built, the open decision is whether this is
+  // walked as a chain or superseded by a dedicated person id. Adding that
+  // column is not the blocker (see the `alter table ... add column if not
+  // exists` pattern in supabase/schema.sql, proven safe by
+  // tests/sql/admin_upgrade.test.sql) — the blocker is deciding who says two
+  // "J. Santos" rows are the same person, plus backfilling the answer.
   originPlayerId?: string;
 }
 
@@ -87,11 +99,14 @@ export interface League {
   createdAt: number;
 }
 
-export interface AppSettings {
-  // LEGACY: the app-wide toggle, kept only so old saved states load and so it
-  // can seed each league's own trackMisses on first hydrate. The live tracker
-  // now reads League.trackMisses.
-  trackMisses: boolean;
+// LEGACY, read-only. An app-wide trackMisses toggle that predates
+// League.trackMisses. It is no longer part of AppState and nothing writes it,
+// but a device upgrading from an older build still carries it in its saved
+// state, so HYDRATE reads it once to seed any league that predates the
+// per-league column. Safe to delete once no device can still be running a build
+// that wrote it.
+export interface LegacyPersistedSettings {
+  trackMisses?: boolean;
 }
 
 // Device-local preferences. Never synced to Supabase — favorites are personal
@@ -106,7 +121,6 @@ export interface LocalPrefs {
 
 export interface AppState {
   leagues: League[];
-  settings: AppSettings;
 }
 
 // Sponsor promo (Super-Admin managed). Global, not league-scoped.

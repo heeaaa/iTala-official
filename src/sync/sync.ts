@@ -71,13 +71,12 @@ export async function fetchAllState(sb: SupabaseClient): Promise<Partial<AppStat
   // rows in arbitrary order (often whichever row was updated last moves) —
   // which made lists visibly shuffle after each realtime re-pull, and could
   // even change which event "Undo" considered the latest.
-  const [lr, tr, pr, gr, er, sr] = await Promise.all([
+  const [lr, tr, pr, gr, er] = await Promise.all([
     sb.from('leagues').select('*').order('created_at', { ascending: false }), // newest first, matches local prepend
     sb.from('teams').select('*').order('name'),                               // alphabetical, matches render order
     sb.from('players').select('*').order('name'),
     sb.from('games').select('*').order('scheduled_at', { ascending: false }),
     sb.from('events').select('*').order('ts'),                                // chronological — Undo depends on this
-    sb.from('app_settings').select('*').eq('key', 'trackMisses').maybeSingle(),
   ]);
 
   if (lr.error) { console.warn('[sync] fetch leagues error:', lr.error.message); return null; }
@@ -96,8 +95,7 @@ export async function fetchAllState(sb: SupabaseClient): Promise<Partial<AppStat
     return leagueFromRow(lRow, teams, players, games, events);
   });
 
-  const trackMisses = sr.data ? (sr.data.value as { trackMisses?: boolean }).trackMisses ?? true : true;
-  return { leagues, settings: { trackMisses } };
+  return { leagues };
 }
 
 /* ---------- Push: mirror an action's effect to Supabase --------------------- */
@@ -398,13 +396,6 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
         break;
       }
 
-      case 'SET_SETTINGS':
-        check('UPSERT_app_settings', await sb.from('app_settings').upsert({
-          key: 'trackMisses',
-          value: { trackMisses: state.settings.trackMisses },
-        }));
-        break;
-
       case 'REC_SETUP_GAME': {
         const l = state.leagues.find(x => x.id === action.leagueId);
         if (!l) return;
@@ -480,7 +471,6 @@ export function subscribeRealtime(sb: SupabaseClient, onAnyChange: () => void) {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'players' },      onAnyChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'games' },        onAnyChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'events' },       onAnyChange)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'app_settings' }, onAnyChange)
     .subscribe();
   return () => { sb.removeChannel(channel); };
 }
