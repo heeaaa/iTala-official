@@ -4,7 +4,7 @@ import { Screen, Txt, Button, TeamBadge, PromoStrip } from '../components/ui';
 import { useLeague } from '../store/StoreProvider';
 import { colors, space, radius, font } from '../theme';
 import { ScreenProps } from '../navigation';
-import { gameScore, teamBoxScore, perfRating } from '../lib/stats';
+import { gameScore, teamBoxScore, perfRating, outcomeOf } from '../lib/stats';
 import { usePromos, onPromoTap } from '../lib/usePromos';
 
 // The emotional payoff at the buzzer. A brief, celebratory FINAL card —
@@ -35,16 +35,27 @@ export default function FinalScoreScreen({ route, navigation }: ScreenProps<'Fin
   const home = league.teams.find(t => t.id === game.homeTeamId);
   const away = league.teams.find(t => t.id === game.awayTeamId);
   const sc = gameScore(league, game);
-  const homeWon = sc.home >= sc.away;
+  // `homeWon` was `sc.home >= sc.away`, which made a tie report as a home win.
+  // Every consumer below happens to guard on `tie`, so the visible bug was
+  // confined to Player of the Game - but the next consumer added would have
+  // inherited it. Deciding the outcome once removes the trap.
+  const outcome = outcomeOf(sc.home, sc.away);
+  const tie = outcome === 'tie';
+  const homeWon = outcome === 'home';
   const winner = homeWon ? home : away;
   const winnerScore = homeWon ? sc.home : sc.away;
   const loserScore = homeWon ? sc.away : sc.home;
-  const tie = sc.home === sc.away;
 
-  // Player of the Game: best composite line on the winning team.
+  // Player of the Game: best composite line on the winning team, or across both
+  // teams when the game is drawn.
   const potg = (() => {
-    const box = teamBoxScore(league, gameId, winner?.id ?? '');
-    const pool = box.lines.filter(l => l.playerId && perfRating(l) > 0);
+    // On a tie there is no winning team, so both are eligible. Going through
+    // `winner` here would quietly restrict Player of the Game to the home side,
+    // since `winner` falls back to home when the scores are level.
+    const teamIds = tie ? [game.homeTeamId, game.awayTeamId] : [winner?.id ?? ''];
+    const pool = teamIds
+      .flatMap(tid => teamBoxScore(league, gameId, tid).lines)
+      .filter(l => l.playerId && perfRating(l) > 0);
     if (pool.length === 0) return null;
     const best = pool.sort((a, b) => perfRating(b) - perfRating(a))[0];
     const p = league.players.find(x => x.id === best.playerId);

@@ -16,7 +16,9 @@ export default function TeamProfileScreen({ route, navigation }: ScreenProps<'Te
   if (!league || !team) return <Screen><Txt k="body">Team not found.</Txt></Screen>;
 
   const row = standings(league).find(r => r.team.id === teamId);
-  const gp = (row?.wins ?? 0) + (row?.losses ?? 0);
+  // Ties count towards games played. Leaving them out while pf/pa still include
+  // the tied game's points inflated PPG and OPP PPG by dividing by too few games.
+  const gp = (row?.wins ?? 0) + (row?.losses ?? 0) + (row?.ties ?? 0);
   const ppg = gp ? (row!.pf / gp) : 0;
   const oppg = gp ? (row!.pa / gp) : 0;
 
@@ -48,8 +50,8 @@ export default function TeamProfileScreen({ route, navigation }: ScreenProps<'Te
       <Card style={{ marginBottom: space(3) }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-around' }}>
           {([
-            ['RECORD', gp ? `${row!.wins}-${row!.losses}` : '—'],
-            ['WIN %', gp ? winPctOf(row!.wins, row!.losses).toFixed(3).replace(/^0/, '') : '—'],
+            ['RECORD', gp ? `${row!.wins}-${row!.losses}-${row!.ties}` : '—'],
+            ['WIN %', gp ? winPctOf(row!.wins, row!.losses, row!.ties).toFixed(3).replace(/^0/, '') : '—'],
             ['PPG', gp ? ppg.toFixed(1) : '—'],
             ['OPP PPG', gp ? oppg.toFixed(1) : '—'],
             ['STREAK', row?.streak ?? '—'],
