@@ -143,12 +143,15 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <TeamBadge logo={awayTeam.logo} color={awayTeam.color} size={20} />
-                <Txt k="h2" color={score.away > score.home ? colors.text : colors.muted}>{awayTeam.name}</Txt>
+                {/* `>=` on both sides, not `>` on one: a tied game highlights both
+                    teams, because neither of them lost. The away side used to be
+                    muted on a tie, which read as a home win. */}
+                <Txt k="h2" color={score.away >= score.home ? colors.text : colors.muted}>{awayTeam.name}</Txt>
               </View>
             </View>
             <View style={{ alignItems: 'flex-end', gap: 6 }}>
               <Txt k="statBig" color={score.home >= score.away ? colors.text : colors.muted}>{score.home}</Txt>
-              <Txt k="statBig" color={score.away > score.home ? colors.text : colors.muted}>{score.away}</Txt>
+              <Txt k="statBig" color={score.away >= score.home ? colors.text : colors.muted}>{score.away}</Txt>
             </View>
           </View>
 
@@ -346,7 +349,7 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
           <View style={{ paddingHorizontal: 36, marginTop: 38, flex: 1 }}>
             <ScoreRow team={homeTeam} score={score.home} winner={score.home >= score.away} />
             <View style={{ height: 1, backgroundColor: colors.line, marginVertical: 14 }} />
-            <ScoreRow team={awayTeam} score={score.away} winner={score.away > score.home} />
+            <ScoreRow team={awayTeam} score={score.away} winner={score.away >= score.home} />
 
             {/* STAR PLAYER */}
             {star && (

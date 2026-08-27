@@ -71,7 +71,11 @@ export default function GamesOnDateScreen({ route, navigation }: ScreenProps<'Ga
           <Empty title={teamId ? "No games for this team on this date" : "No games on this date"} />
         ) : games.map(g => {
           const s = gameScore(league, g);
-          const homeWon = s.home >= s.away;
+          // Per-side "did not lose" flags rather than one homeWon boolean: with a
+          // single flag a tie highlighted the home team and muted the away team,
+          // which read as a home win. On a tie both sides are highlighted.
+          const homeAhead = s.home >= s.away;
+          const awayAhead = s.away >= s.home;
           const label = `${teamName(g.homeTeamId)} vs ${teamName(g.awayTeamId)}`;
           const card = (
             <Card onPress={() => openGame(g.id, g.status)}>
@@ -91,8 +95,8 @@ export default function GamesOnDateScreen({ route, navigation }: ScreenProps<'Ga
                   {g.location ? <Txt k="body" color={colors.muted} style={{ fontSize: 12, marginTop: 1 }} numberOfLines={1}>{g.location}</Txt> : null}
                 </View>
               </View>
-              <Row name={teamName(g.homeTeamId)} color={teamColor(g.homeTeamId)} logo={teamLogo(g.homeTeamId)} score={s.home} win={g.status === 'final' && homeWon} />
-              <Row name={teamName(g.awayTeamId)} color={teamColor(g.awayTeamId)} logo={teamLogo(g.awayTeamId)} score={s.away} win={g.status === 'final' && !homeWon} />
+              <Row name={teamName(g.homeTeamId)} color={teamColor(g.homeTeamId)} logo={teamLogo(g.homeTeamId)} score={s.home} win={g.status === 'final' && homeAhead} />
+              <Row name={teamName(g.awayTeamId)} color={teamColor(g.awayTeamId)} logo={teamLogo(g.awayTeamId)} score={s.away} win={g.status === 'final' && awayAhead} />
             </Card>
           );
           // Only admins can delete (swipe). Spectators get a plain, non-swipeable card.
