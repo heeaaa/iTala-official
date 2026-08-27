@@ -265,6 +265,50 @@ for (const f of srcFiles) {
      'without it tests/sql/run.js skips silently and CI goes green with no database coverage');
 }
 
+
+// ---------------------------------------------------------------------------
+// CHECK 14 - accessibility floor. The app shipped with exactly one
+// accessibilityLabel across nineteen screens, and the live two-tap stat flow
+// announced nothing at all, which made its single most-used interaction
+// effectively unusable with a screen reader. These checks are structural, not
+// behavioural: they cannot prove VoiceOver reads something sensible, only that
+// the semantics have not been quietly deleted again. On-device VoiceOver and
+// TalkBack testing is still required and is not automatable here.
+// ---------------------------------------------------------------------------
+{
+  const ui = read('src/components/ui.tsx');
+  for (const [name, needle] of [
+    ['Button', 'accessibilityRole="button"'],
+    ['Segmented', 'accessibilityRole="tab"'],
+    ['Toggle', 'accessibilityRole="checkbox"'],
+  ]) {
+    ok(`ui.tsx ${name} declares an accessibility role`, ui.includes(needle),
+       'screen readers cannot tell the element is actionable without one');
+  }
+  ok('ui.tsx Card forwards accessibilityActions',
+     /accessibilityActions\?:/.test(ui) && /onAccessibilityAction\?:/.test(ui),
+     'a row whose only secondary action is a swipe is unreachable without it');
+
+  const live = read('src/screens/LiveGameScreen.tsx');
+  ok('LiveGameScreen announces to screen readers',
+     /AccessibilityInfo\.announceForAccessibility/.test(live),
+     'arming and logging a stat has no other non-visual confirmation');
+  ok('LiveGameScreen announces both arming and logging',
+     /armed\. Tap a/.test(live) && /logged for/.test(live),
+     'both taps of the two-tap flow need spoken confirmation, not just one');
+  ok('LiveGameScreen stat pad exposes its armed state',
+     /accessibilityState=\{\{ selected: on \}\}/.test(live),
+     'armed is conveyed by a background-colour swap and nothing else');
+  ok('LiveGameScreen player chips carry a spoken label',
+     /accessibilityLabel=\{spoken\}/.test(live),
+     'the chip renders as disconnected fragments (#17, 13, PTS, 4 PF) otherwise');
+
+  const games = read('src/screens/GamesOnDateScreen.tsx');
+  ok('GamesOnDateScreen offers a non-gesture delete',
+     /accessibilityActions=/.test(games) && /'delete'/.test(games),
+     'delete was reachable only by a left-swipe, which screen readers intercept');
+}
+
 console.log('='.repeat(64));
 console.log(`STATIC CHECKS:  ${pass} passed,  ${fail} failed,  ${warn} warnings`);
 if (problems.length) {

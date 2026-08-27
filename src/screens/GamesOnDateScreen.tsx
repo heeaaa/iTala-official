@@ -60,7 +60,13 @@ export default function GamesOnDateScreen({ route, navigation }: ScreenProps<'Ga
           </Pressable>
         ) : null}
         {owner ? (
-          <Txt k="body" color={colors.muted} style={{ fontSize: 12, marginBottom: space(2) }}>Swipe a game to the left to delete it.</Txt>
+          // Sighted users get the swipe hint; a screen reader would otherwise read
+          // out an instruction it cannot follow, since VoiceOver and TalkBack
+          // consume horizontal swipes for their own navigation. The override
+          // points them at the custom action on each game card instead.
+          <View accessible accessibilityLabel="To delete a game, choose the Delete action on that game.">
+            <Txt k="body" color={colors.muted} style={{ fontSize: 12, marginBottom: space(2) }}>Swipe a game to the left to delete it.</Txt>
+          </View>
         ) : !scorer ? (
           <Txt k="body" color={colors.muted} style={{ fontSize: 12, marginBottom: space(2) }}>Live games open in spectator mode — sign in with a scorekeeper or owner account to track stats.</Txt>
         ) : null}
@@ -71,10 +77,28 @@ export default function GamesOnDateScreen({ route, navigation }: ScreenProps<'Ga
           <Empty title={teamId ? "No games for this team on this date" : "No games on this date"} />
         ) : games.map(g => {
           const s = gameScore(league, g);
-          const homeWon = s.home >= s.away;
+          // Per-side "did not lose" flags rather than one homeWon boolean: with a
+          // single flag a tie highlighted the home team and muted the away team,
+          // which read as a home win. On a tie both sides are highlighted.
+          const homeAhead = s.home >= s.away;
+          const awayAhead = s.away >= s.home;
           const label = `${teamName(g.homeTeamId)} vs ${teamName(g.awayTeamId)}`;
+          const statusWord = g.status === 'final' ? 'final' : g.status === 'live' ? 'live' : 'scheduled';
           const card = (
-            <Card onPress={() => openGame(g.id, g.status)}>
+            <Card
+              onPress={() => openGame(g.id, g.status)}
+              accessibilityLabel={`${label}, ${statusWord}, ${teamName(g.homeTeamId)} ${s.home}, ${teamName(g.awayTeamId)} ${s.away}`}
+              accessibilityHint={owner ? 'Activate to open. Delete is available as an action.' : 'Activate to open.'}
+              // Deleting a game was reachable only by a left-swipe, and screen
+              // readers consume horizontal swipes for element navigation - so the
+              // app's only delete affordance was unreachable for those users, and
+              // awkward for anyone relying on switch control. Exposing it as a
+              // custom accessibility action adds a non-gesture path and leaves the
+              // swipe untouched for everyone else.
+              accessibilityActions={owner ? [{ name: 'delete', label: 'Delete game' }] : undefined}
+              onAccessibilityAction={owner ? (e) => {
+                if (e.nativeEvent.actionName === 'delete') confirmDelete(g.id, label);
+              } : undefined}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 {g.status === 'live' ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -91,8 +115,8 @@ export default function GamesOnDateScreen({ route, navigation }: ScreenProps<'Ga
                   {g.location ? <Txt k="body" color={colors.muted} style={{ fontSize: 12, marginTop: 1 }} numberOfLines={1}>{g.location}</Txt> : null}
                 </View>
               </View>
-              <Row name={teamName(g.homeTeamId)} color={teamColor(g.homeTeamId)} logo={teamLogo(g.homeTeamId)} score={s.home} win={g.status === 'final' && homeWon} />
-              <Row name={teamName(g.awayTeamId)} color={teamColor(g.awayTeamId)} logo={teamLogo(g.awayTeamId)} score={s.away} win={g.status === 'final' && !homeWon} />
+              <Row name={teamName(g.homeTeamId)} color={teamColor(g.homeTeamId)} logo={teamLogo(g.homeTeamId)} score={s.home} win={g.status === 'final' && homeAhead} />
+              <Row name={teamName(g.awayTeamId)} color={teamColor(g.awayTeamId)} logo={teamLogo(g.awayTeamId)} score={s.away} win={g.status === 'final' && awayAhead} />
             </Card>
           );
           // Only admins can delete (swipe). Spectators get a plain, non-swipeable card.
