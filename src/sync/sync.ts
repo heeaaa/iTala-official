@@ -379,6 +379,11 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
 
       case 'DELETE_EVENT': {
         check('DELETE_events', await sb.from('events').delete().eq('id', action.eventId));
+        // Deleting a foul-out-causing foul restores the player to court (see
+        // the reducer) — push the game row so other devices pick it up too.
+        const l = state.leagues.find(x => x.id === action.leagueId);
+        const g = l?.games.find(x => x.id === action.gameId);
+        if (g) check('UPSERT_games(delete_event)', await sb.from('games').upsert(gameToRow(g)));
         break;
       }
 

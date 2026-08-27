@@ -399,6 +399,57 @@ ok('H24 away player restored to the away court', L(sfaway).games[0].awayOnCourt.
 eq('H25 home court untouched by an away undo',
    L(sfaway).games[0].homeOnCourt, ['hp1','hp2','hp3','hp4','hp5']);
 
+// ---------------------------------------------------------------------------
+// DELETE_EVENT must reverse a foul-out auto-bench exactly like UNDO_EVENT.
+// Unlike undo (which only ever pops the last event), delete can remove any
+// event in the log, so this also covers deleting a foul that is NOT the most
+// recent one — the fix has to be based on the total foul count crossing back
+// under the limit, not on "was this the last event".
+// ---------------------------------------------------------------------------
+const foulsOfHp1 = () => L(sf5).events.filter(e => e.playerId === 'hp1' && e.type === 'pf').map(e => e.id);
+
+let sd = d(sf5, { t: 'DELETE_EVENT', leagueId: 'lg1', gameId: 'g1', eventId: foulsOfHp1()[4] });
+eq('H26 deleting the foul-out foul drops the count', playerFouls(L(sd), 'g1', 'hp1'), 4);
+ok('H27 deleting the foul-out foul restores the player to court',
+   L(sd).games[0].homeOnCourt.includes('hp1'));
+eq('H28 on-court is still five', L(sd).games[0].homeOnCourt.length, 5);
+ok('H29 player is no longer fouled out', !fouledOutSet(L(sd), 'g1', 'tH').has('hp1'));
+
+// Delete an EARLIER foul (not the last) from a player with fouls beyond the
+// limit — count drops but stays at/above the limit, so the court must not change.
+let sf6 = foul(sf5, 'hp1'); // 6th foul, still benched
+const idsAt6 = L(sf6).events.filter(e => e.playerId === 'hp1' && e.type === 'pf').map(e => e.id);
+let sd2 = d(sf6, { t: 'DELETE_EVENT', leagueId: 'lg1', gameId: 'g1', eventId: idsAt6[0] }); // delete the FIRST foul, not the last
+eq('H30 deleting a non-final foul still drops the count', playerFouls(L(sd2), 'g1', 'hp1'), 5);
+ok('H31 still at the limit, so still benched', !L(sd2).games[0].homeOnCourt.includes('hp1'));
+
+// Deleting one more foul now crosses back under the limit — must restore,
+// proving the check is driven by the running total, not "was this the last event".
+const idsAt5 = L(sd2).events.filter(e => e.playerId === 'hp1' && e.type === 'pf').map(e => e.id);
+let sd3 = d(sd2, { t: 'DELETE_EVENT', leagueId: 'lg1', gameId: 'g1', eventId: idsAt5[0] });
+eq('H32 count drops below the limit', playerFouls(L(sd3), 'g1', 'hp1'), 4);
+ok('H33 now restored to court', L(sd3).games[0].homeOnCourt.includes('hp1'));
+
+// Deleting an ordinary (non-limit-crossing) foul must not touch the court at all.
+let sf2b = sf;
+for (let i = 0; i < 2; i++) sf2b = foul(sf2b, 'hp2');
+const ordinaryFoulId = L(sf2b).events.filter(e => e.playerId === 'hp2' && e.type === 'pf')[0].id;
+const courtBeforeDelete = L(sf2b).games[0].homeOnCourt;
+let sf2bd = d(sf2b, { t: 'DELETE_EVENT', leagueId: 'lg1', gameId: 'g1', eventId: ordinaryFoulId });
+eq('H34 deleting an ordinary foul leaves the court alone', L(sf2bd).games[0].homeOnCourt, courtBeforeDelete);
+
+// Deleting a non-foul event never touches the court either.
+let sfnd = foul(sf, 'hp3');
+sfnd = d(sfnd, { t: 'ADD_EVENT', leagueId: 'lg1', gameId: 'g1', teamId: 'tH', playerId: 'hp3', type: 'fg2_make', period: 1 });
+const basketId = L(sfnd).events.find(e => e.type === 'fg2_make').id;
+sfnd = d(sfnd, { t: 'DELETE_EVENT', leagueId: 'lg1', gameId: 'g1', eventId: basketId });
+eq('H35 deleting a basket leaves the court alone',
+   L(sfnd).games[0].homeOnCourt, ['hp1','hp2','hp3','hp4','hp5']);
+
+// Deleting an unknown event id is a safe no-op.
+let sfx = d(sf5, { t: 'DELETE_EVENT', leagueId: 'lg1', gameId: 'g1', eventId: 'no-such-event' });
+eq('H36 deleting an unknown event id is a no-op', L(sfx).events.length, L(sf5).events.length);
+
 // SET_LINEUPS is atomic — both sides land in one action
 let sa = d(su, { t: 'SET_LINEUPS', leagueId: 'lg1', gameId: 'g1', home: ['hp1'], away: ['hp2'] });
 eq('H6 SET_LINEUPS atomic both sides',

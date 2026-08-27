@@ -520,7 +520,7 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
           nameOf={(id) => id ? (league.players.find(p => p.id === id)?.name ?? 'Player') : 'Team'}
           teamNameOf={(teamId) => league.teams.find(t => t.id === teamId)?.name ?? 'Team'}
           canDelete={!readOnly}
-          onDelete={(eid) => dispatch({ t: 'DELETE_EVENT', leagueId, eventId: eid })}
+          onDelete={(eid) => dispatch({ t: 'DELETE_EVENT', leagueId, gameId, eventId: eid })}
           onClose={() => setLogOpen(false)}
         />
       )}
