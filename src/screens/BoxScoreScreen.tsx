@@ -292,7 +292,7 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
                     : `${playerName(e.playerId)} — ${EV_LABEL[e.type]}`}
                 </Txt>
                 {game.status !== 'final' && (
-                  <Pressable onPress={() => dispatch({ t: 'DELETE_EVENT', leagueId, eventId: e.id })} hitSlop={8}>
+                  <Pressable onPress={() => dispatch({ t: 'DELETE_EVENT', leagueId, gameId, eventId: e.id })} hitSlop={8}>
                     <Txt k="body" color={colors.red}>✕</Txt>
                   </Pressable>
                 )}

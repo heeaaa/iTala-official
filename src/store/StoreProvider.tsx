@@ -86,7 +86,7 @@ export type Action =
   | { t: 'ADD_EVENT'; leagueId: string; gameId: string; teamId: string; playerId: string | null; type: EventType; period: number; note?: string }
   | { t: 'UNDO_EVENT'; leagueId: string; gameId: string; eventId?: string }
   | { t: 'REDO_EVENT'; leagueId: string; gameId: string }
-  | { t: 'DELETE_EVENT'; leagueId: string; eventId: string }
+  | { t: 'DELETE_EVENT'; leagueId: string; gameId: string; eventId: string }
   | { t: 'DELETE_GAME'; leagueId: string; gameId: string }
   | { t: 'CLEANUP_REC_GAMES'; leagueId: string; gameIds: string[] }
   | { t: 'SET_GAME_STATUS'; leagueId: string; gameId: string; status: Game['status'] }
@@ -421,9 +421,36 @@ export function reducer(state: AppState, a: Action): AppState {
       });
 
     case 'DELETE_EVENT':
-      return mapLeague(state, a.leagueId, l => ({
-        ...l, events: l.events.filter(e => e.id !== a.eventId),
-      }));
+      return mapLeague(state, a.leagueId, l => {
+        const target = l.events.find(e => e.id === a.eventId);
+        const events = l.events.filter(e => e.id !== a.eventId);
+        if (!target) return { ...l, events };
+
+        // Same reversal as UNDO_EVENT: deleting a foul-out-causing foul from
+        // the play-by-play log must put the player back on court, or they're
+        // left stranded on the bench with a foul count back under the limit
+        // and no way back except a manual substitution. Unlike UNDO_EVENT
+        // (which only ever pops the last event), DELETE_EVENT can remove any
+        // event, so this checks the total foul count before/after removal
+        // rather than assuming the deleted foul was the most recent one.
+        let games = l.games;
+        if (target.type === 'pf' && target.playerId) {
+          const pid = target.playerId;
+          const limit = foulLimitOf(l);
+          const before = l.events.filter(e => e.gameId === target.gameId && e.playerId === pid && e.type === 'pf').length;
+          const after = before - 1;
+          if (before >= limit && after < limit) {
+            games = l.games.map(g => {
+              if (g.id !== target.gameId) return g;
+              const side = g.homeTeamId === target.teamId ? 'homeOnCourt' as const : 'awayOnCourt' as const;
+              const court = g[side] ?? [];
+              if (court.includes(pid) || court.length >= 5) return g;
+              return { ...g, [side]: [...court, pid] };
+            });
+          }
+        }
+        return { ...l, events, games };
+      });
 
     case 'DELETE_GAME':
       return mapLeague(state, a.leagueId, l => ({
