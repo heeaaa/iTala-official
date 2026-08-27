@@ -17,6 +17,30 @@ variables at a server:
 PGHOST=127.0.0.1 PGUSER=postgres npm test
 ```
 
+A skip is silent by design. That is right on a laptop and wrong in CI, where a
+job that lost its database would still report success having verified nothing.
+Set `ITALA_REQUIRE_DB=1` to turn both "no psql" and "no server" into hard
+failures. The CI workflow sets it, so the database suites are mandatory there.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`:
+
+- **verify** - `npm ci`, then `node tests/run.js` against a `postgres:16-alpine`
+  service with `ITALA_REQUIRE_DB=1`, so the type check, all four JS suites and
+  the wired SQL suites must pass. The console output is kept as a `test-output`
+  artifact so the pass/fail counts stay auditable after the logs age out.
+- **bundle** - `npx expo export --platform android`, which resolves and bundles
+  every module through Metro and compiles the result with Hermes. This catches
+  broken imports and syntax the type checker never sees. It is not a shippable
+  binary: that still needs `eas build` with signing credentials.
+
+A note for Windows contributors: `npm test` runs natively, no workaround needed.
+`npx` is a `.cmd` shim that cannot be spawned directly (`ENOENT` when bare,
+`EINVAL` as `npx.cmd` on Node 20.12 and later), so the runner resolves npm's own
+`npx-cli.js` and runs it under the current `node` binary. `static.test.js`
+CHECK 12 stops that regressing.
+
 ## What is covered
 
 **Reducer and stats (`reducer.test.js`)** - every state transition that matters:

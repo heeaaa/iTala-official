@@ -210,6 +210,51 @@ for (const f of srcFiles) {
   ok(`${f} free of localStorage`, !/\blocalStorage\b/.test(src));
 }
 
+// ---------------------------------------------------------------------------
+// CHECK 12 - the runner must not spawn `npx` as a bare executable. On Windows
+// `npx` is a .cmd shim: execFileSync('npx') fails ENOENT, and 'npx.cmd' fails
+// EINVAL on Node >= 20.12, which refuses to spawn .cmd/.bat without a shell -
+// which is what made `npm test` unrunnable natively on Windows. `shell: true`
+// does start, but Node then concatenates argv unescaped (DEP0190), mangling the
+// absolute --alias paths whenever the checkout directory contains a space. The
+// runner resolves npm's own npx-cli.js and runs it under process.execPath.
+// Comments are stripped first: the explanation in run.js quotes the very
+// pattern being banned here.
+// ---------------------------------------------------------------------------
+{
+  const runner = read('tests/run.js').replace(/^[ \t]*\/\/.*$/gm, '');
+  ok('tests/run.js does not spawn npx as a bare executable',
+     !/(?:run|execFileSync|execSync|spawnSync)\(\s*'npx(?:\.cmd)?'/.test(runner),
+     'npx is a .cmd shim on Windows - resolve npm/bin/npx-cli.js and run it under process.execPath');
+  ok('tests/run.js resolves npx through npx-cli.js under the current node binary',
+     /npx-cli\.js/.test(runner) && /process\.execPath/.test(runner));
+}
+
+// ---------------------------------------------------------------------------
+// CHECK 13 - CI must actually verify pull requests. This repo shipped with a
+// single workflow that pinged Supabase to stop a free project pausing, and
+// nothing that ran a test, so any PR could merge with a red suite. These checks
+// fail if that workflow is deleted, stops running before merge, or loses the
+// flag that makes the database suites mandatory rather than silently skipped.
+// ---------------------------------------------------------------------------
+{
+  const wfDir = path.join(ROOT, '.github', 'workflows');
+  const files = fs.existsSync(wfDir)
+    ? fs.readdirSync(wfDir).filter(f => /\.ya?ml$/.test(f))
+    : [];
+  const verifier = files
+    .map(f => fs.readFileSync(path.join(wfDir, f), 'utf8'))
+    .find(b => /tests\/run\.js/.test(b));
+  ok('a GitHub Actions workflow runs tests/run.js', !!verifier,
+     'no workflow executes the regression suite - pull requests would merge unverified');
+  ok('that workflow runs before merge, on pull_request',
+     !!verifier && /^\s*pull_request:/m.test(verifier),
+     'running only after merge to main defeats the point');
+  ok('that workflow makes the database checks mandatory',
+     !!verifier && /ITALA_REQUIRE_DB/.test(verifier),
+     'without it tests/sql/run.js skips silently and CI goes green with no database coverage');
+}
+
 console.log('='.repeat(64));
 console.log(`STATIC CHECKS:  ${pass} passed,  ${fail} failed,  ${warn} warnings`);
 if (problems.length) {

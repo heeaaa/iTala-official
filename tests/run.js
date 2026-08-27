@@ -28,6 +28,32 @@ function run(cmd, args, opts = {}) {
   return execFileSync(cmd, args, { stdio: 'inherit', cwd: ROOT, ...opts });
 }
 
+// npx cannot be spawned directly on Windows: `npx` is a .cmd shim, so
+// execFileSync('npx') fails ENOENT, and 'npx.cmd' fails EINVAL on Node >= 20.12,
+// which refuses to spawn .cmd/.bat without a shell. `shell: true` does start, but
+// Node then concatenates argv without escaping it (DEP0190) - and the esbuild
+// --alias arguments below carry absolute paths, so a checkout under a directory
+// with a space in its name would be silently mangled. Running npm's own
+// npx-cli.js under the current node binary sidesteps both, on every OS.
+function resolveNpx() {
+  const dir = path.dirname(process.execPath);
+  const candidates = [
+    path.join(dir, 'node_modules', 'npm', 'bin', 'npx-cli.js'),              // Windows layout
+    path.join(dir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npx-cli.js'), // Unix layout
+  ];
+  for (const cli of candidates) {
+    if (fs.existsSync(cli)) return { cmd: process.execPath, prefix: [cli], opts: {} };
+  }
+  // Last resort: let the shell resolve it. Only reached when npm lives somewhere
+  // unusual; called out here so a failure points at this branch rather than
+  // looking like a missing npx.
+  return { cmd: 'npx', prefix: [], opts: { shell: true } };
+}
+const NPX = resolveNpx();
+function npx(args, opts = {}) {
+  return run(NPX.cmd, [...NPX.prefix, ...args], { ...NPX.opts, ...opts });
+}
+
 console.log('• bundling pure logic with native modules stubbed…');
 const esbuildArgs = [
   '--yes', 'esbuild@0.24.0',
@@ -45,7 +71,7 @@ const esbuildArgs = [
   '--log-level=error',
 ];
 try {
-  run('npx', esbuildArgs);
+  npx(esbuildArgs);
 } catch (e) {
   console.error('\n✗ bundling failed. Is network access available for npx esbuild?');
   process.exit(2);
@@ -56,7 +82,7 @@ const env = { ...process.env, ITALA_BUNDLE: BUNDLE, ITALA_ROOT: ROOT };
 let failed = 0;
 
 console.log('\n• type check');
-try { run('npx', ['tsc', '--noEmit']); console.log('  tsc clean'); }
+try { npx(['tsc', '--noEmit']); console.log('  tsc clean'); }
 catch { console.error('  tsc reported errors'); failed++; }
 
 console.log('\n• reducer / stats / parser suite');
