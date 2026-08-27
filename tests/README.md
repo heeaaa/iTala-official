@@ -84,7 +84,9 @@ converge on an ordinary sequence of stats and undos.
 - every `sb.rpc('name')` the client calls exists in `schema.sql`
 - every `.from('table')` the client touches exists in `schema.sql`
 - no non-null assertions on `.find()` (a missing row would crash the screen)
-- `app.json` still has the EAS `projectId` and `RECORD_AUDIO` permission, and
+- `app.json` still has the EAS `projectId`, does **not** declare `RECORD_AUDIO`
+  (nothing records audio, and an unused Android permission cannot be honestly
+  declared on Google Play's Data safety form), and
   `DEPLOYMENT.md` still has the zip-apply commands
 - the sync primitives stay wired into `dispatch` - pushes go through
   `enqueuePush`, undo resolves its target id and tombstones it, `HYDRATE` drops

@@ -141,8 +141,32 @@ for (const t of tables) {
 const appJson = JSON.parse(read('app.json'));
 ok('app.json keeps EAS projectId',
    appJson.expo?.extra?.eas?.projectId === 'bf4508b7-20f9-4342-a315-9b6f6121aef9');
-ok('app.json keeps RECORD_AUDIO permission',
-   (appJson.expo?.android?.permissions ?? []).includes('android.permission.RECORD_AUDIO'));
+// RECORD_AUDIO and CAMERA were reaching the Android manifest even though the app
+// only ever calls launchImageLibraryAsync with MediaTypeOptions.Images. An
+// Android permission with no feature behind it cannot be answered honestly on
+// Google Play's Data safety form and invites review questions.
+//
+// The source is expo-image-picker's config plugin, which adds both for video
+// capture unless told otherwise - so deleting them from android.permissions does
+// nothing, the plugin puts them back. Passing microphonePermission/
+// cameraPermission false both omits them AND emits tools:node="remove", which
+// stops any other package reintroducing them. These checks guard the mechanism
+// that actually works, not the array that looked like the cause.
+// (This check is inverted from its original form, which asserted RECORD_AUDIO
+// was present.)
+ok('app.json declares no RECORD_AUDIO permission',
+   !(appJson.expo?.android?.permissions ?? []).includes('android.permission.RECORD_AUDIO'),
+   'nothing in the app records audio - an unused permission is a Play review problem');
+{
+  const picker = (appJson.expo?.plugins ?? [])
+    .find(p => Array.isArray(p) && p[0] === 'expo-image-picker');
+  ok('expo-image-picker plugin is configured with options', Array.isArray(picker) && !!picker[1],
+     'without options the plugin adds RECORD_AUDIO and CAMERA to the manifest');
+  ok('expo-image-picker blocks the microphone permission', picker?.[1]?.microphonePermission === false,
+     'must be exactly false - that is what emits tools:node="remove" for RECORD_AUDIO');
+  ok('expo-image-picker blocks the camera permission', picker?.[1]?.cameraPermission === false,
+     'the app never calls launchCameraAsync');
+}
 ok('DEPLOYMENT.md keeps the zip-apply commands', read('DEPLOYMENT.md').includes('Expand-Archive'));
 
 // ---------------------------------------------------------------------------
@@ -253,6 +277,55 @@ for (const f of srcFiles) {
   ok('that workflow makes the database checks mandatory',
      !!verifier && /ITALA_REQUIRE_DB/.test(verifier),
      'without it tests/sql/run.js skips silently and CI goes green with no database coverage');
+}
+
+
+// ---------------------------------------------------------------------------
+// CHECK 15 - the privacy policy must keep covering what the store declarations
+// depend on. Three things describe the same behaviour and must not disagree:
+// what the code does, the policy in site/privacy/, and the Apple/Google tables
+// in DEPLOYMENT.md. The policy is the one nobody re-reads, so deleting a
+// section from it fails the build instead of going unnoticed until a store
+// review or a removal request.
+//
+// These are presence checks on prose, not proof the prose is accurate. They stop
+// a section vanishing; they cannot stop it becoming wrong.
+// ---------------------------------------------------------------------------
+{
+  const policyPath = 'site/privacy/index.html';
+  const exists = fs.existsSync(path.join(ROOT, policyPath));
+  ok('a privacy policy exists in the repo', exists,
+     'both stores require a reachable policy URL, and it has to live somewhere version-controlled');
+  if (exists) {
+    const policy = read(policyPath);
+    for (const [label, needle] of [
+      // The single most consequential disclosure: the read_all_* RLS policies are
+      // `using (auth.uid() is not null)`, so this is not a nicety.
+      ['discloses that any signed-in session can read every roster', 'anonymous spectator session, can read'],
+      ['covers roster data about people who are not app users', 'people who are not users'],
+      ['gives a route to have a name removed', 'want a name and its statistics removed'],
+      ['has a children section', '5. Children'],
+      ['discloses the sponsor promo tap counter', 'increments a counter on that sponsor'],
+      ['names Supabase as a processor', 'Supabase'],
+      ['covers account deletion', 'Delete account'],
+      ['cites the NZ Privacy Act 2020', 'Privacy Act 2020'],
+      // Guards against someone "fixing" the policy by declaring device location.
+      ['states the venue is not device location', 'not device location'],
+    ]) {
+      ok(`privacy policy ${label}`, policy.includes(needle), `missing: "${needle}"`);
+    }
+  }
+
+  // The declarations in DEPLOYMENT.md are the other half of the same pair.
+  const deploy = read('DEPLOYMENT.md');
+  ok('DEPLOYMENT.md declares the promo tap counter as Usage Data',
+     /Usage Data → Advertising Data/.test(deploy) && /bump_promo_tap/.test(deploy),
+     'server-side promo taps are collected and have to appear on both store forms');
+  ok('DEPLOYMENT.md tells you not to declare Location',
+     /Do not declare Location/.test(deploy),
+     'the venue field is user-typed text, and declaring device location would be false');
+  ok('DEPLOYMENT.md still refuses "Data Not Collected"',
+     /does collect data/.test(deploy));
 }
 
 console.log('='.repeat(64));

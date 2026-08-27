@@ -1,0 +1,8 @@
+# Cloudflare Pages security headers for the iTala public pages.
+# These are static documents with no scripts, no forms and no third-party
+# assets, so the policy can be locked right down.
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
