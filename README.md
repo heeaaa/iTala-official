@@ -149,6 +149,37 @@ combined REB is logged for now) and **turnovers** (TOV). Also deferred per the s
 cloud sync & invites (Supabase), the social feed with reactions/comments, shot charts, video
 highlights, push notifications, round-robin schedule generator.
 
+## Testing
+
+```bash
+npm test          # or: node tests/run.js
+```
+
+One entry point runs everything: a TypeScript check, the reducer/stats/parser suite, a two-device
+sync suite against a PostgREST emulator, static structural checks, and the SQL suites against a
+real Postgres. Nothing is added to `package.json` dependencies - esbuild is fetched on demand by
+`npx`, so the first run needs network access.
+
+The database suites **skip** when no Postgres is reachable, so `npm test` works on a laptop with
+nothing running. To include them, point the standard `PG*` variables at a server:
+
+```bash
+PGHOST=127.0.0.1 PGUSER=postgres npm test
+```
+
+That skip is silent by design, which is right on a laptop and wrong in CI. Set
+`ITALA_REQUIRE_DB=1` to turn it into a failure.
+
+`.github/workflows/ci.yml` runs the same entry point on every pull request and every push to
+`main`, against a Postgres service with `ITALA_REQUIRE_DB=1`, plus a Metro/Hermes bundle as a
+build check. CI is the authoritative verification for merge readiness.
+
+Windows contributors: `npm test` runs natively, no workaround needed.
+
+See `tests/README.md` for what each suite covers, and `tests/MANUAL-REGRESSION.md` for what
+automation cannot reach - gestures, native modules, screen readers, upgrade paths and multi-device
+sync.
+
 ## Architecture
 
 ```
@@ -159,33 +190,55 @@ src/
   types.ts               Data model
   navigation.ts          Typed route params
   lib/
-    stats.ts             ALL stat derivation (box score, standings, leaders, career)
+    stats.ts             ALL stat derivation (box score, standings, leaders, career, outcomeOf)
+    cardSpecs.ts         Which share cards a player/season qualifies for, and their content
+    rosterParse.ts       Bulk-import parser for pasted roster text
     format.ts            id + formatting helpers
+    haptics.ts           Tap/undo/success feedback, honouring the Settings toggle
+    notify.ts            Local (on-device) game reminders and final-score alerts
+    promos.ts            Sponsor promo fetch + tap counter
+    usePromos.ts         Promo hook + tap handler used by the screens
   store/
-    storage.ts           AsyncStorage load/save (offline cache)
+    storage.ts           AsyncStorage load/save (offline cache) + device-local prefs
     StoreProvider.tsx    Context + reducer + autosave + Supabase sync wrapper
     AdminProvider.tsx    Auth gate (Supabase Auth in synced mode, local fallback otherwise)
   sync/
     supabase.ts          Supabase client + SYNC_ENABLED flag (env-var driven)
     sync.ts              Pull initial state, push action → row, realtime subscription
-  components/ui.tsx      Screen, Txt, Button, Card, Pill, Field, Segmented, Empty, Toggle
-  screens/
+    pushQueue.ts         Serialises pushes so a burst of taps cannot reorder on the server
+  components/
+    ui.tsx               Screen, Txt, Button, Card, Pill, Field, Segmented, Empty, Toggle
+    AchievementCard.tsx  The shareable card renderer (CardSpec → image)
+  screens/                   (19 screens, all registered in App.tsx)
     LeaguesScreen.tsx        Home: league list + resume-live banner + lock icon
-    SettingsScreen.tsx       Admin-only: Track misses + sync status
-    CreateLeagueScreen.tsx
+    SettingsScreen.tsx       Account, haptics, notification and sync status, delete account
+    CreateLeagueScreen.tsx   New league + its per-league stat-tracking choices
     ManageRosterScreen.tsx   Add teams + players, opponent-as-team toggle
+    BulkImportScreen.tsx     Paste a whole roster, review flagged rows, import
     EditTeamScreen.tsx       Edit a team (name, color, logo) + add/edit/delete its players
-    LeagueDetailScreen.tsx   Tabs: Games (by date) / Standings / Leaders / Roster
-    GamesOnDateScreen.tsx    Games played on a chosen date (swipe-to-delete)
+    LeagueDetailScreen.tsx   Tabs: Games (by date) / Standings / Leaders / Roster + settings
+    GamesOnDateScreen.tsx    Games played on a chosen date (swipe or accessibility action to delete)
     NewGameScreen.tsx        Pick home + away
     SelectLineupScreen.tsx   Choose the starting 5 for both teams
     RecGameScreen.tsx        Drop-in game setup (location + ad-hoc teams/players)
     LiveGameScreen.tsx       ⭐ The two-tap stat tracker (lineups, subs, fouls, change-court)
+    FinalScoreScreen.tsx     The buzzer moment: final score + Player of the Game
     BoxScoreScreen.tsx       Full box score + quarter line score + play-by-play + share card
     PlayerProfileScreen.tsx  Averages, career highs, badges
+    TeamProfileScreen.tsx    Team record, scoring profile, last 5, roster
+    SeasonRecapScreen.tsx    End-of-season awards and champion (closed seasons only)
+    ShareCardScreen.tsx      Pick and export an achievement card
+    ManagePromosScreen.tsx   Super-Admin sponsor promo management
 supabase/
-  schema.sql             Tables, RLS policies, admin password function, ping function
+  schema.sql             Tables, RLS policies, RPCs, admin password hashing, ping function
+tests/
+  run.js                 One entry point: tsc + reducer/stats + sync + static + SQL suites
+  MANUAL-REGRESSION.md   What automation cannot reach (gestures, native modules, devices)
+  sql/                   schema.sql exercised against a real Postgres
+site/
+  privacy/index.html     Privacy policy (deployed to Cloudflare Pages; both stores require it)
 .github/workflows/
+  ci.yml                 Types, reducer, sync, static and SQL suites + a Metro/Hermes bundle
   supabase-keepalive.yml Pings Supabase every 3 days to prevent the 7-day auto-pause
 ```
 

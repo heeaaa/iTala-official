@@ -6,6 +6,12 @@ failure there makes most of this moot.
 
 Report failures by id, for example "R14 failed", so the exact case is unambiguous.
 
+**Sections P6 to P9 are new and have never been run.** They cover the accessibility work
+(screen reader, P6), the upgrade and migration paths that only reproduce when installing over an
+older build (P7), tied-game handling (P8), and the store-submission prerequisites (P9). P6 in
+particular is the largest untested surface in the app: the semantics are in place and guarded by
+static checks, but no screen reader has ever been pointed at them.
+
 ---
 
 ## Before you start
@@ -13,6 +19,10 @@ Report failures by id, for example "R14 failed", so the exact case is unambiguou
 - [ ] **P0.1** Re-run `supabase/schema.sql` in the Supabase SQL Editor. Several
       recent fixes depend on new database functions (`rec_setup_game`,
       `bulk_import_roster`). Without this, drop-in games will fail loudly.
+      **Order matters now:** the script also carries the retired app-wide
+      "track misses" value onto older leagues and then drops the
+      `app_settings` table. Run it **before** installing a client build that no
+      longer reads that table, or the old value is lost. See P7 (U1 to U4).
 - [ ] **P0.2** Confirm Anonymous sign-in is enabled (Authentication → Providers).
 - [ ] **P0.3** `npm test` passes.
 - [ ] **P0.4** Sign in with Google. Several flows require an account, and a
@@ -25,6 +35,14 @@ Report failures by id, for example "R14 failed", so the exact case is unambiguou
 Stats maths, standings, box-score totals, career stats, awards, the roster
 parser, reducer state transitions, route registration, and the SQL functions are
 all covered by `npm test`. Test the **surfaces**, not the arithmetic.
+
+Also now automated, so do not spend manual time proving them: tied-game
+arithmetic in standings (`GROUP M`), the legacy settings migration in the
+reducer (`GROUP N`), the presence of accessibility roles and announcements
+(`CHECK 14`), the privacy-policy and store-declaration content (`CHECK 15`), and
+the SQL backfill itself (`settings_backfill`). What remains manual is whether a
+real screen reader **speaks** sensibly, and whether an upgrade over an older
+build preserves what it should - neither of which a static check can tell you.
 
 ---
 
@@ -309,7 +327,9 @@ Needs two devices, or one device plus airplane mode.
       tracker. *Expect:* truncation, not broken layout.
 - [ ] **R132** Duplicate jersey numbers on one team. *Expect:* allowed, readable.
 - [ ] **R133** Accented and non-Latin characters in names (for example Almeñe).
-- [ ] **R134** A tie score at finish. *Expect:* handled sensibly in standings.
+- [ ] **R134** A tie score at finish. **Superseded by section P8**, which replaces this with
+      twelve specific cases. "Handled sensibly" was too vague to fail: a level score was in fact
+      being recorded as a home win.
 - [ ] **R135** Rapid repeated tapping on the stat pad.
       *Expect:* every tap counted once, nothing dropped or doubled.
 - [ ] **R136** Rotate the device / check on a small screen.
@@ -337,6 +357,180 @@ Needs two devices, or one device plus airplane mode.
       *Expect:* "No local admin password is configured for this build."
 
 ---
+
+## P6. Accessibility - screen reader (NEW, and the biggest untested surface)
+
+**Nothing here has ever been run.** The semantics are implemented and guarded by
+`static.test.js` CHECK 14, but a static check cannot tell you whether VoiceOver or TalkBack say
+something sensible, say it in the right order, or say it twice. Until this section passes, treat
+accessibility as implemented-but-unverified.
+
+Turn on **VoiceOver** (iOS: Settings → Accessibility → VoiceOver) or **TalkBack** (Android:
+Settings → Accessibility → TalkBack). Do the whole section on **both** platforms if you can: the
+announcement mechanism differs, and the double-speak risk in A3 is Android-specific.
+
+### The two-tap stat flow (F-05, CRITICAL)
+
+- [ ] **A1** On the live tracker, swipe to a stat pad button and activate it.
+      *Expect:* it announces something like "three point make armed. Tap a Warriors player." Not
+      "2PT", not silence, and not a spelled-out "✗".
+- [ ] **A2** Then activate a player chip.
+      *Expect:* "three point make logged for Juan A." The score is announced by nothing else, so
+      if this is silent the flow is unusable.
+- [ ] **A3** **Android specifically:** confirm each announcement is spoken **once**, not twice.
+      The code deliberately uses `announceForAccessibility` and *not*
+      `accessibilityLiveRegion="polite"` precisely to avoid a double announcement. If you hear
+      everything twice, that decision has been undone somewhere.
+- [ ] **A4** Log a full possession without looking at the screen. Arm, tap a player, arm, tap.
+      *Expect:* you can tell what was recorded at every step from audio alone.
+- [ ] **A5** Activate an already-armed stat button.
+      *Expect:* "Stat cleared." and the button no longer reads as selected.
+- [ ] **A6** Tap **Undo**. *Expect:* "Undid three point make for Juan A." Not just "Undo".
+- [ ] **A7** Tap **Undo** with nothing to undo. *Expect:* "Nothing to undo."
+- [ ] **A8** Tap **Redo**. *Expect:* "Redid ..." naming the event.
+- [ ] **A9** Log a timeout. *Expect:* "Timeout logged for Warriors, 4:32 remaining" (or without
+      the time if you left it blank).
+- [ ] **A10** Score enough to trigger a milestone banner (25 points, or a double-double).
+      *Expect:* the banner text is spoken. It auto-dismisses after ~2 seconds, so a screen-reader
+      user who is not told never knows it happened.
+
+### Roles, labels and state (F-06)
+
+- [ ] **A11** Swipe through the stat pad. *Expect:* every button announces as a **button**, with a
+      pronounceable name ("free throw miss", not "FT ✗"), and the armed one announces as
+      **selected**.
+- [ ] **A12** Swipe to a player chip. *Expect:* one coherent phrase, for example "Number 17,
+      Juan A, 13 points, 4 fouls, button". Not four disconnected fragments.
+- [ ] **A13** A player one foul from fouling out.
+      *Expect:* "one foul from fouling out" is included. On screen this is red text only, so
+      without it the warning is invisible non-visually.
+- [ ] **A14** With no stat armed, the player chips should announce as **disabled**.
+- [ ] **A15** The mini buttons announce as "Undo", "Redo", "Subs", "Court", "Log", "Timeout" -
+      **without** the leading glyph being read out as "clockwise open circle arrow" or similar.
+- [ ] **A16** A disabled Undo/Redo announces as disabled rather than just being silent.
+- [ ] **A17** The team score blocks announce team, score, team fouls and timeouts as one phrase,
+      and the active team announces as **selected**.
+- [ ] **A18** The exit control announces as "Exit game tracker", not "✕".
+- [ ] **A19** Elsewhere in the app: `Button`, `Card`, `Segmented` and `Toggle` all announce a role.
+      A Segmented tab announces **selected**; a Toggle announces **checked** or unchecked and
+      changes when activated.
+- [ ] **A20** A text field announces its label, not just its current value.
+- [ ] **A21** The "+ Add player to court" dashed box announces its purpose and the count.
+
+### Accessible delete (F-07)
+
+- [ ] **A22** On Games-on-date as an owner, focus a game card and open the screen reader's
+      **actions** menu (VoiceOver: swipe up/down or the rotor; TalkBack: local context menu).
+      *Expect:* a **"Delete game"** action is offered.
+- [ ] **A23** Activate it. *Expect:* the same confirmation dialog the swipe gesture produces, and
+      deleting works.
+- [ ] **A24** As a non-owner, the action is **not** offered.
+- [ ] **A25** Focus the "Swipe a game to the left to delete it" hint line.
+      *Expect:* it reads as "To delete a game, choose the Delete action on that game" - not the
+      swipe instruction, which a screen-reader user cannot follow because horizontal swipes are
+      consumed for navigation.
+- [ ] **A26** Confirm the **swipe gesture still works** with the screen reader off. The accessible
+      path was added alongside it, not instead of it.
+- [ ] **A27** Each game card announces one coherent summary: matchup, status, both scores.
+
+### Known gaps (do not report these as failures)
+
+- **F-20** colour-only risk cues: foul danger is now in the *spoken* label but there is still no
+  non-colour **visual** cue. Open.
+- **F-21** touch targets below the guideline size on live-game controls. Open.
+- **F-25** icon-only buttons on screens other than the live tracker, and the box-score table's
+  lack of table semantics. Only partly addressed.
+
+---
+
+## P7. Upgrade and migration paths (NEW)
+
+These only reproduce by installing a **new build over an older one**. A fresh install passes
+trivially and proves nothing, which is exactly why they need to be manual.
+
+### Legacy app-wide "track misses" setting (N-06)
+
+The app-wide toggle is gone; stat tracking is per-league with a per-game override. The old global
+value has to be carried onto leagues that predate the per-league column. Get this wrong and a
+scorekeeper who turned misses **off** finds them switched back **on**.
+
+- [ ] **U1** **Server first.** Re-run `supabase/schema.sql` on the project, then check
+      `select count(*) from leagues where track_misses is null;`
+      *Expect:* **0**. Do this **before** installing the new client. If you install the client
+      first the old global is gone and the value cannot be recovered.
+- [ ] **U2** Same query for `track_turnovers is null`. *Expect:* 0.
+- [ ] **U3** Confirm `app_settings` no longer exists:
+      `select to_regclass('public.app_settings');` *Expect:* null.
+- [ ] **U4** Re-run `schema.sql` a **second** time. *Expect:* no error. It is documented as safe to
+      re-run, and the migration is guarded for the case where the table is already gone.
+- [ ] **U5** **Local-only device.** On a device running the **old** build with no Supabase config,
+      set up a league and turn miss tracking **off**. Install the new build over it.
+      *Expect:* that league still hides the miss row. This is the case the server backfill cannot
+      reach, handled by a one-shot read in `HYDRATE`.
+- [ ] **U6** Same as U5 but with miss tracking left **on**. *Expect:* still on.
+- [ ] **U7** After upgrading, change a league's miss setting in League settings and confirm it
+      still round-trips to the server and to a second device.
+- [ ] **U8** A drop-in game created with per-game toggles still overrides its league setting.
+
+### Android permissions (F-10)
+
+- [ ] **U9** In a **new native build**, check the app's permission list in system settings.
+      *Expect:* **no Microphone and no Camera** entry. `expo-image-picker` used to add both.
+- [ ] **U10** Pick a team logo from the photo library. *Expect:* the photo-library prompt appears
+      and the picker works. Only the microphone and camera were blocked, not photos.
+- [ ] **U11** Pick a sponsor promo image the same way.
+- [ ] **U12** If you have a built `.aab`/`.apk` to hand, confirm no `RECORD_AUDIO` or `CAMERA` in
+      its merged manifest. Introspection (`npx expo config --type introspect`) shows
+      `tools:node="remove"` on both, but that has not been confirmed against a real build.
+
+---
+
+## P8. Tied games (F-11) - re-test, replaces R134
+
+`R134` ("a tie score at finish, handled sensibly") was too vague to fail. A level score used to be
+recorded as a **home win**. It is now a draw, and a 0-0 game marked final takes the same path, so
+this is reachable without anyone mis-tapping.
+
+- [ ] **T1** Play a game to a level score and finish it. Check Standings.
+      *Expect:* **neither** team gains a win or a loss. Both show a tie.
+- [ ] **T2** The standings record column reads **W-L-T**, and the tied game shows in the T column.
+- [ ] **T3** The streak column shows `T1` for both teams, not `W1`/`L1`.
+- [ ] **T4** PCT treats the draw as half a win, and the value agrees with where the row sits in the
+      table. A PCT that contradicts the sort order is the bug.
+- [ ] **T5** Create a game and mark it **final with no stats at all** (0-0).
+      *Expect:* a tie, not a home win. This used to give home a win **and** away a loss.
+- [ ] **T6** Team profile for a team with a draw: RECORD reads W-L-T, and **PPG / OPP PPG are not
+      inflated**. Ties now count toward games played; they used to be excluded while the drawn
+      game's points still counted (N-03).
+- [ ] **T7** Box score of a tied game: **both** team names and both scores are highlighted, not
+      just the home side.
+- [ ] **T8** Games-on-date card for a tied game: both rows highlighted equally.
+- [ ] **T9** Final Score screen for a tie: the "It's a tie!" message, no trophy line.
+- [ ] **T10** Player of the Game on a tie is drawn from **both** teams, so the best performer on
+      the away side can win it. It used to silently come from the home team only (N-04).
+- [ ] **T11** Share an achievement card from a tied game and confirm Player of the Game agrees
+      with T10.
+- [ ] **T12** **Regression guard:** a normally decided game is completely unaffected. Winner gets
+      the win, loser the loss, streaks W1/L1, winner sorted first, T column 0.
+
+---
+
+## P9. Store submission prerequisites (NEW, not app behaviour)
+
+- [ ] **S1** Privacy policy deployed and loading over HTTPS (see `site/README.md` for the
+      Cloudflare Pages setup).
+- [ ] **S2** Every `[OPERATOR]` and `[CONTACT EMAIL]` placeholder replaced, and the orange
+      "before publishing" notice deleted from `site/privacy/index.html`.
+- [ ] **S3** The contact address actually receives mail. It is the only route by which someone who
+      never installed the app can have their name removed.
+- [ ] **S4** Policy URL pasted into **both** store listings.
+- [ ] **S5** Policy content read side by side with the two declaration tables in `DEPLOYMENT.md`
+      and confirmed to agree.
+- [ ] **S6** Location **not** declared on either store form.
+- [ ] **S7** Sponsor promo taps **are** declared (Apple Usage Data, Google App activity).
+- [ ] **S8** A position taken on children's data: age rating, Play target audience, and the policy
+      section consistent with each other.
+
 
 ## Known limitations (not bugs)
 
