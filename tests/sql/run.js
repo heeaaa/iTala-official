@@ -74,14 +74,24 @@ function serverUp() {
   try { psql('postgres', ['-c', 'select 1']); return true; } catch { return false; }
 }
 
-if (!havePsql()) {
-  console.log('  SKIP: psql not on PATH - database checks need a Postgres server.');
+// Skipping when there is no database keeps `npm test` usable on a laptop with
+// nothing running - but that default is wrong for CI, where a silent skip means
+// a green tick with zero database coverage. ITALA_REQUIRE_DB=1 turns both skips
+// into failures, so a CI job that loses its Postgres service fails loudly
+// instead of quietly testing nothing.
+const REQUIRE_DB = process.env.ITALA_REQUIRE_DB === '1';
+function unavailable(reason) {
+  if (REQUIRE_DB) {
+    console.error(`  ✗ ${reason}`);
+    console.error('    ITALA_REQUIRE_DB=1 is set, so the database checks are mandatory here.');
+    process.exit(1);
+  }
+  console.log(`  SKIP: ${reason}`);
   process.exit(0);
 }
-if (!serverUp()) {
-  console.log('  SKIP: no Postgres answering on the PG* connection settings.');
-  process.exit(0);
-}
+
+if (!havePsql()) unavailable('psql not on PATH - database checks need a Postgres server.');
+if (!serverUp()) unavailable('no Postgres answering on the PG* connection settings.');
 
 const only = process.argv[2];
 const suites = fs.readdirSync(HERE)
