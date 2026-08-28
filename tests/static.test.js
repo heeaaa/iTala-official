@@ -324,6 +324,23 @@ for (const f of srcFiles) {
     ]) {
       ok(`privacy policy ${label}`, policy.includes(needle), `missing: "${needle}"`);
     }
+
+    // The policy is a published legal document with a store listing pointing at
+    // it. It shipped with deliberate placeholders and a visible draft notice so
+    // it could not go live half-finished by accident; now that it is filled in,
+    // these keep it that way. A reachable contact address is the mechanism by
+    // which someone who never installed the app gets their name removed, so an
+    // unfilled placeholder here is a compliance failure, not a typo.
+    for (const ph of ['[OPERATOR]', '[CONTACT EMAIL]']) {
+      ok(`privacy policy has no ${ph} placeholder left`, !policy.includes(ph),
+         'the published policy must name a real operator and a real contact address');
+    }
+    ok('privacy policy no longer carries the pre-publication notice',
+       !/class="todo"/.test(policy) && !/Before publishing:/.test(policy),
+       'the draft banner must not appear on the live page');
+    ok('privacy policy gives a contact address',
+       /mailto:/.test(policy),
+       'section 13 must offer a way to actually reach the operator');
   }
 
   // The declarations in DEPLOYMENT.md are the other half of the same pair.

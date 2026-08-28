@@ -71,20 +71,6 @@ code {
   margin: 1.2rem 0;
 }
 
-.todo {
-  background: #fff4e5;
-  border: 1px solid #e0a458;
-  color: #5a3d0d;
-  border-radius: 6px;
-  padding: .9rem 1.1rem;
-  margin: 1.2rem 0;
-  font-weight: 600;
-}
-
-@media (prefers-color-scheme: dark) {
-  .todo { background: #2e2411; border-color: #7a5a1f; color: #f4d9a6; }
-}
-
 table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .94rem; }
 th, td { border: 1px solid var(--line); padding: .5rem .6rem; text-align: left; vertical-align: top; }
 th { background: var(--surface); }
