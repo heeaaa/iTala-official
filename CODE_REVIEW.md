@@ -129,11 +129,11 @@ Status values used in the Findings Summary below:
 | `PARTIAL` | Partly addressed, or fixed in code but with an unverified step outside the repo. |
 | `OPEN` | Not started. |
 
-Counts: **12 fixed**, **4 partial**, **15 open**, 1 informational.
+Counts: **12 fixed**, **5 partial**, **14 open**, 1 informational.
 **All P0 and P1 items are closed.** No CRITICAL or HIGH finding remains open or partial: both
 credential rotations are confirmed done (28/08/2026), and the historical exposure behind F-01 is
-formally accepted (see below). P2 has started (F-09); of the 15 open findings, 9 are MEDIUM and
-6 are LOW.
+formally accepted (see below). P2 is under way - F-09 (ESLint), N-17 (the drop-in authorisation
+suites) and F-12 (the roster parser); of the 14 open findings, 8 are MEDIUM and 6 are LOW.
 
 > The previous revision of this section read "11 fixed ... 15 open". That was an arithmetic slip,
 > not a change in scope - the table has always held 31 numbered findings plus F-32. The counts
@@ -390,7 +390,7 @@ Each bug fix was confirmed to fail **before** the fix rather than assumed:
 | F-09 | MEDIUM | CI/CD | No ESLint/Prettier configuration exists anywhere in the project | CONFIRMED | PARTIAL |
 | F-10 | MEDIUM | Mobile / Security | Unused, unexplained `RECORD_AUDIO` Android permission | CONFIRMED | FIXED (merged) |
 | F-11 | MEDIUM | Correctness | Tied final scores are silently recorded as home-team wins | CONFIRMED | FIXED (merged) |
-| F-12 | MEDIUM | Correctness | `rosterParse.ts` misparses team names/headers under common real-world paste shapes | HIGH CONFIDENCE | OPEN |
+| F-12 | MEDIUM | Correctness | `rosterParse.ts` misparses team names/headers under common real-world paste shapes | CONFIRMED | PARTIAL |
 | F-13 | MEDIUM | Dependency | `npm audit`: 24 vulnerabilities in Expo/Metro build tooling (dev-time only) | CONFIRMED | OPEN |
 | F-14 | MEDIUM | Performance | `LiveGameScreen` recomputes box score/milestones on unrelated app-wide state changes | HIGH CONFIDENCE | OPEN |
 | F-15 | MEDIUM | Mobile / Performance | Team logo / promo images stored as base64 with no resize step, only quality compression | HIGH CONFIDENCE | OPEN |
@@ -685,6 +685,53 @@ case 'DELETE_EVENT':
 ---
 
 ### F-12: `rosterParse.ts` misparses common real-world paste shapes
+
+> **Updated 29/08/2026. PARTIAL** - the digit-in-team-name bug is fixed, the
+> back-to-back-header case now has a one-tap repair, and one shape is documented as
+> a deliberate limitation.
+>
+> **The finding understated the damage.** It described a team name containing a digit
+> being parsed as a player. What actually happened is worse: because no header was
+> ever recognised, the team also fell back to the `Team N` placeholder and its real
+> name was consumed. Reproduced before fixing:
+>
+> | Paste | Before | After |
+> |---|---|---|
+> | `Eagles 2024` | team `"Team 1"`, player `Eagles` #`2024` | team `"Eagles 2024"` |
+> | `U14 Warriors` | team `"Team 1"`, player `U14 Warriors` | team `"U14 Warriors"` |
+> | 3 such teams in one paste | one team, 6 players | 3 teams, 1 player each |
+>
+> **Root cause:** header detection was `!/\d/.test(line)` - any digit anywhere was
+> taken as proof of a player line. It now asks whether the line carries a *player-line
+> signal* (`#N`, `-N`, a bare trailing `N`, or a leading index), which is the actual
+> distinction. Extraction and detection share the same four regexes so they cannot
+> drift apart - a line looking like a player to one and not the other is exactly how a
+> team name got eaten.
+>
+> **One extra change:** a bare trailing run of 4+ digits is now read as a year, not a
+> jersey number. Capped at 3 because the project's own sample roster contains a
+> `420`.
+>
+> **Back-to-back headers** (two teams pasted with no blank line between) still parse
+> as one team with a flagged row, because that shape is genuinely
+> indistinguishable from the "Jun" stray already in the sample. Guessing would
+> silently lose a player or split a team. Instead `promoteStrayToTeam()` - a pure,
+> unit-tested function - powers a **"↳ Make this a team"** action on flagged rows in
+> `BulkImportScreen`, carrying the rows below the header into the new team. That is
+> the review-UI action this finding recommended.
+>
+> **Known limitation, asserted so it stays visible (O13):** a short `"Name N"` header
+> such as `Team 2` is still read as a player, because it is structurally identical to
+> `Pedro Santos 9`. No rule separates them without guessing.
+>
+> **Coverage:** GROUP O, 25 assertions. 9 were confirmed failing against the old
+> parser first, including `O5 expected ["Eagles 2024","Hawks 2025","U16 Kings"], got
+> ["Team 1"]`. GROUP G's 19 existing assertions against the real messy sample are
+> unchanged, which is what shows the fix did not trade one paste shape for another.
+>
+> **Still open:** nothing in the parser. The remaining gap is that
+> `BulkImportScreen` has no automated coverage at all - `promoteStrayToTeam` is
+> tested, the screen wiring is not, and this project has no component-test harness.
 
 **Severity:** MEDIUM
 **Category:** Correctness
