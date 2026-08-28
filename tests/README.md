@@ -183,6 +183,24 @@ project needed. `tests/sql/run.js` creates a throwaway database per suite, loads
 `schema.sql` that suite declares with a `-- @requires:` marker - so the assertions
 run against the shipped SQL rather than a copy of it.
 
+**The `@requires` list is load order, not a set.** `authz` defines
+`can_score_game`, whose body reads `games.created_by`, so `games_created_by` has
+to be listed first or the function fails to create with `column g.created_by does
+not exist`.
+
+All eight suites run. Four of them (`rec_setup`, `bundles`,
+`community_creator_only`, `private_rec_ownership`) used to have no marker and were
+skipped - they were diagnostic scripts printing `select 'label', value` rows for a
+human to read. They now assert, and `static.test.js` CHECK 17 fails the build if
+any suite loses its marker, names a section that does not exist, or stops printing
+its pass/fail counter. A suite the runner skips verifies nothing, and that is easy
+to stop noticing.
+
+Parameter names in `harness.sql`'s stub functions must stay identical to
+`schema.sql`'s. A suite that requires `authz` loads the real definitions on top of
+the stubs with `create or replace function`, and Postgres refuses to change the
+name of an input parameter that way.
+
 ```bash
 PGHOST=127.0.0.1 PGUSER=postgres node tests/sql/run.js               # all wired suites
 PGHOST=127.0.0.1 PGUSER=postgres node tests/sql/run.js admin_secret  # just one

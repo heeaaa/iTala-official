@@ -1,7 +1,8 @@
 const M = require(process.env.ITALA_BUNDLE || '../.test-bundle.js');
 const { reducer, teamBoxScore, gameScore, standings, careerStats, leagueAwards,
         perfRating, lineScore, parseRoster, leaderboards, gamesPlayedMap,
-        effectiveFoulLimit, fouledOutSet, playerFouls, winPctOf, outcomeOf } = M;
+        effectiveFoulLimit, fouledOutSet, playerFouls, winPctOf, outcomeOf,
+        promoteStrayToTeam, claimOnce, courtKeyOf, reconcileLineup } = M;
 
 let pass = 0, fail = 0;
 const failures = [];
@@ -697,6 +698,245 @@ eq('M20 outcomeOf treats 0-0 as a tie, not a home win', outcomeOf(0, 0), 'tie');
 eq('M21 outcomeOf never reports a winner on equal scores',
    [outcomeOf(1, 1), outcomeOf(99, 99)], ['tie', 'tie']);
 
+// ===========================================================================
+// GROUP O — roster parser: team names that contain digits (F-12)
+// ===========================================================================
+// Header detection used to be `!hasDigit(line)`, so ANY team name containing a
+// digit was parsed as a player line instead. The damage was worse than losing a
+// number: because no header was ever recognised, the team fell back to the
+// placeholder "Team 1" and the real name was consumed as a player, e.g.
+// "Eagles 2024" became a player called "Eagles" wearing 2024.
+//
+// The fix is to ask whether a line looks like a PLAYER line - does it carry an
+// extractable jersey number or a leading index - rather than whether it happens
+// to contain a digit anywhere. Plus a cap: a bare trailing run of 4+ digits is a
+// year, not a jersey number.
+//
+// These shapes are all realistic for a roster pasted out of a group chat.
+
+// A season/year in the team name.
+{
+  const r = parseRoster('Eagles 2024\n\nJuan Dela Cruz-17\nPedro Santos 9');
+  eq('O1 a team name ending in a year is a header, not a player',
+     r.map(t => t.name), ['Eagles 2024']);
+  eq('O2 the year is not mistaken for a jersey number',
+     r[0].players.map(p => `${p.name}/${p.number}`),
+     ['Juan Dela Cruz/17', 'Pedro Santos/9']);
+}
+
+// An age-group prefix.
+{
+  const r = parseRoster('U14 Warriors\n\nBen Cruz-8');
+  eq('O3 an age-group prefix in a team name is a header',
+     r.map(t => t.name), ['U14 Warriors']);
+  eq('O4 its players are unaffected',
+     r[0].players.map(p => `${p.name}/${p.number}`), ['Ben Cruz/8']);
+}
+
+// Several digit-bearing team names in one paste.
+{
+  const r = parseRoster(
+    'Eagles 2024\n\nAna Lim-4\n\nHawks 2025\n\nBen Cruz-8\n\nU16 Kings\n\nCara Diaz #7');
+  eq('O5 every digit-bearing team name is detected',
+     r.map(t => t.name), ['Eagles 2024', 'Hawks 2025', 'U16 Kings']);
+  eq('O6 each team keeps exactly its own player',
+     r.map(t => t.players.length), [1, 1, 1]);
+}
+
+// The cap must not break jersey numbers that are legitimately long. The real
+// sample has a 420, so 3 digits has to keep working.
+{
+  const r = parseRoster('Reds\n\nKobe Feliciano-420\nAna Lim 100\nBen Cruz 7');
+  eq('O7 three-digit jersey numbers still parse',
+     r[0].players.map(p => `${p.name}/${p.number}`),
+     ['Kobe Feliciano/420', 'Ana Lim/100', 'Ben Cruz/7']);
+}
+
+// A four-digit bare tail is a year. With no header context it is still kept
+// verbatim as a name rather than silently split - the parser's stated contract.
+{
+  const r = parseRoster('Reds\n\nAna Lim-4\nEagles 2024');
+  const stray = r[0].players.find(p => p.name === 'Eagles 2024');
+  ok('O8 a mid-roster digit-bearing line is kept verbatim, not split', !!stray);
+  eq('O9 and it carries no invented jersey number', stray ? stray.number : 'MISSING', '');
+  ok('O10 and it is flagged for review', !!(stray && stray.flag));
+}
+
+// Regression guard on the shape that always worked: a blank line then a player
+// line with a bare trailing number must stay a PLAYER, not become a header.
+// This is why "line is in a header position" cannot be the discriminator - the
+// real sample separates a header from its first player with a blank line too.
+{
+  const r = parseRoster('Philcan grind\n\nAlbert Roquero 22\nCandido ynzon 09');
+  eq('O11 a bare trailing number after a blank line is still a player',
+     r.map(t => t.name), ['Philcan grind']);
+  eq('O12 leading zero still preserved',
+     r[0].players.map(p => `${p.name}/${p.number}`),
+     ['Albert Roquero/22', 'Candido ynzon/09']);
+}
+
+// KNOWN LIMITATION, asserted so it stays visible and cannot regress silently.
+// "Team 2" is genuinely ambiguous - structurally identical to "Pedro Santos 9" -
+// so the parser keeps treating a 1-3 digit bare tail as a jersey number. A team
+// named "Team 2" still imports as a player. Flagged in CODE_REVIEW.md F-12.
+{
+  const r = parseRoster('Team 2\n\nAna Lim-4');
+  ok('O13 [known limitation] a short "Name N" team header is still read as a player',
+     r[0].players.some(p => p.number === '2'));
+}
+
+// Two teams pasted back to back with no blank line between them. The parser
+// cannot tell this from the "Jun" stray case, so it flags rather than guesses,
+// and promoteStrayToTeam is the review screen's resolution.
+{
+  const r = parseRoster('Reds\nAna Lim-4\nBlues\nBen Cruz-8');
+  eq('O14 back-to-back headers still parse as one team with a flagged row',
+     [r.length, r[0].players.length], [1, 3]);
+  const pi = r[0].players.findIndex(p => p.name === 'Blues');
+  ok('O15 the swallowed header is the flagged row', pi >= 0 && !!r[0].players[pi].flag);
+
+  const promoted = promoteStrayToTeam(r, 0, pi);
+  eq('O16 promoting it splits one team into two', promoted.map(t => t.name), ['Reds', 'Blues']);
+  eq('O17 the rows below the header move with it',
+     promoted.map(t => t.players.map(p => p.name)), [['Ana Lim'], ['Ben Cruz']]);
+  eq('O18 the promoted header is no longer a player row',
+     promoted.some(t => t.players.some(p => p.name === 'Blues')), false);
+  eq('O19 no player is lost in the split',
+     promoted.reduce((n, t) => n + t.players.length, 0), 2);
+}
+
+// Three teams back to back, promoted one at a time - the realistic repair flow.
+{
+  let r = parseRoster('Reds\nAna Lim-4\nBlues\nBen Cruz-8\nGreens\nCara Diaz-9');
+  eq('O20 three back-to-back headers start as one team', r.length, 1);
+  // Promote the last flagged row first: promoting an earlier one would shift the
+  // indices of the later ones.
+  for (let guard = 0; guard < 5; guard++) {
+    const ti = r.findIndex(t => t.players.some(p => p.flag));
+    if (ti < 0) break;
+    const flagged = r[ti].players.map((p, i) => (p.flag ? i : -1)).filter(i => i >= 0);
+    r = promoteStrayToTeam(r, ti, flagged[flagged.length - 1]);
+  }
+  eq('O21 promoting each flagged row recovers all three teams',
+     r.map(t => t.name), ['Reds', 'Blues', 'Greens']);
+  eq('O22 with one player each',
+     r.map(t => t.players.map(p => p.name)), [['Ana Lim'], ['Ben Cruz'], ['Cara Diaz']]);
+}
+
+// A stray with no usable name must not produce an unimportable nameless team -
+// commit() drops teams whose name is blank.
+{
+  const teams = [{ name: 'Reds', players: [
+    { name: 'Ana Lim', number: '4', raw: 'Ana Lim-4' },
+    { name: '   ', number: '', raw: '   ', flag: 'x' },
+    { name: 'Ben Cruz', number: '8', raw: 'Ben Cruz-8' },
+  ] }];
+  const out = promoteStrayToTeam(teams, 0, 1);
+  eq('O23 a blank header name falls back to a placeholder', out[1].name, 'Team 2');
+}
+
+// Bad indices must be inert rather than corrupting the list.
+{
+  const teams = [{ name: 'Reds', players: [{ name: 'Ana Lim', number: '4', raw: '' }] }];
+  eq('O24 an out-of-range player index is a no-op',
+     promoteStrayToTeam(teams, 0, 9), teams);
+  eq('O25 an out-of-range team index is a no-op',
+     promoteStrayToTeam(teams, 9, 0), teams);
+}
+
+// ===========================================================================
+// GROUP P — live-game input safety (F-18 double tap, F-17 stale lineup)
+// ===========================================================================
+
+// claimOnce: the double-tap guard. The screen's own `if (!armed) return` plus
+// `setArmed(null)` is not enough, because `armed` is a useState value captured in
+// the tap handler's closure - two taps processed before the re-render commits
+// both see it armed and both dispatch. A ref mutates immediately, so claiming
+// through it is atomic with respect to the render cycle.
+{
+  const box = { current: '2pm' };
+  eq('P1 the first claim gets the armed stat', claimOnce(box), '2pm');
+  eq('P2 the box is emptied by the claim', box.current, null);
+  eq('P3 a second claim in the same frame gets nothing', claimOnce(box), null);
+}
+{
+  // The realistic sequence: arm, double-tap, arm again, tap. Exactly two logs.
+  const box = { current: null };
+  const logged = [];
+  const tap = () => { const v = claimOnce(box); if (v) logged.push(v); };
+
+  box.current = 'pf';
+  tap(); tap(); tap();          // one fumbled triple-tap
+  box.current = '3pm';          // re-armed
+  tap(); tap();                 // another fumble
+  eq('P4 each arming yields exactly one log however many taps land',
+     logged, ['pf', '3pm']);
+}
+{
+  const box = { current: null };
+  eq('P5 claiming an empty box is null, not undefined', claimOnce(box), null);
+  const undef = { current: undefined };
+  eq('P6 an undefined box is treated as empty', claimOnce(undef), null);
+}
+{
+  // Falsy-but-real values must still be claimable - a guard that used a bare
+  // truthiness test would drop these.
+  const zero = { current: 0 };
+  eq('P7 a zero value is still claimed', claimOnce(zero), 0);
+  const empty = { current: '' };
+  eq('P8 an empty-string value is still claimed', claimOnce(empty), '');
+}
+
+// courtKeyOf: the lineup is a set of five, not an order, so reshuffling the same
+// five must not read as a substitution.
+eq('P9 court key is order-independent',
+   courtKeyOf(['a', 'b', 'c']), courtKeyOf(['c', 'a', 'b']));
+eq('P10 court key distinguishes a different five',
+   courtKeyOf(['a', 'b', 'c']) === courtKeyOf(['a', 'b', 'd']), false);
+eq('P11 court key of an empty court is stable', courtKeyOf([]), '');
+// CHARACTERIZATION: the key is a comma join, so an id containing a comma WOULD
+// collide with two ids. Safe only because player ids come from uid(), which emits
+// base36 - no separator can appear in one. Asserted so that if ids ever become
+// user-supplied, this shows up as a decision rather than a silent ambiguity.
+eq('P12 [characterization] the comma join is ambiguous for comma-bearing ids',
+   courtKeyOf(['a,b']) === courtKeyOf(['a', 'b']), true);
+ok('P13 uid() emits no comma, which is what makes P12 unreachable',
+   !M.uid().includes(','));
+
+// reconcileLineup: what a "Set 5" picker should do when the court moves beneath it.
+{
+  const r = reconcileLineup({ courtIds: ['a', 'b'], seedKey: courtKeyOf(['a', 'b']), touched: false });
+  eq('P14 nothing changed -> no reseed, no conflict', [r.reseed, r.conflict], [null, false]);
+}
+{
+  // The self-healing case: another device changed the lineup and the user has not
+  // started picking, so adopt it silently.
+  const r = reconcileLineup({ courtIds: ['c', 'd'], seedKey: courtKeyOf(['a', 'b']), touched: false });
+  eq('P15 court moved with no edits -> reseed silently', r.reseed, ['c', 'd']);
+  eq('P16 and the seed advances to the new court', r.seedKey, courtKeyOf(['c', 'd']));
+  eq('P17 with no conflict raised', r.conflict, false);
+}
+{
+  // The case that must NOT be resolved automatically. Discarding the user's picks
+  // and discarding the other device's change are both wrong to choose for them.
+  const r = reconcileLineup({ courtIds: ['c', 'd'], seedKey: courtKeyOf(['a', 'b']), touched: true });
+  eq('P18 court moved with edits -> conflict, not a silent overwrite', r.conflict, true);
+  eq('P19 and the user selection is left untouched', r.reseed, null);
+  eq('P20 and the seed does not advance, so the conflict persists until resolved',
+     r.seedKey, courtKeyOf(['a', 'b']));
+}
+{
+  // A reorder is not a change, even mid-edit - this is what stops a spurious
+  // conflict prompt every time the array happens to come back in another order.
+  const r = reconcileLineup({ courtIds: ['b', 'a'], seedKey: courtKeyOf(['a', 'b']), touched: true });
+  eq('P21 a reordered but identical five is not a conflict', r.conflict, false);
+  eq('P22 and needs no reseed', r.reseed, null);
+}
+{
+  // Opening the sheet on an empty court, then someone else sets a lineup.
+  const r = reconcileLineup({ courtIds: ['a'], seedKey: courtKeyOf([]), touched: false });
+  eq('P23 a court filling from empty reseeds', r.reseed, ['a']);
+}
 
 // ===========================================================================
 console.log('='.repeat(64));

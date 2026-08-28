@@ -21,7 +21,13 @@ const path = require('path');
 
 const HERE = __dirname;
 const ROOT = path.join(HERE, '..', '..');
-const SCHEMA = fs.readFileSync(path.join(ROOT, 'supabase', 'schema.sql'), 'utf8');
+// Line endings are normalised to \n. schema.sql is CRLF in the working tree
+// (core.autocrlf=true), which silently breaks any multi-line slice anchor written
+// with \n - it matches zero times and the slice throws. psql is happy with either,
+// so normalising here makes the anchors below independent of how git checked the
+// file out, on any platform.
+const SCHEMA = fs.readFileSync(path.join(ROOT, 'supabase', 'schema.sql'), 'utf8')
+  .replace(/\r\n/g, '\n');
 
 // Slice a named region out of schema.sql so a suite exercises the shipped SQL.
 // Anchors are literal substrings; the slice runs from the start of `from` to the
@@ -86,6 +92,45 @@ const SECTIONS = {
   settings_backfill: () => slice(
     '-- One-shot migration: the app-wide trackMisses toggle that used to live in',
     'drop table if exists public.app_settings;',
+  ),
+
+  // The real is_admin(), rather than harness.sql's stub. Same result, but this
+  // one is `security definer set search_path`, which is what actually ships.
+  is_admin: () => slice(
+    '-- Helper: returns true if the current auth.uid() is an admin.',
+    'select coalesce((select is_admin from public.profiles where id = auth.uid()), false);\n$$;',
+  ),
+
+  // The authorisation layer: is_authed_user, member_role, is_shared_rec,
+  // can_score, can_score_row, can_score_game, is_owner. These override the
+  // harness stubs (see the parameter-name note in harness.sql). can_score_row is
+  // the one that matters most - it is the whole reason a community drop-in game
+  // is scoreable only by its creator, and it is also what the games RLS policy
+  // is built on.
+  authz: () => slice(
+    '-- ---- helpers ----',
+    'select public.is_admin() or public.member_role(p_league_id) = \'owner\';\n$$;',
+  ),
+
+  // games.created_by, which can_score_row reads. It is an idempotent ALTER in
+  // schema.sql rather than a column in the CREATE TABLE, so slicing the table
+  // definition would not bring it along.
+  games_created_by: () => slice(
+    'alter table public.games add column if not exists created_by uuid',
+    'on delete set null;',
+  ),
+
+  // rec_setup_game: creates or joins a drop-in league, writes teams/players/game
+  // in one transaction, and stamps created_by server-side.
+  rec_setup: () => slice(
+    'create or replace function public.rec_setup_game(',
+    'grant execute on function public.rec_setup_game(text,text,boolean,bigint,text,text,boolean,boolean,jsonb) to authenticated;',
+  ),
+
+  // bulk_import_roster: the paste-a-roster path.
+  bulk_roster: () => slice(
+    'create or replace function public.bulk_import_roster(p_league_id text, p_teams jsonb)',
+    'grant execute on function public.bulk_import_roster(text,jsonb) to authenticated;',
   ),
 };
 
@@ -184,8 +229,13 @@ for (const file of suites) {
 }
 
 if (manual.length) {
-  console.log(`  SKIP (manual, no @requires marker): ${manual.join(', ')}`);
-  console.log('        these need their RPC sections loaded by hand - see tests/README.md');
+  // As of N-17 every suite in the tree declares its sections, and static.test.js
+  // CHECK 17 keeps it that way - so reaching this branch means someone added a
+  // suite without a marker, and it just verified nothing. Say so plainly rather
+  // than describing it as normal.
+  console.log(`  SKIP - NOT RUN, no @requires marker: ${manual.join(', ')}`);
+  console.log('        A skipped suite verifies nothing. Add a `-- @requires:` line naming the');
+  console.log('        schema.sql sections it needs (see SECTIONS in this file and tests/README.md).');
 }
 console.log(failed ? `\n✗ ${failed} SQL suite(s) reported problems` : '\n✓ SQL suites passed');
 process.exit(failed ? 1 : 0);

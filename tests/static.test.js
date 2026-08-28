@@ -435,6 +435,54 @@ for (const f of srcFiles) {
      'linting after merge to main defeats the point');
 }
 
+
+// ---------------------------------------------------------------------------
+// CHECK 17 - no SQL suite may go inert (N-17). tests/sql/run.js skips any suite
+// without a `-- @requires:` marker, which is correct behaviour: running one
+// would load only harness.sql, leaving every check querying empty tables and
+// "passing" vacuously. The failure mode is that the skip is easy to stop
+// noticing. Four of the eight suites sat skipped long enough to be documented as
+// normal, and they were the drop-in-game authorisation tests.
+//
+// So: every suite must declare its sections, name a section that exists, and
+// emit the per-suite counter line the runner's output is read for. A new
+// diagnostic script therefore cannot be added in the skipped state - it has to
+// be written as assertions, which is the point.
+// ---------------------------------------------------------------------------
+{
+  const sqlDir = path.join(ROOT, 'tests', 'sql');
+  const runner = read('tests/sql/run.js');
+  // Section keys are declared as `name: () => ...` inside the SECTIONS object.
+  const sectionsBlock = runner.slice(runner.indexOf('const SECTIONS = {'),
+                                     runner.indexOf('function havePsql()'));
+  const known = [...sectionsBlock.matchAll(/^\s{2}(\w+):\s*\(\)\s*=>/gm)].map(m => m[1]);
+  ok('the SQL runner exposes sliceable schema sections', known.length >= 5,
+     `parsed ${known.length} section name(s) - the @requires check below needs them`);
+
+  const suites = fs.existsSync(sqlDir)
+    ? fs.readdirSync(sqlDir).filter(f => f.endsWith('.test.sql')).sort()
+    : [];
+  ok('SQL suites are present', suites.length > 0, 'no tests/sql/*.test.sql found');
+
+  for (const f of suites) {
+    const body = fs.readFileSync(path.join(sqlDir, f), 'utf8');
+    const marker = body.match(/--\s*@requires:\s*(.+)/);
+    ok(`${f} declares @requires`, !!marker,
+       'without it the runner skips this suite and it verifies nothing');
+    if (marker) {
+      const req = marker[1].split(',').map(s => s.trim()).filter(Boolean);
+      const unknown = req.filter(r => !known.includes(r));
+      ok(`${f} requires only sections that exist`, unknown.length === 0,
+         `unknown section(s): ${unknown.join(', ')}`);
+    }
+    // The runner decides pass/fail by scanning output for FAIL, so a suite that
+    // prints nothing would be indistinguishable from one that passed.
+    ok(`${f} reports a per-suite pass/fail count`,
+       /count\(\*\) filter \(where ok\)/.test(body) && body.includes('failed   ['),
+       'the runner reads these counts; a silent suite looks like a passing one');
+  }
+}
+
 console.log('='.repeat(64));
 console.log(`STATIC CHECKS:  ${pass} passed,  ${fail} failed,  ${warn} warnings`);
 if (problems.length) {

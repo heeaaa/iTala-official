@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { useKeepAwake } from 'expo-keep-awake';
 import { View, Pressable, ScrollView, Alert, Modal, TextInput, ActivityIndicator, AccessibilityInfo } from 'react-native';
 import { Screen, Txt, Button, Segmented, TeamBadge, LivePip, PromoStrip } from '../components/ui';
@@ -11,6 +11,7 @@ import {
   gameScore, teamBoxScore, teamPeriodFouls, fouledOutSet, playerFouls, effectiveFoulLimit,
   lineScore, perfRating, teamPeriodTimeouts,
 } from '../lib/stats';
+import { claimOnce, reconcileLineup, courtKeyOf } from '../lib/liveInput';
 import { tapFeedback, undoFeedback, successFeedback } from '../lib/haptics';
 import { usePromos, onPromoTap } from '../lib/usePromos';
 
@@ -72,7 +73,20 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   const readOnly = !!spectator || !(league && canScoreGame(league, game));
 
   const [activeSide, setActiveSide] = useState<'home' | 'away'>('home');
-  const [armed, setArmed] = useState<EventType | null>(null);
+  // `armed` drives rendering; `armedRef` is the authority for whether a tap may
+  // log. They are set together through setArmed() below.
+  //
+  // The ref is what makes the two-tap flow safe against a fumbled double-tap
+  // (F-18). `armed` is captured in each tap handler's closure, so a second tap
+  // processed before the re-render commits still sees the stat armed and logs a
+  // second time - two points, or two fouls, from one tap. A ref mutates
+  // immediately, so claimOnce() below is atomic with respect to the render cycle.
+  const [armed, setArmedState] = useState<EventType | null>(null);
+  const armedRef = useRef<EventType | null>(null);
+  const setArmed = (type: EventType | null) => {
+    armedRef.current = type;
+    setArmedState(type);
+  };
   const [swapped, setSwapped] = useState(false);
   const [subOpen, setSubOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
@@ -292,27 +306,34 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   const nameOf = (id: string | null) => id ? (league.players.find(p => p.id === id)?.name ?? 'Player') : activeTeam.name;
 
   const log = (playerId: string | null) => {
-    if (!armed) return;
-    const verb = LABELS[armed];
+    // Claim the armed stat before anything else. This both reads it and clears
+    // it, synchronously, so a second tap arriving in the same frame gets null
+    // here and returns instead of logging a duplicate (F-18). Everything below
+    // uses the claimed local `stat`, never `armed`, which is still the stale
+    // closure value until the next render.
+    const stat = claimOnce(armedRef);
+    if (!stat) return;
+    const verb = LABELS[stat];
     const who = nameOf(playerId);
 
     // foul handling + foul-out (reducer also removes them from the court)
-    if (armed === 'pf' && playerId) {
+    if (stat === 'pf' && playerId) {
       const willHave = playerFouls(league, gameId, playerId) + 1;
       if (willHave >= foulLimit) {
         const nm = league.players.find(p => p.id === playerId)?.name ?? 'Player';
         Alert.alert('Fouled out', `${nm} reached ${foulLimit} fouls (FIBA) and was taken off the court. Tap Subs to bring someone in.`);
       }
     }
-    dispatch({ t: 'ADD_EVENT', leagueId, gameId, teamId: activeTeam.id, playerId, type: armed, period });
+    dispatch({ t: 'ADD_EVENT', leagueId, gameId, teamId: activeTeam.id, playerId, type: stat, period });
 
     // Physical confirmation for the scorekeeper who isn't looking at the screen.
     tapFeedback();
 
-    // ALWAYS clear the armed stat after logging, and show a brief confirmation.
+    // The ref was already cleared by the claim above; this brings the rendered
+    // state into line and shows the brief confirmation.
     setArmed(null);
     setFlash(`✓ ${verb} — ${who}`);
-    announce(`${SPOKEN[armed]} logged for ${who}.`);
+    announce(`${SPOKEN[stat]} logged for ${who}.`);
   };
 
   // Timeout: logged against the active team, with the entered time remaining stored as note.
@@ -746,6 +767,54 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
   const [selected, setSelected] = useState<string[]>(onCourtIds);
   const [outId, setOutId] = useState<string | null>(null);
 
+  // F-17. `selected` is seeded from onCourtIds by useState, which reads its
+  // initial value once - so a realtime HYDRATE from another device, or an
+  // auto-bench, can change who is on court while this sheet sits open, and
+  // confirming would then write a lineup built from a world that no longer
+  // exists, silently reverting the other change.
+  //
+  // seedKey records which court the selection was built from. When the court
+  // moves and the user has not started picking, adopt it silently. When they
+  // have, keep their work and surface a conflict instead - choosing for them in
+  // either direction discards someone's change without asking.
+  const courtKey = courtKeyOf(onCourtIds);
+  const [seedKey, setSeedKey] = useState(() => courtKeyOf(onCourtIds));
+  const [touched, setTouched] = useState(false);
+  const [conflict, setConflict] = useState(false);
+
+  useEffect(() => {
+    const next = reconcileLineup({ courtIds: onCourtIds, seedKey, touched });
+    if (next.reseed) {
+      setSelected(next.reseed);
+      setSeedKey(next.seedKey);
+    }
+    setConflict(next.conflict);
+  }, [onCourtIds, courtKey, seedKey, touched]);
+
+  const restartFromCurrent = () => {
+    setSelected(onCourtIds);
+    setSeedKey(courtKey);
+    setTouched(false);
+    setConflict(false);
+  };
+
+  const confirmLineup = () => {
+    const ids = selected.filter(id => !fouledOut.has(id));
+    if (ids.length === 0) return;
+    if (!conflict) { onSetLineup(ids); return; }
+    // Deliberately a decision rather than a default. Applying would revert the
+    // other device; discarding would throw away the picks just made here.
+    Alert.alert(
+      'Lineup changed elsewhere',
+      'Who is on the court changed on another device while this was open. Apply your selection anyway, or start again from the current lineup?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Start again', onPress: restartFromCurrent },
+        { text: 'Apply mine', style: 'destructive', onPress: () => onSetLineup(ids) },
+      ],
+    );
+  };
+
   const roster = team.playerIds.map(id => players.find(p => p.id === id)).filter(Boolean) as Player[];
   const eligibleCount = roster.filter(p => !fouledOut.has(p.id)).length;
   const target = Math.min(LINEUP_SIZE, eligibleCount);
@@ -753,6 +822,9 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
 
   const toggle = (pid: string) => {
     if (fouledOut.has(pid)) return;
+    // Marks the selection as the user's work, so an incoming lineup change
+    // becomes a conflict to resolve rather than a silent overwrite of their picks.
+    setTouched(true);
     setSelected(s => s.includes(pid) ? s.filter(x => x !== pid) : (s.length >= LINEUP_SIZE ? s : [...s, pid]));
   };
 
@@ -845,10 +917,35 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
                   })}
                 </View>
               </ScrollView>
+              {conflict && (
+                <View
+                  accessibilityLiveRegion="polite"
+                  style={{ marginTop: space(3), padding: space(3), borderRadius: radius.md, borderWidth: 1, borderColor: colors.yellow, backgroundColor: colors.surface }}
+                >
+                  <Txt k="body" color={colors.yellow} style={{ fontSize: 13 }}>
+                    ⚠ Who is on the court changed on another device while this was open.
+                  </Txt>
+                  <Txt k="body" color={colors.muted} style={{ fontSize: 12, marginTop: 4 }}>
+                    Confirming will replace their lineup with yours.
+                  </Txt>
+                  <Pressable
+                    onPress={restartFromCurrent}
+                    hitSlop={10}
+                    style={{ paddingVertical: 8, alignSelf: 'flex-start' }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Start again from the current lineup"
+                    accessibilityHint="Discards your selection and loads whoever is on the court now"
+                  >
+                    <Txt k="body" color={colors.brandTeal} style={{ fontSize: 12 }}>
+                      ↻ Start again from the current lineup
+                    </Txt>
+                  </Pressable>
+                </View>
+              )}
               <View style={{ height: space(3) }} />
               <Button
                 title={`Confirm lineup (${selected.filter(id => !fouledOut.has(id)).length})`}
-                onPress={() => onSetLineup(selected.filter(id => !fouledOut.has(id)))}
+                onPress={confirmLineup}
                 disabled={selected.filter(id => !fouledOut.has(id)).length === 0}
               />
             </>
