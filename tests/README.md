@@ -79,6 +79,33 @@ source strings, so a reformat can make a check vacuous without failing it.
 CHECK 16 guards that the config, the `lint` script and the CI step all still
 exist, and that unused symbols stay an error rather than drifting to a warning.
 
+### Validating the lockfile against CI's npm, not yours
+
+CI's first step in all three jobs is `npm ci`, and **`npm ci` is stricter than
+`npm install` and disagrees between npm majors.** Adding the lint dependencies
+produced a `package-lock.json` that npm 11 accepted and npm 10 rejected:
+
+```text
+npm error Missing: @emnapi/core@1.11.3 from lock file
+npm error Missing: @emnapi/runtime@1.11.3 from lock file
+```
+
+npm 11 recorded those only as nested entries under
+`@unrs/resolver-binding-wasm32-wasi` (reached via `eslint-config-expo` ->
+`eslint-import-resolver-typescript` -> `unrs-resolver`); npm 10 wants the hoisted
+copies too. `npm ci --dry-run` passed locally and all three CI jobs still failed.
+
+`node-version: '20'` in the workflow means CI runs **npm 10**. So after any
+dependency change, validate with that major rather than whatever is on your PATH:
+
+```bash
+npx npm@10 ci --dry-run     # what CI actually runs
+npm ci --dry-run            # your local npm
+```
+
+Both must exit 0. Regenerating with `npx npm@10 install` produces a lockfile that
+satisfies both, because npm 10 records the superset.
+
 ## What is covered
 
 **Reducer and stats (`reducer.test.js`)** - every state transition that matters:

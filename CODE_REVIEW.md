@@ -250,6 +250,8 @@ Not in the original audit. Numbered `N-xx` to keep them distinct from the audit'
 | N-12 | LOW | `PlayerProfileScreen` defines `Big` and `Avg` twice: as arrow consts inside the component (which shadow, and are what actually renders) and again at module scope. The module-level pair was dead, and its comment claimed they were "used in the on-screen layout" - so editing them changed nothing on screen. Removed; behaviour identical. | FIXED (PR) |
 | N-13 | LOW | `tests/run.js` discarded the caught error on a bundling failure and printed a fixed guess about network access, so a syntax error or a bad `--alias` target reported the wrong cause. Now prints `e.message`. | FIXED (PR) |
 | N-14 | INFO | `ui.tsx`'s `OnboardingSheet` accepts an `isSignedIn` prop and never reads it, so the first-run copy is identical for guests and signed-in users despite callers passing the flag. Left in the prop type (the sheet is the obvious place to vary that copy) but removed from the destructuring. Latent incomplete feature, not a defect. | OPEN |
+| N-15 | HIGH | Adding the F-09 lint dependencies produced a `package-lock.json` that **npm 11 accepted and npm 10 rejected** (`Missing: @emnapi/core@1.11.3 from lock file`). npm 11 recorded those packages only as nested entries under `@unrs/resolver-binding-wasm32-wasi` (`eslint-config-expo` -> `eslint-import-resolver-typescript` -> `unrs-resolver`); npm 10 also wants the hoisted copies. `node-version: '20'` means CI runs npm 10, so **all three CI jobs failed at `npm ci`** while `npm ci --dry-run` passed locally on npm 11 - a false green. Regenerated with `npx npm@10 install`, which records the superset, and verified under both majors. No direct dependency version changed. | FIXED (PR) |
+| N-16 | MEDIUM | `.github/workflows/ci.yml` pins `node-version: '20'`. Node 20 left maintenance LTS in April 2026, so CI verifies every pull request against an unsupported runtime, and its bundled npm 10 is what caused N-15. Expo SDK 54 supports Node 20 and 22. Not changed as part of F-09: moving the version changes what CI verifies against and deserves its own PR and its own green run, rather than being bundled into a lint change. | OPEN |
 | N-10 | HIGH | Merge `62fb42b` (`main` into `chore/store-compliance-and-privacy-policy`) resolved its only conflict by concatenating both sides of `tests/static.test.js` but dropping the `}` closing CHECK 15 and the `// ---` separator opening CHECK 14. The file stopped parsing (`TS1005`, then `SyntaxError: Unexpected end of input`), so `node tests/run.js` failed twice and **the static suite ran zero checks** - including the CHECK 15 assertions that this very branch added to guard the store declarations and the privacy policy. Fixed forward in `ef766b2`; the resolution was then verified to be the exact union of both parents, not merely parseable. | FIXED (merged) |
 
 ### Verification evidence
@@ -552,6 +554,11 @@ case 'DELETE_EVENT':
 > - `react-hooks/exhaustive-deps` **warn**. Its only two hits are F-14. Correcting a dependency
 >   array changes when a memo recomputes, which needs the F-14 work and its own tests, not a
 >   drive-by edit in a tooling PR. Left visible on every run so it is not forgotten.
+>
+> **CI history, for honesty:** the first push of this work failed all three CI jobs at `npm ci`
+> (N-15). The lint job itself had never run. Nothing in the ESLint work was wrong; the lockfile
+> was. Recorded because "the linter is green locally" was not the same as "CI is green", which is
+> the whole point of F-03.
 >
 > **Not done:** Prettier is installed and configured but **not applied and not gated**. It would
 > reformat all 54 files in the repo; that is a mechanical commit of its own, and it carries a real
