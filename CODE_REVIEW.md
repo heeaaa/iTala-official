@@ -255,13 +255,14 @@ Not in the original audit. Numbered `N-xx` to keep them distinct from the audit'
 | N-07 | LOW | `tests/run.js` imports `execSync` and never uses it. | FIXED (PR) |
 | N-08 | INFO | `src/screens/LiveGameScreen.tsx` uses `[state, leagueId, gameId]` as a `useMemo` dependency, so the box score recomputes on any app-wide state change. This is F-14, confirmed in passing while working in the file. | OPEN (see F-14) |
 | N-09 | INFO | `showNextMilestone` in `LiveGameScreen` schedules `setTimeout` with no unmount cleanup. This is F-28, confirmed in passing. | OPEN (see F-28) |
+| N-10 | HIGH | Merge `62fb42b` (`main` into `chore/store-compliance-and-privacy-policy`) resolved its only conflict by concatenating both sides of `tests/static.test.js` but dropping the `}` closing CHECK 15 and the `// ---` separator opening CHECK 14. The file stopped parsing (`TS1005`, then `SyntaxError: Unexpected end of input`), so `node tests/run.js` failed twice and **the static suite ran zero checks** - including the CHECK 15 assertions that this very branch added to guard the store declarations and the privacy policy. Fixed forward in `ef766b2`; the resolution was then verified to be the exact union of both parents, not merely parseable. | FIXED (merged) |
 | N-11 | HIGH | `EditTeamScreen` calls `useState` **after** an early `return` (`if (!league || !team)`). React identifies hooks by call order, so the hook count changes between renders: mount before the store has the league (it is empty until the first `HYDRATE` lands in synced mode), then re-render once it arrives, and React throws "Rendered more hooks than during the previous render". Reachable by opening the screen on a cold start with sync enabled. Found by `react-hooks/rules-of-hooks` on its first ever run - nothing else in the project could have caught it. | FIXED (PR) |
 | N-12 | LOW | `PlayerProfileScreen` defines `Big` and `Avg` twice: as arrow consts inside the component (which shadow, and are what actually renders) and again at module scope. The module-level pair was dead, and its comment claimed they were "used in the on-screen layout" - so editing them changed nothing on screen. Removed; behaviour identical. | FIXED (PR) |
 | N-13 | LOW | `tests/run.js` discarded the caught error on a bundling failure and printed a fixed guess about network access, so a syntax error or a bad `--alias` target reported the wrong cause. Now prints `e.message`. | FIXED (PR) |
 | N-14 | INFO | `ui.tsx`'s `OnboardingSheet` accepts an `isSignedIn` prop and never reads it, so the first-run copy is identical for guests and signed-in users despite callers passing the flag. Left in the prop type (the sheet is the obvious place to vary that copy) but removed from the destructuring. Latent incomplete feature, not a defect. | OPEN |
 | N-15 | HIGH | Adding the F-09 lint dependencies produced a `package-lock.json` that **npm 11 accepted and npm 10 rejected** (`Missing: @emnapi/core@1.11.3 from lock file`). npm 11 recorded those packages only as nested entries under `@unrs/resolver-binding-wasm32-wasi` (`eslint-config-expo` -> `eslint-import-resolver-typescript` -> `unrs-resolver`); npm 10 also wants the hoisted copies. `node-version: '20'` means CI runs npm 10, so **all three CI jobs failed at `npm ci`** while `npm ci --dry-run` passed locally on npm 11 - a false green. Regenerated with `npx npm@10 install`, which records the superset, and verified under both majors. No direct dependency version changed. | FIXED (PR) |
 | N-16 | MEDIUM | `.github/workflows/ci.yml` pins `node-version: '20'`. Node 20 left maintenance LTS in April 2026, so CI verifies every pull request against an unsupported runtime, and its bundled npm 10 is what caused N-15. Expo SDK 54 supports Node 20 and 22. Not changed as part of F-09: moving the version changes what CI verifies against and deserves its own PR and its own green run, rather than being bundled into a lint change. | OPEN |
-| N-10 | HIGH | Merge `62fb42b` (`main` into `chore/store-compliance-and-privacy-policy`) resolved its only conflict by concatenating both sides of `tests/static.test.js` but dropping the `}` closing CHECK 15 and the `// ---` separator opening CHECK 14. The file stopped parsing (`TS1005`, then `SyntaxError: Unexpected end of input`), so `node tests/run.js` failed twice and **the static suite ran zero checks** - including the CHECK 15 assertions that this very branch added to guard the store declarations and the privacy policy. Fixed forward in `ef766b2`; the resolution was then verified to be the exact union of both parents, not merely parseable. | FIXED (merged) |
+| N-17 | MEDIUM | **Four of the eight SQL suites never run in CI.** `bundles`, `community_creator_only`, `private_rec_ownership` and `rec_setup` carry no `-- @requires:` marker, so `tests/sql/run.js` skips them loudly by design (running them would load only `harness.sql`, leaving every check querying empty tables and "passing" vacuously). The skip is honest, but the coverage gap is not harmless: these are the drop-in-game **authorisation** tests, covering `rec_setup_game`, `can_score_game`, `member_role`, `can_score` and `is_admin`, including one that reproduces a real ownership bug (a private league row existing with no membership row, for a non-admin user). They are also written as diagnostic scripts - `\set ON_ERROR_STOP off` plus `select 'label', value` rows - rather than self-asserting suites, so converting them needs both an `@requires` section sliced out of `schema.sql` and real PASS/FAIL assertions. Until then, the RLS/RPC layer that decides who may score a drop-in game has no automated verification. | OPEN |
 
 ### Verification evidence
 
@@ -321,23 +322,34 @@ GitHub Actions          PASS - run 33168091475 on 1a813a4 (PR #9), all three job
                         Bundle (Metro + Hermes) 47s. Read from the Actions REST API, which
                         became reachable when the repository was made public; the job and
                         step conclusions are the source, not an inference.
-SQL settings_backfill   PASS - first execution anywhere. The `verify` job's "Run regression
-                        suite" step succeeded with ITALA_REQUIRE_DB=1 set. That flag makes
-                        tests/sql/run.js exit 1 rather than skip when no database answers,
-                        and tests/run.js:108 counts that exit and fails the run, so a green
-                        step means the SQL suites ran against the postgres:16-alpine service
-                        and passed. The per-suite counts are in the `test-output` artifact
-                        on that run; downloading it needs authentication, so the counts
-                        themselves have not been read here.
+SQL suites              PASS - 39 assertions, 0 failed. First execution anywhere, against the
+                        postgres:16-alpine service with ITALA_REQUIRE_DB=1. Counts read from
+                        the CI log, not inferred:
+                          admin_secret            17 passed, 0 failed
+                          admin_upgrade           11 passed, 0 failed
+                          settings_backfill        6 passed, 0 failed
+                          settings_backfill_fresh  5 passed, 0 failed
+                        Four further suites SKIPPED as manual - see N-17, which is the one
+                        real gap this run exposed.
 On-device screen reader NOT RUN - no device or emulator available
 Prebuild / built APK    NOT RUN - manifest verified by introspection only
 ```
 
 **Applied to the live Supabase project:** `supabase/schema.sql` was re-run successfully on
-28/08/2026, which is what discharges the ordering constraint in **Resume here**. The migration's
-own assertions were *not* observed - the `settings_backfill` suites need a local Postgres - so what
-is confirmed is that the script applied without error, not that the backfill produced the intended
-per-league values. If that matters, query `leagues.track_misses` on the live project directly.
+28/08/2026, which is what discharges the ordering constraint in **Resume here**.
+
+The migration logic is now verified, which it was not when this section was first written. The
+`settings_backfill` suites ran in CI and cover exactly the case that made the ordering constraint
+dangerous: `B1 pre-migration league inherits the legacy global (false)`, `B2 explicit per-league
+value is not overwritten`, `B5 track_turnovers defaults to true, not to the trackMisses global`
+and `B6 app_settings table dropped`. `settings_backfill_fresh` covers the no-`app_settings` path
+(`F1`-`F5`), and `F4` confirms a re-run does not clobber an explicit value - relevant because
+`schema.sql` is designed to be re-runnable.
+
+**Still unverified, and it is a different claim:** those suites prove the shipped migration SQL is
+correct against synthetic pre-migration rows. They say nothing about what the *live* project's rows
+actually became, which depends on what that project's old global happened to be. To confirm the
+production outcome, query `leagues.track_misses` on the live project directly.
 
 Each bug fix was confirmed to fail **before** the fix rather than assumed:
 
@@ -435,6 +447,14 @@ Each bug fix was confirmed to fail **before** the fix rather than assumed:
 > layout so the upgrade path can be tested against the real shipped SQL, and they are deliberately
 > outside CHECK 10's file list. This is safe **only because the value is rotated and dead**. If it
 > were ever reused anywhere, those fixtures would republish it.
+>
+> **Two CI results bear on this directly** (run 33168626884, `admin_secret` and `admin_upgrade`):
+> - `A3 the leaked password is not the stored secret` - passing, so the published value is
+>   confirmed not to be what the database now holds.
+> - `U6 the pre-upgrade password still unlocks` - passing, and it is the important one. The upgrade
+>   path deliberately carries an existing password across as a hash so it does not lock the operator
+>   out, which means **hardening the schema alone never invalidated the leaked credential**. Only
+>   rotation did. That is precisely why rotation, not history rewriting, was the load-bearing step.
 >
 > **Residual risk:** an attacker who found the old value in the predecessor repository learns the
 > project's historical password-choice habits, and nothing more. No live credential is recoverable
