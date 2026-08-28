@@ -2,7 +2,7 @@ const M = require(process.env.ITALA_BUNDLE || '../.test-bundle.js');
 const { reducer, teamBoxScore, gameScore, standings, careerStats, leagueAwards,
         perfRating, lineScore, parseRoster, leaderboards, gamesPlayedMap,
         effectiveFoulLimit, fouledOutSet, playerFouls, winPctOf, outcomeOf,
-        promoteStrayToTeam } = M;
+        promoteStrayToTeam, claimOnce, courtKeyOf, reconcileLineup } = M;
 
 let pass = 0, fail = 0;
 const failures = [];
@@ -842,6 +842,100 @@ eq('M21 outcomeOf never reports a winner on equal scores',
      promoteStrayToTeam(teams, 0, 9), teams);
   eq('O25 an out-of-range team index is a no-op',
      promoteStrayToTeam(teams, 9, 0), teams);
+}
+
+// ===========================================================================
+// GROUP P — live-game input safety (F-18 double tap, F-17 stale lineup)
+// ===========================================================================
+
+// claimOnce: the double-tap guard. The screen's own `if (!armed) return` plus
+// `setArmed(null)` is not enough, because `armed` is a useState value captured in
+// the tap handler's closure - two taps processed before the re-render commits
+// both see it armed and both dispatch. A ref mutates immediately, so claiming
+// through it is atomic with respect to the render cycle.
+{
+  const box = { current: '2pm' };
+  eq('P1 the first claim gets the armed stat', claimOnce(box), '2pm');
+  eq('P2 the box is emptied by the claim', box.current, null);
+  eq('P3 a second claim in the same frame gets nothing', claimOnce(box), null);
+}
+{
+  // The realistic sequence: arm, double-tap, arm again, tap. Exactly two logs.
+  const box = { current: null };
+  const logged = [];
+  const tap = () => { const v = claimOnce(box); if (v) logged.push(v); };
+
+  box.current = 'pf';
+  tap(); tap(); tap();          // one fumbled triple-tap
+  box.current = '3pm';          // re-armed
+  tap(); tap();                 // another fumble
+  eq('P4 each arming yields exactly one log however many taps land',
+     logged, ['pf', '3pm']);
+}
+{
+  const box = { current: null };
+  eq('P5 claiming an empty box is null, not undefined', claimOnce(box), null);
+  const undef = { current: undefined };
+  eq('P6 an undefined box is treated as empty', claimOnce(undef), null);
+}
+{
+  // Falsy-but-real values must still be claimable - a guard that used a bare
+  // truthiness test would drop these.
+  const zero = { current: 0 };
+  eq('P7 a zero value is still claimed', claimOnce(zero), 0);
+  const empty = { current: '' };
+  eq('P8 an empty-string value is still claimed', claimOnce(empty), '');
+}
+
+// courtKeyOf: the lineup is a set of five, not an order, so reshuffling the same
+// five must not read as a substitution.
+eq('P9 court key is order-independent',
+   courtKeyOf(['a', 'b', 'c']), courtKeyOf(['c', 'a', 'b']));
+eq('P10 court key distinguishes a different five',
+   courtKeyOf(['a', 'b', 'c']) === courtKeyOf(['a', 'b', 'd']), false);
+eq('P11 court key of an empty court is stable', courtKeyOf([]), '');
+// CHARACTERIZATION: the key is a comma join, so an id containing a comma WOULD
+// collide with two ids. Safe only because player ids come from uid(), which emits
+// base36 - no separator can appear in one. Asserted so that if ids ever become
+// user-supplied, this shows up as a decision rather than a silent ambiguity.
+eq('P12 [characterization] the comma join is ambiguous for comma-bearing ids',
+   courtKeyOf(['a,b']) === courtKeyOf(['a', 'b']), true);
+ok('P13 uid() emits no comma, which is what makes P12 unreachable',
+   !M.uid().includes(','));
+
+// reconcileLineup: what a "Set 5" picker should do when the court moves beneath it.
+{
+  const r = reconcileLineup({ courtIds: ['a', 'b'], seedKey: courtKeyOf(['a', 'b']), touched: false });
+  eq('P14 nothing changed -> no reseed, no conflict', [r.reseed, r.conflict], [null, false]);
+}
+{
+  // The self-healing case: another device changed the lineup and the user has not
+  // started picking, so adopt it silently.
+  const r = reconcileLineup({ courtIds: ['c', 'd'], seedKey: courtKeyOf(['a', 'b']), touched: false });
+  eq('P15 court moved with no edits -> reseed silently', r.reseed, ['c', 'd']);
+  eq('P16 and the seed advances to the new court', r.seedKey, courtKeyOf(['c', 'd']));
+  eq('P17 with no conflict raised', r.conflict, false);
+}
+{
+  // The case that must NOT be resolved automatically. Discarding the user's picks
+  // and discarding the other device's change are both wrong to choose for them.
+  const r = reconcileLineup({ courtIds: ['c', 'd'], seedKey: courtKeyOf(['a', 'b']), touched: true });
+  eq('P18 court moved with edits -> conflict, not a silent overwrite', r.conflict, true);
+  eq('P19 and the user selection is left untouched', r.reseed, null);
+  eq('P20 and the seed does not advance, so the conflict persists until resolved',
+     r.seedKey, courtKeyOf(['a', 'b']));
+}
+{
+  // A reorder is not a change, even mid-edit - this is what stops a spurious
+  // conflict prompt every time the array happens to come back in another order.
+  const r = reconcileLineup({ courtIds: ['b', 'a'], seedKey: courtKeyOf(['a', 'b']), touched: true });
+  eq('P21 a reordered but identical five is not a conflict', r.conflict, false);
+  eq('P22 and needs no reseed', r.reseed, null);
+}
+{
+  // Opening the sheet on an empty court, then someone else sets a lineup.
+  const r = reconcileLineup({ courtIds: ['a'], seedKey: courtKeyOf([]), touched: false });
+  eq('P23 a court filling from empty reseeds', r.reseed, ['a']);
 }
 
 // ===========================================================================

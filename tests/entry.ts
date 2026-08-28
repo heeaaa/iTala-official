@@ -6,4 +6,5 @@ export { pushAction, fetchAllState } from '../src/sync/sync';
 export { enqueuePush } from '../src/sync/pushQueue';
 export * from '../src/lib/stats';
 export * from '../src/lib/rosterParse';
+export * from '../src/lib/liveInput';
 export { uid } from '../src/lib/format';

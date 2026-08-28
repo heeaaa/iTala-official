@@ -540,8 +540,15 @@ begin
     on conflict (id) do update set name = excluded.name, color = excluded.color, player_ids = excluded.player_ids;
 
     for ply in select * from jsonb_array_elements(team->'players') loop
+      -- players.name is NOT NULL, and a pasted roster can legitimately contain a
+      -- row with a blank or absent name. Inserting it raw meant ONE such row
+      -- aborted the entire import with a not-null violation, losing every other
+      -- team and player in the same call - while rec_setup_game, doing the same
+      -- job on the drop-in path, defaulted it. Same fallback here (N-18).
       insert into public.players (id, league_id, name, number)
-      values (ply->>'id', p_league_id, ply->>'name', nullif(ply->>'number', ''))
+      values (ply->>'id', p_league_id,
+              coalesce(nullif(ply->>'name', ''), 'Player'),
+              nullif(ply->>'number', ''))
       on conflict (id) do update set name = excluded.name, number = excluded.number;
     end loop;
   end loop;

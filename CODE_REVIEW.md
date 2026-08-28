@@ -129,11 +129,12 @@ Status values used in the Findings Summary below:
 | `PARTIAL` | Partly addressed, or fixed in code but with an unverified step outside the repo. |
 | `OPEN` | Not started. |
 
-Counts: **12 fixed**, **5 partial**, **14 open**, 1 informational.
+Counts: **14 fixed**, **5 partial**, **12 open**, 1 informational.
 **All P0 and P1 items are closed.** No CRITICAL or HIGH finding remains open or partial: both
 credential rotations are confirmed done (28/08/2026), and the historical exposure behind F-01 is
 formally accepted (see below). P2 is under way - F-09 (ESLint), N-17 (the drop-in authorisation
-suites) and F-12 (the roster parser); of the 14 open findings, 8 are MEDIUM and 6 are LOW.
+suites), F-12 (the roster parser) and F-17/F-18 (live-game input safety); of the 12 open findings,
+6 are MEDIUM and 6 are LOW.
 
 > The previous revision of this section read "11 fixed ... 15 open". That was an arithmetic slip,
 > not a change in scope - the table has always held 31 numbered findings plus F-32. The counts
@@ -263,7 +264,7 @@ Not in the original audit. Numbered `N-xx` to keep them distinct from the audit'
 | N-15 | HIGH | Adding the F-09 lint dependencies produced a `package-lock.json` that **npm 11 accepted and npm 10 rejected** (`Missing: @emnapi/core@1.11.3 from lock file`). npm 11 recorded those packages only as nested entries under `@unrs/resolver-binding-wasm32-wasi` (`eslint-config-expo` -> `eslint-import-resolver-typescript` -> `unrs-resolver`); npm 10 also wants the hoisted copies. `node-version: '20'` means CI runs npm 10, so **all three CI jobs failed at `npm ci`** while `npm ci --dry-run` passed locally on npm 11 - a false green. Regenerated with `npx npm@10 install`, which records the superset, and verified under both majors. No direct dependency version changed. | FIXED (PR) |
 | N-16 | MEDIUM | `.github/workflows/ci.yml` pins `node-version: '20'`. Node 20 left maintenance LTS in April 2026, so CI verifies every pull request against an unsupported runtime, and its bundled npm 10 is what caused N-15. Expo SDK 54 supports Node 20 and 22. Not changed as part of F-09: moving the version changes what CI verifies against and deserves its own PR and its own green run, rather than being bundled into a lint change. | OPEN |
 | N-17 | MEDIUM | ~~Four of the eight SQL suites never ran in CI.~~ **FIXED.** All eight now run: `rec_setup` (9), `bundles` (12), `community_creator_only` (10) and `private_rec_ownership` (8) were converted from diagnostic `select 'label', value` scripts into asserting suites, taking their expected values from the intent already written in their labels. Needed five new sliceable `schema.sql` sections (`is_admin`, `authz`, `games_created_by`, `rec_setup`, `bulk_roster`), an `auth.users` stub for the `created_by` foreign key, and the harness stub parameters renamed to match `schema.sql` - `create or replace function` cannot change an input parameter name, so `member_role(p text)` blocked the real `member_role(p_league_id text)` from loading. SQL coverage went 39 -> 78 assertions. CHECK 17 now fails the build if any suite loses its marker, requires a section that does not exist, or stops printing its counter. | FIXED (PR) | **Four of the eight SQL suites never run in CI.** `bundles`, `community_creator_only`, `private_rec_ownership` and `rec_setup` carry no `-- @requires:` marker, so `tests/sql/run.js` skips them loudly by design (running them would load only `harness.sql`, leaving every check querying empty tables and "passing" vacuously). The skip is honest, but the coverage gap is not harmless: these are the drop-in-game **authorisation** tests, covering `rec_setup_game`, `can_score_game`, `member_role`, `can_score` and `is_admin`, including one that reproduces a real ownership bug (a private league row existing with no membership row, for a non-admin user). They are also written as diagnostic scripts - `\set ON_ERROR_STOP off` plus `select 'label', value` rows - rather than self-asserting suites, so converting them needs both an `@requires` section sliced out of `schema.sql` and real PASS/FAIL assertions. Until then, the RLS/RPC layer that decides who may score a drop-in game has no automated verification. | OPEN |
-| N-18 | LOW | `bulk_import_roster` inserts `ply->>'name'` directly, while `rec_setup_game` guards the same column with `coalesce(nullif(ply->>'name', ''), 'Player')`. `players.name` is `not null`, so a pasted roster containing one player object with no `name` key aborts the **entire** import with a not-null violation, where the drop-in path would have defaulted it. Reachable from `BulkImportScreen`, and adjacent to F-12, which is about that parser producing exactly this kind of malformed row. Not fixed here: it is a behaviour change in a shipped RPC and belongs with the F-12 work. Pinned as a characterization assertion (`bundles` D12) so the current behaviour cannot change silently. | OPEN |
+| N-18 | LOW | ~~`bulk_import_roster` aborts an entire import on one nameless player.~~ **FIXED** - same `coalesce(nullif(ply->>'name', ''), 'Player')` fallback `rec_setup_game` already applied. Proven first: without it, D12 raised `null value in column "name" ... violates not-null constraint` and D14 showed `players=4 (expected 7)` - the other three players in the same call were never written. **Requires re-running `supabase/schema.sql`** on any live project to take effect. | `bulk_import_roster` inserts `ply->>'name'` directly, while `rec_setup_game` guards the same column with `coalesce(nullif(ply->>'name', ''), 'Player')`. `players.name` is `not null`, so a pasted roster containing one player object with no `name` key aborts the **entire** import with a not-null violation, where the drop-in path would have defaulted it. Reachable from `BulkImportScreen`, and adjacent to F-12, which is about that parser producing exactly this kind of malformed row. Not fixed here: it is a behaviour change in a shipped RPC and belongs with the F-12 work. Pinned as a characterization assertion (`bundles` D12) so the current behaviour cannot change silently. | OPEN |
 
 ### Verification evidence
 
@@ -395,8 +396,8 @@ Each bug fix was confirmed to fail **before** the fix rather than assumed:
 | F-14 | MEDIUM | Performance | `LiveGameScreen` recomputes box score/milestones on unrelated app-wide state changes | HIGH CONFIDENCE | OPEN |
 | F-15 | MEDIUM | Mobile / Performance | Team logo / promo images stored as base64 with no resize step, only quality compression | HIGH CONFIDENCE | OPEN |
 | F-16 | MEDIUM | Performance | Unbounded play-by-play list rendered without virtualisation | MEDIUM CONFIDENCE | OPEN |
-| F-17 | MEDIUM | Correctness / Concurrency | Substitution modal's "Set 5" lineup snapshot goes stale if state changes while open | MEDIUM CONFIDENCE | OPEN |
-| F-18 | MEDIUM | Correctness / Mobile | No rapid double-tap lock on the live stat pad | MEDIUM CONFIDENCE | OPEN |
+| F-17 | MEDIUM | Correctness / Concurrency | Substitution modal's "Set 5" lineup snapshot goes stale if state changes while open | CONFIRMED | FIXED (PR) |
+| F-18 | MEDIUM | Correctness / Mobile | No rapid double-tap lock on the live stat pad | CONFIRMED | FIXED (PR) |
 | F-19 | MEDIUM | Architecture | Duplicated ad hoc `setTimeout` retries for membership-row eventual consistency | HIGH CONFIDENCE | OPEN |
 | F-20 | MEDIUM | Accessibility | Foul-out danger and other risk cues communicated by colour alone | HIGH CONFIDENCE | PARTIAL |
 | F-21 | MEDIUM | Accessibility | Touch targets below guideline size on frequently-used live-game controls | CONFIRMED | OPEN |
@@ -813,6 +814,30 @@ case 'DELETE_EVENT':
 
 ### F-17: Substitution modal's lineup snapshot can go stale while open
 
+> **Updated 29/08/2026. FIXED (PR).** Confidence raised from MEDIUM to CONFIRMED - the mechanism
+> is exact, not suspected.
+>
+> `SubModal` seeds its selection with `useState(onCourtIds)`, and `useState` reads its initial
+> value only on mount. The sheet stays mounted while open, so a realtime `HYDRATE` from another
+> device (or an auto-bench) changes who is on court underneath it while `selected` keeps the old
+> five. Confirming then writes a lineup built from a world that no longer exists, silently
+> reverting the other device.
+>
+> Worth noting what was **already** safe: the confirm filters `!fouledOut.has(id)`, and
+> `fouledOut` is a prop recomputed on re-render, so the foul-out case never leaked through. The
+> reachable bug is a lineup change from another device.
+>
+> **Not fixed with a re-seeding `useEffect`**, which would wipe the user's picks every time any
+> app-wide state changed. Instead `reconcileLineup()` distinguishes three cases: unchanged (do
+> nothing), changed with no edits yet (adopt silently, the user loses nothing), changed *with*
+> edits (raise a conflict). The third case is deliberately not resolved automatically - applying
+> discards the other device's change, discarding throws away the picks just made, and neither is
+> ours to choose. The sheet shows an `accessibilityLiveRegion` warning with a "Start again from
+> the current lineup" action, and confirming asks.
+>
+> The court key is order-independent, so the same five arriving in a different order is not
+> treated as a substitution and raises no spurious prompt.
+
 **Severity:** MEDIUM
 **Category:** Correctness / Concurrency
 **Location:** `src/screens/LiveGameScreen.tsx:654-655` (`SubModal`)
@@ -828,6 +853,27 @@ case 'DELETE_EVENT':
 ---
 
 ### F-18: No rapid double-tap lock on the live stat pad
+
+> **Updated 29/08/2026. FIXED (PR).** Confidence raised from MEDIUM to CONFIRMED, and the finding
+> was righter than it looked - but for a subtler reason than "there is no lock".
+>
+> There *was* a guard: `log()` opened with `if (!armed) return` and called `setArmed(null)`
+> afterwards. It does not hold. `armed` is a `useState` value captured in the tap handler's
+> closure, and `setArmed(null)` does not change that captured value. Two taps processed before the
+> re-render commits therefore both see the stat armed and both dispatch `ADD_EVENT` - one fumbled
+> double-tap becomes two points, or two fouls, mid-game. The `disabled={!armed}` on the chip has
+> the same weakness: it only takes effect once the render commits.
+>
+> Fixed by making the claim atomic rather than by adding a timer. `armedRef` mutates immediately,
+> and `claimOnce()` reads and clears it in one step, so the second tap in the same frame gets
+> `null` and returns. `log()` then uses the claimed local value throughout - the two remaining
+> reads of `armed` in its body (the `ADD_EVENT` type and the spoken announcement) were also
+> switched, since they would otherwise have used the stale closure value.
+>
+> Chosen over a time-based lockout because a threshold is arbitrary and would reject a genuine
+> fast second action: once the stat is re-armed, the next tap is accepted however quickly it
+> arrives. Verified by P4, which triple-taps one arming and double-taps the next and asserts
+> exactly two logs.
 
 **Severity:** MEDIUM
 **Category:** Correctness / Mobile Reliability

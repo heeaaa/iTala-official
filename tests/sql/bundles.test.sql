@@ -183,24 +183,59 @@ begin
   perform t_report('D11 the refused import wrote nothing', c = 0, 'found ' || c);
 end $$;
 
--- CHARACTERIZATION, not an endorsement. bulk_import_roster inserts
--- `ply->>'name'` directly, without the coalesce(nullif(...),'Player') fallback
--- that rec_setup_game applies. A player object with no "name" key at all
--- therefore yields NULL against a NOT NULL column and aborts the whole import.
--- Recorded so the difference is visible and cannot change silently; see N-18.
+-- N-18. players.name is NOT NULL and a pasted roster can legitimately contain a
+-- row with a blank or absent name. bulk_import_roster used to insert
+-- `ply->>'name'` raw, so ONE such row aborted the whole import and took every
+-- other team and player in the call with it - while rec_setup_game, doing the
+-- same job on the drop-in path, defaulted it to 'Player'. Now both do.
 update auth_state set uid = '11111111-1111-1111-1111-111111111111', anon = false;
 do $$
 declare raised boolean := false; err text;
 begin
   begin
     perform public.bulk_import_roster('lg1',
-      '[{"id":"bt9","name":"Nameless","color":"#123456","players":[{"id":"bp9","number":"3"}]}]'::jsonb);
+      '[{"id":"bt9","name":"Nameless key","color":"#123456","players":[
+          {"id":"bp9","number":"3"},
+          {"id":"bp10","name":"","number":"4"},
+          {"id":"bp11","name":"Real Person","number":"5"}]}]'::jsonb);
   exception when others then
     raised := true; err := SQLERRM;
   end;
-  perform t_report('D12 [characterization] bulk import rejects a player with no name key',
-                   raised,
-                   'it currently succeeds - if that changed deliberately, update N-18 and this check');
+  perform t_report('D12 a player with no name key no longer aborts the import',
+                   not raised,
+                   'import raised: ' || coalesce(quote_literal(err), '(none)'));
+end $$;
+
+do $$
+declare a text; b text;
+begin
+  select name into a from public.players where id = 'bp9';   -- no "name" key at all
+  select name into b from public.players where id = 'bp10';  -- present but empty
+  perform t_report('D13 both an absent and a blank name fall back to ''Player''',
+                   a = 'Player' and b = 'Player',
+                   'bp9=' || coalesce(quote_literal(a),'null')
+                     || ' bp10=' || coalesce(quote_literal(b),'null'));
+end $$;
+
+-- The point of the fix: the rest of the payload has to survive. Before, the
+-- nameless row took the whole call down.
+do $$
+declare c int; nm text;
+begin
+  select count(*) into c from public.players where league_id = 'lg1' and id like 'bp%';
+  select name into nm from public.players where id = 'bp11';
+  perform t_report('D14 the other players in the same call are still imported',
+                   c = 7 and nm = 'Real Person',
+                   'players=' || c || ' (expected 7) bp11=' || coalesce(quote_literal(nm),'null'));
+end $$;
+
+-- And the fallback must not overwrite a name that was actually given.
+do $$
+declare v text;
+begin
+  select name into v from public.players where id = 'bp1';
+  perform t_report('D15 a supplied name is never replaced by the fallback',
+                   v = 'Juan A', 'got ' || coalesce(quote_literal(v), 'null'));
 end $$;
 
 -- report
