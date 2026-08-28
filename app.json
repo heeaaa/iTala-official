@@ -30,10 +30,7 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0A0F18"
-      },
-      "permissions": [
-        "android.permission.RECORD_AUDIO"
-      ]
+      }
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -42,7 +39,10 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "iTala lets you choose a photo from your library to use as a team logo."
+          "photosPermission": "iTala lets you choose a photo from your library to use as a team logo.",
+          "//": "Do not remove the two false flags below. This plugin adds RECORD_AUDIO and CAMERA to the Android manifest for video capture the app never does (it only calls launchImageLibraryAsync with Images). false omits AND blocks them; deleting them from android.permissions does not work. See DEPLOYMENT.md gotcha #2.",
+          "microphonePermission": false,
+          "cameraPermission": false
         }
       ],
       "expo-apple-authentication",

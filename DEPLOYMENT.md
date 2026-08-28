@@ -33,12 +33,45 @@ apps **without a Mac**, since the compile happens on Expo's cloud macOS machines
    |---|---|---|---|
    | Contact Info → Email Address | Google/Apple sign-in identity | Yes | App Functionality |
    | Contact Info → Name | Account display name from the provider | Yes | App Functionality |
-   | User Content → Photos | Google/Apple profile photo, team logos | Yes | App Functionality |
-   | User Content → Other User Content | **Player names, jersey numbers and per-player stats** entered onto rosters | Yes | App Functionality |
+   | User Content → Photos or Videos | Google/Apple profile photo, team logos, sponsor promo images | Yes | App Functionality |
+   | User Content → Other User Content | **Player names, jersey numbers and per-player stats** entered onto rosters, team and league names, and the **free-text venue** typed onto a game | Yes | App Functionality |
    | Identifiers → User ID | Supabase auth UUID (including anonymous sessions) | Yes | App Functionality |
+   | Usage Data → Advertising Data | **Sponsor promo tap counts.** `onPromoTap` calls the `bump_promo_tap` RPC, which runs `update promos set taps = taps + 1`: an aggregate counter per promo, no user id stored | No | Analytics |
 
-   Nothing is used for tracking and nothing is shared with third parties. Answer Google Play's
-   Data safety form the same way.
+   Answer **No** to the tracking question. Nothing is combined with third-party data or used for
+   cross-app tracking, so the app needs no App Tracking Transparency prompt.
+
+   **Do not declare Location.** `games.location` is a venue name somebody types in. There is no
+   `expo-location` dependency and the app requests no location permission, so Apple's *Location*
+   and Google's *Approximate/Precise location* categories, both of which mean **device**
+   location, would be false in the opposite direction. The venue text is declared above under
+   User Content, which is where it belongs. Worth stating explicitly because it can name a
+   private address, and because "we store a location field" is the obvious wrong guess here.
+
+   Google Play's **Data safety** form asks the same questions in a different shape:
+
+   | Data type | Collected | Shared | Required? | Purpose |
+   |---|---|---|---|---|
+   | Personal info → Email address | Yes | No | Required to sign in | App functionality, Account management |
+   | Personal info → Name | Yes | No | Required to sign in | App functionality, Account management |
+   | Personal info → User IDs | Yes | No | Required | App functionality |
+   | Photos and videos → Photos | Yes | No | Optional | App functionality |
+   | App activity → App interactions | Yes | No | Required | Analytics (sponsor promo tap counts) |
+   | Other → Other user-generated content (roster content, team and league names, venue text) | Yes | No | Required | App functionality |
+
+   Also on that form: **encrypted in transit - Yes** (everything reaches Supabase over
+   HTTPS/WSS); **users can request data deletion - Yes**, which the app already supports through
+   Settings → Delete account (the `delete_own_account` RPC), and the privacy policy has to say
+   so and how. **Shared - No** throughout: Supabase, Google and Apple are service providers
+   processing data on your behalf, which Play's definition of "shared" excludes.
+
+   **Permissions.** `expo-image-picker` adds `RECORD_AUDIO` and `CAMERA` to the Android manifest
+   by default, for video capture this app never does - it only calls `launchImageLibraryAsync`
+   with `MediaTypeOptions.Images`. `app.json` therefore passes `microphonePermission: false` and
+   `cameraPermission: false`, which emits `tools:node="remove"` so the manifest merger strips
+   both from the build. Declaring a microphone permission you have no feature for is a Data
+   safety answer you cannot justify. Note that deleting the entry from `android.permissions`
+   does **not** work on its own; the plugin adds it straight back.
 
    The roster row is the one that is easy to get wrong: a scorekeeper types in the names of
    *other people*, who never installed the app and never consented, and those names sync to
@@ -47,6 +80,12 @@ apps **without a Mac**, since the compile happens on Expo's cloud macOS machines
    is why the app needs a real privacy policy URL saying who can see a roster and how to get a
    name removed. Declaring "Data Not Collected" while shipping a login and a server-side roster
    is a rejection/removal reason — keep these truthful.
+
+   **Children's data.** Youth basketball rosters mean children's names and performance stats sit
+   on a server, entered by an adult. Decide a position on this before submitting: it drives the
+   age rating, Google Play's target-audience declaration, and a section the privacy policy needs.
+   The app is not directed at children, but it stores data *about* them, and those are different
+   questions on both forms.
 
    A **local-only build** (no `EXPO_PUBLIC_SUPABASE_*` values, no sign-in, nothing leaves the
    device) genuinely collects nothing. If you ever ship that variant, it gets its own labels —
@@ -254,10 +293,12 @@ EAS uploads the build to App Store Connect. After processing (10–30 min) it ap
 
 ### 4c. Complete the listing, then submit for review
 In App Store Connect fill in: description, keywords, support URL, **screenshots** (6.7" iPhone
-required — capture from a device or simulator), the **privacy nutrition labels** (see the table in
-prerequisite gotcha #2 — email, name, photos, roster content, user ID; all linked to the user,
-App Functionality, no tracking), a **privacy policy URL** (required, and it has to cover roster
-data about people who are not app users), age rating, and category (**Sports**). Attach the
+required, capture from a device or simulator), the **privacy nutrition labels** (see the tables in
+prerequisite gotcha #2: email, name, photos, roster content and venue text, user ID, all linked to
+the user and all App Functionality; plus sponsor promo tap counts as Usage Data, not linked; no
+tracking), a **privacy policy URL** (required, and it has to cover roster data about people who
+are not app users, who can read a roster, and how to get a name removed - see `site/privacy/`),
+age rating, and category (**Sports**). Attach the
 build, then **Submit for Review**.
 Apple review typically takes 1–3 days.
 
@@ -307,8 +348,9 @@ eas submit --platform android --profile production --latest
 
 ### 5d. Production release
 Once production access is granted, promote the build to the **Production** track, complete the
-store listing (description, screenshots, feature graphic, the **Data safety form** — see
-prerequisite gotcha #2; this app *does* collect data, so do not declare "no data collected"),
+store listing (description, screenshots, feature graphic, the **Data safety form**: fill it in
+from the Play table in prerequisite gotcha #2; this app *does* collect data, so do not declare
+"no data collected", and do not declare Location either),
 content rating questionnaire, and submit. Google review is usually hours to a couple of days.
 
 ---
@@ -336,8 +378,13 @@ You can also combine build + submit in one step with `eas build --platform all -
 - [ ] Tested on a physical iPhone **and** Android phone via a `preview` build
 - [ ] Verified offline use + resume-live-game
 - [ ] Screenshots captured for both stores
-- [ ] Apple privacy labels + Google Data safety form declare email, name, photos, **roster content (player names/numbers/stats)** and user ID — all App Functionality, linked to user, no tracking. Not "Data Not Collected": the app has accounts and server-side rosters
-- [ ] Privacy policy URL live, and it says who can see a roster and how to get a player's name removed
+- [ ] Apple privacy labels + Google Data safety form filled in from the two tables in prerequisite gotcha #2: email, name, photos, **roster content (player names/numbers/stats)**, team/league names, **venue text** and user ID: all App Functionality, linked to user; plus **sponsor promo tap counts** as Usage Data → Advertising Data / App activity → App interactions, *not* linked. No tracking. Not "Data Not Collected": the app has accounts and server-side rosters
+- [ ] **Location NOT declared** on either form: the venue is user-typed text, not device location, and the app has no location permission or dependency
+- [ ] Data safety: encrypted in transit **Yes**, deletion requests **Yes** (Settings → Delete account)
+- [ ] `microphonePermission: false` and `cameraPermission: false` on the `expo-image-picker` plugin in `app.json`, so `RECORD_AUDIO`/`CAMERA` are stripped from the manifest (`node tests/run.js` checks this; confirm with `npx expo config --type introspect`)
+- [ ] Privacy policy deployed and its URL pasted into **both** store listings. Source is `site/privacy/index.html`; Cloudflare Pages project → output directory `site`, no build command
+- [ ] Privacy policy content re-checked against the declaration tables so the three cannot drift, and it states plainly that **any signed-in session, including anonymous spectators, can read every roster** (that is what the `read_all_*` RLS policies do)
+- [ ] Position taken on children's data (age rating + Play target audience + a policy section)
 - [ ] Admin password live on the production project — either `select public.set_admin_password('…')` on a new project, or re-run `schema.sql` on an existing one (which migrates the old plaintext to a hash and keeps the same password). Verify by actually unlocking on a build
 - [ ] No password literal anywhere in the repo or in an `EXPO_PUBLIC_*` variable (`node tests/run.js` checks this)
 - [ ] Apple provider enabled in Supabase (bundle ID `com.bpbl.itala` in Client IDs) — Sign in with Apple works on a device build

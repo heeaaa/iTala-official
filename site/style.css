@@ -1,0 +1,101 @@
+/* Plain static styles for the iTala public pages (privacy policy, landing).
+   No build step, no dependencies - Cloudflare Pages serves this directory as-is. */
+
+:root {
+  --bg: #ffffff;
+  --surface: #f6f7f9;
+  --text: #16191f;
+  --muted: #5b6270;
+  --line: #dfe3e8;
+  --accent: #0b7f7a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0a0f18;
+    --surface: #121a26;
+    --text: #eef1f5;
+    --muted: #9aa4b2;
+    --line: #23303f;
+    --accent: #12d7d0;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  padding: 0 1.25rem 5rem;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+main { max-width: 46rem; margin: 0 auto; }
+
+header {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 2.5rem 0 1.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 .4rem; }
+h2 { font-size: 1.25rem; margin: 2.4rem 0 .6rem; }
+h3 { font-size: 1.02rem; margin: 1.6rem 0 .4rem; }
+
+.sub { color: var(--muted); margin: 0; }
+
+a { color: var(--accent); }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+ul, ol { padding-left: 1.3rem; }
+li { margin: .35rem 0; }
+
+code {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: .08em .35em;
+  font-size: .9em;
+}
+
+.callout {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: .9rem 1.1rem;
+  margin: 1.2rem 0;
+}
+
+.todo {
+  background: #fff4e5;
+  border: 1px solid #e0a458;
+  color: #5a3d0d;
+  border-radius: 6px;
+  padding: .9rem 1.1rem;
+  margin: 1.2rem 0;
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  .todo { background: #2e2411; border-color: #7a5a1f; color: #f4d9a6; }
+}
+
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .94rem; }
+th, td { border: 1px solid var(--line); padding: .5rem .6rem; text-align: left; vertical-align: top; }
+th { background: var(--surface); }
+
+.table-scroll { overflow-x: auto; }
+
+footer {
+  max-width: 46rem;
+  margin: 3rem auto 0;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: .9rem;
+}
