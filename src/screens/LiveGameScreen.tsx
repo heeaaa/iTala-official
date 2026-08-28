@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { useKeepAwake } from 'expo-keep-awake';
-import { View, Pressable, ScrollView, Alert, Modal, TextInput, ActivityIndicator, AccessibilityInfo } from 'react-native';
+import { View, Pressable, ScrollView, FlatList, Alert, Modal, TextInput, ActivityIndicator, AccessibilityInfo } from 'react-native';
 import { Screen, Txt, Button, Segmented, TeamBadge, LivePip, PromoStrip } from '../components/ui';
 import { useStore, useLeague } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
@@ -64,7 +64,9 @@ const PBP_LABEL: Record<EventType, string> = {
 export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveGame'>) {
   const { leagueId, gameId, spectator } = route.params;
   const { activePromos } = usePromos();
-  const { state, dispatch } = useStore();
+  // No `state` here on purpose: this screen derives everything from `league` and
+  // `game`, so nothing on it re-runs because an unrelated league changed (F-14).
+  const { dispatch } = useStore();
   const { canScoreGame } = useAdmin();
   const league = useLeague(leagueId);
   const game = league?.games.find(g => g.id === gameId);
@@ -101,7 +103,15 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   // live game. The game state is safe either way, but the interruption is
   // jarring mid-action, so we confirm first. Spectators aren't guarded.
 
-  const score = useMemo(() => (league && game ? gameScore(league, game) : { home: 0, away: 0 }), [state, leagueId, gameId]);
+  // Depends on this league and game, not on `state` (F-14). The reducer replaces
+  // only the league it mutates (`state.leagues.map(l => l.id === id ? fn(l) : l)`),
+  // so these identities change exactly when this game's data does - whereas
+  // `[state]` re-derived the score on every change anywhere in the app, including
+  // in other leagues, on the screen that must stay responsive mid-game.
+  const score = useMemo(
+    () => (league && game ? gameScore(league, game) : { home: 0, away: 0 }),
+    [league, game],
+  );
 
   // Stat pad respects the LEAGUE's settings: the miss row and the TOV button
   // appear only when enabled for this league. Per-game overrides (drop-in
@@ -197,6 +207,29 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   // Drain the queue one banner at a time so two milestones landing together
   // (e.g. a bucket that's both a career high AND completes a double-double)
   // are each shown for their full moment instead of one clobbering the other.
+  // F-28: these timers outlived the screen. The banner chain schedules a 2.2s
+  // hide and then a 350ms gap before the next one, so leaving a live game
+  // mid-celebration left up to two pending callbacks that would fire into an
+  // unmounted component - a setState-after-unmount warning at best, and the
+  // ratchet refs left mid-flight at worst. Every timer is tracked and cleared on
+  // unmount, and `alive` stops a callback that has already been dequeued.
+  const bannerTimers = React.useRef<ReturnType<typeof setTimeout>[]>([]);
+  const alive = React.useRef(true);
+  React.useEffect(() => () => {
+    alive.current = false;
+    bannerTimers.current.forEach(clearTimeout);
+    bannerTimers.current = [];
+  }, []);
+
+  const scheduleBanner = React.useCallback((fn: () => void, ms: number) => {
+    const id = setTimeout(() => {
+      bannerTimers.current = bannerTimers.current.filter(t => t !== id);
+      if (!alive.current) return;
+      fn();
+    }, ms);
+    bannerTimers.current.push(id);
+  }, []);
+
   const showNextMilestone = React.useCallback(() => {
     if (bannerBusy.current) return;
     const next = milestoneQueue.current.shift();
@@ -205,12 +238,12 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
     successFeedback();
     setMilestone(next);
     announce(next);
-    setTimeout(() => {
+    scheduleBanner(() => {
       setMilestone(null);
       bannerBusy.current = false;
-      setTimeout(showNextMilestone, 350); // brief gap, then next if any
+      scheduleBanner(showNextMilestone, 350); // brief gap, then next if any
     }, 2200);
-  }, []);
+  }, [scheduleBanner]);
 
   useEffect(() => {
     if (!league || !game || game.status !== 'live') return;
@@ -244,7 +277,10 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
         }
       }
     }
-  }, [state, gameId]); // eslint-disable-line
+    // Same reasoning as the score memo (F-14): scanning both box scores for
+    // milestones is the most expensive thing on this screen, and `[state]` ran it
+    // on every unrelated change anywhere in the app. These are the actual inputs.
+  }, [league, game, gameId, showNextMilestone]);
 
   const [waitedForGame, setWaitedForGame] = useState(false);
   useEffect(() => {
@@ -973,17 +1009,42 @@ function PlayByPlayModal({ events, nameOf, teamNameOf, canDelete, onDelete, onCl
             <Txt k="h2">Play-by-play</Txt>
             <Pressable onPress={onClose} hitSlop={10}><Txt k="h2" color={colors.muted}>✕</Txt></Pressable>
           </View>
-          <ScrollView style={{ maxHeight: 460 }}>
-            {events.length === 0 ? <Txt k="body" color={colors.muted}>No events logged yet.</Txt> :
-              events.map((e, i) => (
-                <View key={e.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: i === 0 ? 0 : 1, borderTopColor: colors.line }}>
+          {/* F-16: virtualised. This used to be a ScrollView with events.map(),
+              which mounts a row per event with nothing capping the count - and
+              the play-by-play is the one list in the app that grows without
+              bound, every logged stat for the whole game. FlatList keeps only
+              the visible window mounted, so opening this sheet late in a
+              high-scoring game costs the same as opening it early. Row order is
+              unchanged. */}
+          {events.length === 0 ? (
+            <Txt k="body" color={colors.muted}>No events logged yet.</Txt>
+          ) : (
+            <FlatList
+              style={{ maxHeight: 460 }}
+              data={events}
+              keyExtractor={e => e.id}
+              // The sheet is inside a Modal, so nothing else scrolls behind it.
+              initialNumToRender={20}
+              windowSize={11}
+              removeClippedSubviews
+              renderItem={({ item: e, index: i }) => (
+                <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: i === 0 ? 0 : 1, borderTopColor: colors.line }}>
                   <Txt k="stat" color={colors.muted} style={{ width: 28 }}>{e.period}</Txt>
                   <Txt k="body" style={{ flex: 1 }} color={e.type === 'timeout' ? colors.yellow : colors.text}>{lineFor(e)}</Txt>
-                  {canDelete && <Pressable onPress={() => onDelete(e.id)} hitSlop={8}><Txt k="body" color={colors.red}>✕</Txt></Pressable>}
+                  {canDelete && (
+                    <Pressable
+                      onPress={() => onDelete(e.id)}
+                      hitSlop={8}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Delete ${lineFor(e)}`}
+                    >
+                      <Txt k="body" color={colors.red}>✕</Txt>
+                    </Pressable>
+                  )}
                 </View>
-              ))
-            }
-          </ScrollView>
+              )}
+            />
+          )}
         </View>
       </View>
     </Modal>

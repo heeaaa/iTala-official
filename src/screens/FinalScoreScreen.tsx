@@ -15,11 +15,19 @@ export default function FinalScoreScreen({ route, navigation }: ScreenProps<'Fin
   const league = useLeague(leagueId);
   const game = league?.games.find(g => g.id === gameId);
   const { activePromos } = usePromos();
-  // Pick one promo once (stable across the animation's re-renders).
-  const promoPick = React.useMemo(
-    () => activePromos.length ? activePromos[Math.floor(Math.random() * activePromos.length)] : null,
-    [activePromos.length],
-  );
+  // Pick one promo once, and keep it for the life of the screen.
+  //
+  // This was a useMemo keyed on `activePromos.length`, which worked but lied to
+  // the dependency linter: the whole point is NOT to re-derive when
+  // `activePromos` changes identity, because a new pick mid-animation would swap
+  // the sponsor out under the user. Expressing it as a lazily-filled ref says
+  // that directly and needs no suppression - promos load asynchronously, so the
+  // first render can legitimately see an empty list and fill in later (F-14).
+  const promoPickRef = React.useRef<(typeof activePromos)[number] | null>(null);
+  if (!promoPickRef.current && activePromos.length) {
+    promoPickRef.current = activePromos[Math.floor(Math.random() * activePromos.length)];
+  }
+  const promoPick = promoPickRef.current;
 
   const fade = useState(new Animated.Value(0))[0];
   const pop = useState(new Animated.Value(0.9))[0];

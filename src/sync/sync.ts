@@ -14,6 +14,7 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import { Action } from '../store/StoreProvider';
 import { AppState, GameEvent, League, Player, Team, Game } from '../types';
+import { warn } from '../lib/log';
 
 /* ---------- Row shapes (snake_case columns ↔ camelCase types) -------------- */
 
@@ -79,9 +80,9 @@ export async function fetchAllState(sb: SupabaseClient): Promise<Partial<AppStat
     sb.from('events').select('*').order('ts'),                                // chronological — Undo depends on this
   ]);
 
-  if (lr.error) { console.warn('[sync] fetch leagues error:', lr.error.message); return null; }
+  if (lr.error) { warn('[sync] fetch leagues error:', lr.error.message); return null; }
   if (tr.error || pr.error || gr.error || er.error) {
-    console.warn('[sync] fetch error:', tr.error?.message ?? pr.error?.message ?? gr.error?.message ?? er.error?.message);
+    warn('[sync] fetch error:', tr.error?.message ?? pr.error?.message ?? gr.error?.message ?? er.error?.message);
     return null;
   }
 
@@ -109,7 +110,7 @@ export async function fetchAllState(sb: SupabaseClient): Promise<Partial<AppStat
 // response shape, and narrowing it would mean restating every response type.
 function check(label: string, res: { error: any }): void {
   if (res?.error) {
-    console.warn(`[sync] ${label} rejected:`, res.error.message ?? res.error);
+    warn(`[sync] ${label} rejected:`, res.error.message ?? res.error);
   }
 }
 
@@ -120,7 +121,7 @@ function check(label: string, res: { error: any }): void {
 function checkCritical(label: string, res: { error: any }): void {
   if (res?.error) {
     const msg = res.error.message ?? String(res.error);
-    console.warn(`[sync] ${label} FAILED:`, msg);
+    warn(`[sync] ${label} FAILED:`, msg);
     throw new Error(`${label}: ${msg}`);
   }
 }
@@ -329,7 +330,7 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
         // and the undone stat reappears on the next pull, silently reverting
         // the scoreboard.
         if (!action.eventId) {
-          console.warn('[sync] UNDO_EVENT arrived without an eventId — nothing deleted server-side');
+          warn('[sync] UNDO_EVENT arrived without an eventId — nothing deleted server-side');
           break;
         }
         // .select() so we get the deleted rows back. PostgREST does NOT report an
@@ -438,7 +439,7 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
     // the next push or pull. Critical bundle writes (see checkCritical) are
     // rethrown so the caller can show a real error instead of a false 'saved'.
     const msg = (e as Error)?.message ?? String(e);
-    console.warn('sync push failed:', msg);
+    warn('sync push failed:', msg);
     if (/^(REC_setup_game|BULK_IMPORT_ROSTER|UNDO_EVENT):/.test(msg)) throw e;
   }
 }

@@ -412,6 +412,13 @@ for (const f of srcFiles) {
     ok('unused symbols are an error, not a warning',
        /'@typescript-eslint\/no-unused-vars':\s*\['error'/.test(cfg),
        'as a warning it does not fail CI, and dead imports accumulate again');
+    // Held open as a warning while F-14 was outstanding; promoted once the two
+    // violations were fixed. As a warning it does not fail CI, so a memo could
+    // start depending on app-wide `state` again without anything objecting -
+    // which is exactly how F-14 survived unnoticed.
+    ok('react hook dependencies are an error, not a warning',
+       /'react-hooks\/exhaustive-deps':\s*'error'/.test(cfg),
+       'F-14 is fixed, so this gate should stay closed');
   }
 
   const pkg = JSON.parse(read('package.json'));
@@ -481,6 +488,36 @@ for (const f of srcFiles) {
        /count\(\*\) filter \(where ok\)/.test(body) && body.includes('failed   ['),
        'the runner reads these counts; a silent suite looks like a passing one');
   }
+}
+
+// ---------------------------------------------------------------------------
+// CHECK 18 - console output goes through src/lib/log.ts (F-29). The auth and
+// sync paths logged directly in about eighteen places. Nothing logged today is
+// sensitive, which is exactly why it needed a gate: the risk is a future edit
+// adding a token or an email to a release-build log with nothing to notice it.
+//
+// This check is what makes the chokepoint real rather than a convention.
+// ---------------------------------------------------------------------------
+{
+  // The modules that touch credentials, sessions and server responses.
+  for (const f of ['src/store/AdminProvider.tsx', 'src/sync/sync.ts', 'src/store/StoreProvider.tsx']) {
+    const src = read(f);
+    const bare = src.match(/\bconsole\.\w+\(/g) || [];
+    ok(`${f} has no bare console call`, bare.length === 0,
+       `found ${bare.length} (${[...new Set(bare)].join(', ')}) - route through src/lib/log.ts`);
+  }
+
+  const log = read('src/lib/log.ts');
+  ok('log.ts gates its dev helpers on __DEV__', /__DEV__/.test(log),
+     'devLog/devWarn must not reach release builds');
+  // A missing global must read as production, not as development - otherwise a
+  // bundler that does not inject __DEV__ would silently enable dev logging.
+  ok('log.ts treats an absent __DEV__ as production',
+     /typeof __DEV__ !== 'undefined'/.test(log),
+     'a bare `if (__DEV__)` throws where the global is not injected');
+  ok('log.ts still has an always-on warn for real failures',
+     /export function warn\(/.test(log),
+     'CLAUDE.md forbids swallowing errors; release diagnostics must survive');
 }
 
 console.log('='.repeat(64));

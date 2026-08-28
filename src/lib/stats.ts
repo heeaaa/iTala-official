@@ -324,8 +324,8 @@ export interface CareerStats {
   fgPct: string; tpPct: string; ftPct: string;
   // career highs
   highPts: number; highReb: number; highAst: number; highStl: number; highBlk: number;
-  best: string; // "22/9/5" of the best scoring game (pts/reb/ast)
-  bestGame: LastGameStat | null; // full stat line of the best scoring game
+  best: string; // "22/9/5" of the best all-around game (pts/reb/ast)
+  bestGame: LastGameStat | null; // best all-around game, ranked by perfRating (F-26)
   lastGame: LastGameStat | null;
   badges: string[];
 }
@@ -337,6 +337,9 @@ export function careerStats(league: League, playerId: string): CareerStats {
   let highPts = 0, highReb = 0, highAst = 0, highStl = 0, highBlk = 0;
   let best = '—';
   let bestGame: LastGameStat | null = null;
+  // Rating of the game currently held in bestGame. Tracked separately from
+  // highPts because the two answer different questions (F-26).
+  let bestRating = -Infinity;
   let lastGame: LastGameStat | null = null;
   let lastGameMs = -1;
   const badges = new Set<string>();
@@ -358,8 +361,17 @@ export function careerStats(league: League, playerId: string): CareerStats {
       gp++;
       pts += l.pts; reb += l.reb; ast += l.ast; stl += l.stl; blk += l.blk; tov += l.tov; pf += l.pf;
       fgm += l.fgm; fga += l.fga; tpm += l.tpm; tpa += l.tpa; ftm += l.ftm; fta += l.fta;
-      if (l.pts > highPts || !bestGame) {
-        highPts = Math.max(highPts, l.pts);
+      // F-26. This block used to select bestGame with `l.pts > highPts`, so the
+      // section labelled BEST ALL-AROUND GAME was really the best SCORING game:
+      // a 40-point night with nothing else beat a 30/15/12 triple-double. It also
+      // entangled the two, updating highPts inside the selection branch - so the
+      // career high depended on which game won the award. highPts is now tracked
+      // like every other high, and the award uses perfRating, the composite the
+      // rest of the app already ranks by (leaderboards, awards, Player of the Game).
+      highPts = Math.max(highPts, l.pts);
+      const rating = perfRating(l);
+      if (!bestGame || rating > bestRating) {
+        bestRating = rating;
         best = `${l.pts}/${l.reb}/${l.ast}`;
         bestGame = {
           pts: l.pts, reb: l.reb, ast: l.ast, stl: l.stl, blk: l.blk,

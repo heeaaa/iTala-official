@@ -2,7 +2,8 @@ const M = require(process.env.ITALA_BUNDLE || '../.test-bundle.js');
 const { reducer, teamBoxScore, gameScore, standings, careerStats, leagueAwards,
         perfRating, lineScore, parseRoster, leaderboards, gamesPlayedMap,
         effectiveFoulLimit, fouledOutSet, playerFouls, winPctOf, outcomeOf,
-        promoteStrayToTeam, claimOnce, courtKeyOf, reconcileLineup } = M;
+        promoteStrayToTeam, claimOnce, courtKeyOf, reconcileLineup,
+        devLog, devWarn, relWarn } = M;
 
 let pass = 0, fail = 0;
 const failures = [];
@@ -936,6 +937,119 @@ ok('P13 uid() emits no comma, which is what makes P12 unreachable',
   // Opening the sheet on an empty court, then someone else sets a lineup.
   const r = reconcileLineup({ courtIds: ['a'], seedKey: courtKeyOf([]), touched: false });
   eq('P23 a court filling from empty reseeds', r.reseed, ['a']);
+}
+
+// ===========================================================================
+// GROUP Q — best all-around game (F-26), zero-stat awards (F-27), logging (F-29)
+// ===========================================================================
+
+// F-26. careerStats picked bestGame with `l.pts > highPts`, so the section
+// labelled BEST ALL-AROUND GAME was really the best SCORING game. It also
+// updated highPts inside that branch, entangling the career high with the award.
+{
+  // Two finished games for one player: a pure scoring night, and an all-around
+  // one worth more by perfRating (pts + 1.2reb + 1.5ast + 3stl + 3blk - tov).
+  //   qg1: 40/0/0/0/0   -> 40.0
+  //   qg2: 20/12/10/2/2 -> 20 + 14.4 + 15 + 6 + 6 = 61.4
+  let q = d(S0, { t: 'ADD_LEAGUE', id: 'lgQ', name: 'Q', season: 'S1' });
+  q = d(q, { t: 'ADD_TEAM', leagueId: 'lgQ', id: 'qtA', name: 'A', color: '#111' });
+  q = d(q, { t: 'ADD_TEAM', leagueId: 'lgQ', id: 'qtB', name: 'B', color: '#222' });
+  q = d(q, { t: 'ADD_PLAYER', leagueId: 'lgQ', teamId: 'qtA', name: 'Star', number: '1' });
+  const star = L(q, 'lgQ').players[0].id;
+
+  const playGame = (gid, line) => {
+    q = d(q, { t: 'CREATE_GAME', leagueId: 'lgQ', id: gid, homeTeamId: 'qtA', awayTeamId: 'qtB', scheduledAt: 1 });
+    const add = (type, n) => { for (let i = 0; i < n; i++) q = d(q, { t: 'ADD_EVENT', leagueId: 'lgQ', gameId: gid, teamId: 'qtA', playerId: star, type, period: 1 }); };
+    add('fg2_make', line.pts / 2); add('reb', line.reb); add('ast', line.ast); add('stl', line.stl); add('blk', line.blk);
+    q = d(q, { t: 'SET_GAME_STATUS', leagueId: 'lgQ', gameId: gid, status: 'final' });
+  };
+  playGame('qg1', { pts: 40, reb: 0, ast: 0, stl: 0, blk: 0 });
+  playGame('qg2', { pts: 20, reb: 12, ast: 10, stl: 2, blk: 2 });
+
+  const c = careerStats(L(q, 'lgQ'), star);
+  eq('Q1 best all-around game is the higher-rated line, not the higher-scoring one',
+     `${c.bestGame.pts}/${c.bestGame.reb}/${c.bestGame.ast}`, '20/12/10');
+  eq('Q2 the "best" summary string matches it', c.best, '20/12/10');
+  // The decoupling: the career high must still be 40, even though that game no
+  // longer wins the award. Before the fix these two could not disagree.
+  eq('Q3 career-high points is still the 40-point game', c.highPts, 40);
+  eq('Q4 other career highs are unaffected',
+     [c.highReb, c.highAst, c.highStl, c.highBlk], [12, 10, 2, 2]);
+}
+
+// One game: it must be both the career high and the best all-around game.
+{
+  let q = d(S0, { t: 'ADD_LEAGUE', id: 'lgQ2', name: 'Q2', season: 'S1' });
+  q = d(q, { t: 'ADD_TEAM', leagueId: 'lgQ2', id: 'q2A', name: 'A', color: '#111' });
+  q = d(q, { t: 'ADD_TEAM', leagueId: 'lgQ2', id: 'q2B', name: 'B', color: '#222' });
+  q = d(q, { t: 'ADD_PLAYER', leagueId: 'lgQ2', teamId: 'q2A', name: 'Solo', number: '2' });
+  const solo = L(q, 'lgQ2').players[0].id;
+  q = d(q, { t: 'CREATE_GAME', leagueId: 'lgQ2', id: 'q2g', homeTeamId: 'q2A', awayTeamId: 'q2B', scheduledAt: 1 });
+  q = d(q, { t: 'ADD_EVENT', leagueId: 'lgQ2', gameId: 'q2g', teamId: 'q2A', playerId: solo, type: 'fg2_make', period: 1 });
+  q = d(q, { t: 'SET_GAME_STATUS', leagueId: 'lgQ2', gameId: 'q2g', status: 'final' });
+  const c = careerStats(L(q, 'lgQ2'), solo);
+  eq('Q5 a single game is both the career high and the best all-around game',
+     [c.highPts, c.bestGame.pts], [2, 2]);
+}
+
+// F-27. Verifying, not changing. The audit expected a 0-stat player could be
+// offered "Player of the Game" early in a live game. The guards already exist
+// (perfRating > 0 in cardSpecs and FinalScoreScreen, line.pts > 0 on the Career
+// High card) and perfRating of an all-zero line is exactly 0. Pinned here so the
+// property cannot regress unnoticed.
+{
+  eq('Q6 an all-zero line rates exactly zero',
+     perfRating({ pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0 }), 0);
+  ok('Q7 a line with only a turnover rates below zero',
+     perfRating({ pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 1 }) < 0);
+  ok('Q8 a single rebound is enough to rate above zero',
+     perfRating({ pts: 0, reb: 1, ast: 0, stl: 0, blk: 0, tov: 0 }) > 0);
+}
+{
+  // A live game where nobody has done anything: no award card may be offered.
+  let q = d(S0, { t: 'ADD_LEAGUE', id: 'lgQ3', name: 'Q3', season: 'S1' });
+  q = d(q, { t: 'ADD_TEAM', leagueId: 'lgQ3', id: 'q3A', name: 'A', color: '#111' });
+  q = d(q, { t: 'ADD_TEAM', leagueId: 'lgQ3', id: 'q3B', name: 'B', color: '#222' });
+  q = d(q, { t: 'ADD_PLAYER', leagueId: 'lgQ3', teamId: 'q3A', name: 'Nobody', number: '3' });
+  const nb = L(q, 'lgQ3').players[0].id;
+  q = d(q, { t: 'CREATE_GAME', leagueId: 'lgQ3', id: 'q3g', homeTeamId: 'q3A', awayTeamId: 'q3B', scheduledAt: 1 });
+  const keys = M.gameCardOptions(L(q, 'lgQ3'), 'q3g', nb).map(o => o.key);
+  eq('Q9 a 0-stat player is offered no award card, only the plain stat line',
+     keys, ['line']);
+  ok('Q10 specifically not Player of the Game', !keys.includes('potg'));
+}
+
+// F-29. Dev-only logging must be silent when __DEV__ is absent or false, which is
+// what a release build looks like. `warn` is deliberately always on: CLAUDE.md
+// forbids swallowing errors, so a real failure still reaches the device log.
+{
+  const orig = { log: console.log, warn: console.warn };
+  const seen = [];
+  console.log = (...a) => seen.push(['log', a.join(' ')]);
+  console.warn = (...a) => seen.push(['warn', a.join(' ')]);
+  const hadDev = '__DEV__' in globalThis;
+  const prevDev = globalThis.__DEV__;
+  try {
+    globalThis.__DEV__ = undefined;
+    devLog('nope'); devWarn('nope'); relWarn('should appear');
+    eq('Q11 with __DEV__ absent, only the real warning is emitted',
+       seen, [['warn', 'should appear']]);
+
+    seen.length = 0;
+    globalThis.__DEV__ = false;
+    devLog('nope'); devWarn('nope'); relWarn('yes');
+    eq('Q12 with __DEV__ false, only the real warning is emitted',
+       seen, [['warn', 'yes']]);
+
+    seen.length = 0;
+    globalThis.__DEV__ = true;
+    devLog('dev log'); devWarn('dev warn'); relWarn('always');
+    eq('Q13 with __DEV__ true, all three are emitted',
+       seen, [['log', 'dev log'], ['warn', 'dev warn'], ['warn', 'always']]);
+  } finally {
+    console.log = orig.log; console.warn = orig.warn;
+    if (hadDev) globalThis.__DEV__ = prevDev; else delete globalThis.__DEV__;
+  }
 }
 
 // ===========================================================================
