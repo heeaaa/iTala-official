@@ -5,7 +5,7 @@ import { useStore, useLeague } from '../store/StoreProvider';
 import { colors, space, radius, font } from '../theme';
 import { ScreenProps } from '../navigation';
 import { uid } from '../lib/format';
-import { parseRoster, ParsedTeam } from '../lib/rosterParse';
+import { parseRoster, promoteStrayToTeam, ParsedTeam } from '../lib/rosterParse';
 
 // Bulk roster import for a NEW (empty) league. Paste → parse → review/edit →
 // confirm. The parser is conservative: suspicious rows are flagged with an
@@ -39,6 +39,12 @@ export default function BulkImportScreen({ route, navigation }: ScreenProps<'Bul
     setTeams(ts => ts!.map((t, i) => i !== ti ? t : { ...t, players: [...t.players, { name: '', number: '', raw: '' }] }));
   const addTeamRow = () =>
     setTeams(ts => [...(ts ?? []), { name: `Team ${(ts?.length ?? 0) + 1}`, players: [] }]);
+  // A flagged row is either a genuine stray or a team header that was pasted with
+  // no blank line before it. The parser cannot tell (see rosterParse) so it flags
+  // instead of guessing; this is the one-tap fix for the header case, and it
+  // carries the rows below the header into the new team.
+  const promoteToTeam = (ti: number, pi: number) =>
+    setTeams(ts => promoteStrayToTeam(ts!, ti, pi));
 
   const commit = () => {
     const clean = (teams ?? [])
@@ -147,7 +153,21 @@ export default function BulkImportScreen({ route, navigation }: ScreenProps<'Bul
                     style={{ backgroundColor: colors.bg, borderRadius: radius.sm, borderWidth: 1, borderColor: p.flag ? colors.yellow : colors.line, color: colors.text, paddingHorizontal: 10, paddingVertical: 7, fontFamily: font.body, fontSize: 14 }}
                   />
                   {p.flag ? (
-                    <Txt k="body" color={colors.yellow} style={{ fontSize: 11, marginTop: 2 }}>⚠ {p.flag}</Txt>
+                    <>
+                      <Txt k="body" color={colors.yellow} style={{ fontSize: 11, marginTop: 2 }}>⚠ {p.flag}</Txt>
+                      <Pressable
+                        onPress={() => promoteToTeam(ti, pi)}
+                        hitSlop={10}
+                        style={{ paddingVertical: 6, alignSelf: 'flex-start' }}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Make ${p.name.trim() || 'this row'} a team`}
+                        accessibilityHint="Starts a new team here and moves the rows below it into that team"
+                      >
+                        <Txt k="body" color={colors.brandTeal} style={{ fontSize: 12 }}>
+                          ↳ Make this a team
+                        </Txt>
+                      </Pressable>
+                    </>
                   ) : null}
                 </View>
                 <Pressable onPress={() => deletePlayer(ti, pi)} hitSlop={8}>
