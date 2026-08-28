@@ -122,59 +122,74 @@ Status values used in the Findings Summary below:
 | `PARTIAL` | Partly addressed, or fixed in code but with an unverified step outside the repo. |
 | `OPEN` | Not started. |
 
-Counts: **11 fixed** (1 merged, 10 awaiting merge), **5 partial**, **15 open**, 1 informational.
-All P0 and P1 items are addressed. P2 and P3 are largely untouched.
+Counts: **10 fixed** (all merged), **5 partial**, **16 open**, 1 informational.
+All P0 and P1 items are addressed, and **no CRITICAL or HIGH finding remains open**. P2 and P3 are
+largely untouched: of the 16 open findings, 10 are MEDIUM and 6 are LOW.
+
+> The previous revision of this section read "11 fixed ... 15 open". That was an arithmetic slip,
+> not a change in scope - the table has always held 31 numbered findings plus F-32. The counts
+> above are generated from the Findings Summary table rather than tallied by hand.
 
 ### Branch map
 
-Every branch below is a sibling built on `chore/ci-and-windows-tests`. **Merge that one first**;
-the rest then show only their own changes against `main`, and get CI, because a pull request only
-runs workflows that exist in its merge base.
+Every branch was a sibling built on `chore/ci-and-windows-tests` and merged in that order, so each
+PR showed only its own changes against `main` and picked up CI. **All seven are now merged and
+`main` (`477c891`) contains every one of them.** The table is kept for traceability.
 
 | Branch | Findings | State |
 |---|---|---|
 | `fix/delete-event-foulout` | F-04 | Merged (PR #1) |
-| `chore/ci-and-windows-tests` | F-03, F-08 | PR open. **Merge first.** |
-| `fix/tied-scores` | F-11 | PR open |
-| `feat/a11y-core` | F-05, F-06, F-07 | PR open |
-| `refactor/remove-legacy-global-settings` | N-06, and docs for the `person_id` decision | PR open |
-| `chore/store-compliance-and-privacy-policy` | F-10, N-05 | PR open |
-| `docs/review-progress-tracking` | F-22, this section | PR open |
+| `chore/ci-and-windows-tests` | F-03, F-08, N-01, N-02 | Merged (PR #2) |
+| `fix/tied-scores` | F-11, N-03, N-04 | Merged (PR #3) |
+| `feat/a11y-core` | F-05, F-06, F-07 | Merged (PR #4) |
+| `refactor/remove-legacy-global-settings` | N-06, and docs for the `person_id` decision | Merged (PR #5) |
+| `docs/review-progress-tracking` | F-22, this section | Merged (PR #6) |
+| `chore/store-compliance-and-privacy-policy` | F-10, N-05, N-10 | Merged (PR #7) |
+
+The sibling-stacking approach worked, but it cost one real incident: see **N-10**. Stacking
+branches means every one of them carries a merge of `main`, and a merge resolution is a hand edit
+that no reviewer diffs as carefully as a code change.
 
 ### Resume here
 
-In order, because some of these depend on each other:
+Steps 1 and 2 of the original list are **discharged**:
 
-1. **Merge `chore/ci-and-windows-tests`.** Nothing else can be independently verified until CI
-   exists, and until it merges the other PRs run no workflows at all. This is also the first time
-   `.github/workflows/ci.yml` will ever have executed, so expect to fix something.
-2. **Apply the updated `supabase/schema.sql` to any live project before shipping a client built
-   from `refactor/remove-legacy-global-settings`.** The `track_misses` backfill has to run while
-   `app_settings` still exists. Ship the client first and any project whose old global was `false`
-   silently gets miss tracking switched back on for every pre-migration league. This is the only
-   hard ordering constraint in the whole batch.
-3. **Confirm the two credential rotations** (F-01, F-02). Both are `PARTIAL` only because rotation
+- Every branch is merged; `.github/workflows/ci.yml` has run.
+- `supabase/schema.sql` was applied to the live project on **28/08/2026**, so the `track_misses`
+  backfill ran while `app_settings` still existed and before any client without the legacy global
+  reached users. That was the only hard ordering constraint in the batch.
+
+What is actually left, in order of consequence:
+
+1. **Confirm the two credential rotations** (F-01, F-02). Both are `PARTIAL` only because rotation
    happens in the Supabase dashboard and cannot be verified from the repo. If the old anon key
    still works, removing it from git history achieved nothing.
-4. **Do the on-device screen-reader pass** for F-05/F-06/F-07 (`tests/MANUAL-REGRESSION.md`
+2. **Fill in the privacy policy placeholders** (`[OPERATOR]`, `[CONTACT EMAIL]`) and deploy the
+   site (see `site/README.md`), then paste the URL into both store listings. The policy ships with
+   a deliberate visible notice, so it cannot be published half-finished by accident.
+3. **Do the on-device screen-reader pass** for F-05/F-06/F-07 (`tests/MANUAL-REGRESSION.md`
    section P6). This is the largest untested surface in the batch: the semantics are in place and
-   guarded by static checks, but nothing has confirmed a real screen reader reads them sensibly.
-5. **Fill in the privacy policy placeholders** and deploy it (see `site/README.md`), then paste
-   the URL into both store listings.
-6. Then P2, starting with **F-09 (ESLint/Prettier)** since CI is the natural place to enforce it
+   guarded by CHECK 14, but nothing has confirmed a real screen reader reads them sensibly.
+4. Then P2, starting with **F-09 (ESLint/Prettier)** since CI is the natural place to enforce it
    and every later change benefits.
 
 ### Environment constraints hit during remediation
 
 Worth knowing before you assume something is broken:
 
-- **`psql` is not installed on the dev machine**, so `tests/sql/run.js` skips locally. The two new
-  `settings_backfill` suites have therefore **never executed**; CI is their first run.
-- **The `C:` drive was full** (0 bytes free at one point). Metro bundled all 1195 modules fine but
-  Hermes failed with `no space on device`, so no local bundle or prebuild verification was
-  possible. Clear space before trying `expo export` or `expo prebuild`.
-- **The `gh` CLI is not installed**, so PRs cannot be opened or CI status read from the shell.
-  Branches are pushed; the PRs have to be opened in the browser.
+- **`psql` is not installed on the dev machine**, and neither is Docker, so `tests/sql/run.js`
+  skips locally. The two `settings_backfill` suites have therefore **never run on this machine**;
+  CI is their only execution. What *can* be checked without a database is that every
+  `schema.sql` slice anchor still resolves and every suite's `@requires` names a real section -
+  that was verified after the PR #7 merge, since a moved anchor makes the runner throw.
+- **The `C:` drive was full** during the first pass (0 bytes free at one point), which is why the
+  earlier revision of this document recorded no local bundle verification. Space was freed
+  afterwards and `npx expo export --platform android` has since completed cleanly (exit 0,
+  3.63 MB Hermes bundle), so the CI `bundle` job's command is known to work on this tree.
+- **The `gh` CLI is not installed**, so PRs cannot be opened and **CI status cannot be read from
+  the shell**. The repository is private, so the unauthenticated GitHub REST API returns 404 as
+  well. CI results have to be checked in the browser, and **nothing in this document may record a
+  CI run as passing on any other basis**.
 
 ### Where the original finding was incomplete or wrong
 
@@ -216,20 +231,40 @@ Not in the original audit. Numbered `N-xx` to keep them distinct from the audit'
 
 | ID | Severity | Finding | Status |
 |----|----------|---------|--------|
-| N-01 | HIGH | `static.test.js` CHECK 5 sliced the `Action` union with `store.indexOf('const defaultSettings')` as its end anchor. Deleting that constant made `indexOf` return `-1`, so `slice(start, -1)` truncated the union and the check kept reporting "pass" while verifying almost nothing. Both boundaries are now anchored explicitly and abort loudly. | FIXED (PR) |
-| N-02 | MEDIUM | `tests/sql/run.js` exits 0 when no Postgres answers. Correct for a laptop, wrong for CI: a job that lost its database service would have gone green with zero database coverage. New `ITALA_REQUIRE_DB=1` turns the skip into a failure, and the CI workflow sets it. | FIXED (PR) |
-| N-03 | MEDIUM | `TeamProfileScreen` divided points for/against by wins+losses, excluding ties, while `pf`/`pa` still included the drawn game's points. PPG and OPP PPG were inflated. | FIXED (PR) |
-| N-04 | MEDIUM | Player of the Game fell back to the home team on a drawn game in both `cardSpecs.ts` and `FinalScoreScreen.tsx`, hiding the away side's best performance entirely. | FIXED (PR) |
-| N-05 | MEDIUM | Sponsor promo taps are recorded server-side (`onPromoTap` → `bump_promo_tap`, `update promos set taps = taps + 1`) and were declared on neither store form. Aggregate, no user id, but still advertising-interaction data. | FIXED (PR) |
-| N-06 | LOW | The app-wide `trackMisses` setting was dead code: per-league and per-game columns had replaced it, `AppSettings` was marked LEGACY, and `SET_SETTINGS` had no dispatcher anywhere. Removed, with the old global backfilled onto pre-migration leagues first. | FIXED (PR) |
+| N-01 | HIGH | `static.test.js` CHECK 5 sliced the `Action` union with `store.indexOf('const defaultSettings')` as its end anchor. Deleting that constant made `indexOf` return `-1`, so `slice(start, -1)` truncated the union and the check kept reporting "pass" while verifying almost nothing. Both boundaries are now anchored explicitly and abort loudly. | FIXED (merged) |
+| N-02 | MEDIUM | `tests/sql/run.js` exits 0 when no Postgres answers. Correct for a laptop, wrong for CI: a job that lost its database service would have gone green with zero database coverage. New `ITALA_REQUIRE_DB=1` turns the skip into a failure, and the CI workflow sets it. | FIXED (merged) |
+| N-03 | MEDIUM | `TeamProfileScreen` divided points for/against by wins+losses, excluding ties, while `pf`/`pa` still included the drawn game's points. PPG and OPP PPG were inflated. | FIXED (merged) |
+| N-04 | MEDIUM | Player of the Game fell back to the home team on a drawn game in both `cardSpecs.ts` and `FinalScoreScreen.tsx`, hiding the away side's best performance entirely. | FIXED (merged) |
+| N-05 | MEDIUM | Sponsor promo taps are recorded server-side (`onPromoTap` → `bump_promo_tap`, `update promos set taps = taps + 1`) and were declared on neither store form. Aggregate, no user id, but still advertising-interaction data. | FIXED (merged) |
+| N-06 | LOW | The app-wide `trackMisses` setting was dead code: per-league and per-game columns had replaced it, `AppSettings` was marked LEGACY, and `SET_SETTINGS` had no dispatcher anywhere. Removed, with the old global backfilled onto pre-migration leagues first. | FIXED (merged) |
 | N-07 | LOW | `tests/run.js` imports `execSync` and never uses it. | OPEN |
 | N-08 | INFO | `src/screens/LiveGameScreen.tsx` uses `[state, leagueId, gameId]` as a `useMemo` dependency, so the box score recomputes on any app-wide state change. This is F-14, confirmed in passing while working in the file. | OPEN (see F-14) |
 | N-09 | INFO | `showNextMilestone` in `LiveGameScreen` schedules `setTimeout` with no unmount cleanup. This is F-28, confirmed in passing. | OPEN (see F-28) |
+| N-10 | HIGH | Merge `62fb42b` (`main` into `chore/store-compliance-and-privacy-policy`) resolved its only conflict by concatenating both sides of `tests/static.test.js` but dropping the `}` closing CHECK 15 and the `// ---` separator opening CHECK 14. The file stopped parsing (`TS1005`, then `SyntaxError: Unexpected end of input`), so `node tests/run.js` failed twice and **the static suite ran zero checks** - including the CHECK 15 assertions that this very branch added to guard the store declarations and the privacy policy. Fixed forward in `ef766b2`; the resolution was then verified to be the exact union of both parents, not merely parseable. | FIXED (merged) |
 
 ### Verification evidence
 
-Local results at the time of writing, per branch. `npm test` runs the type check plus the
-reducer/stats/parser, two-device sync and static structural suites, then the SQL suites.
+`npm test` runs the type check plus the reducer/stats/parser, two-device sync and static
+structural suites, then the SQL suites.
+
+**Current state of `main` (`477c891`, all seven PRs merged), run 28/08/2026:**
+
+```text
+node tests/run.js                    PASS (exit 0)
+  tsc --noEmit                       PASS - clean
+  reducer / stats / parser           PASS - 178/178
+  two-device sync                    PASS - 32/32
+  static structural                  PASS - 245/0 (+4 pre-existing advisory warnings)
+  SQL suites                         SKIP - psql not on PATH
+```
+
+245 is the expected union: the per-branch counts below do not add up by simple addition because
+CHECK 8's `RECORD_AUDIO` assertion was inverted rather than added, and CHECK 5's boundaries were
+rewritten. Both CHECK 14 and CHECK 15 were re-proven non-vacuous on the merged tree (three
+stripped semantics and three deleted disclosures, three failures each, then restored) - which
+mattered, because N-10 had left CHECK 15 silently unexecuted until then.
+
+Per-branch results as recorded at the time each branch was written:
 
 ```text
 chore/ci-and-windows-tests
@@ -255,12 +290,26 @@ chore/store-compliance-and-privacy-policy
   tsc --noEmit          PASS      reducer  PASS - 149/149
   sync PASS - 32/32     static   PASS - 238/0 (CHECK 15: 13 policy/declaration checks)
 
-GitHub Actions          NOT RUN - the workflow has never executed
-Metro/Hermes bundle     NOT RUN locally - disk full; Metro resolved all 1195 modules, Hermes failed
-SQL settings_backfill   NOT RUN - no psql locally; CI is its first execution
+npm ci --dry-run        PASS - lockfile in sync with package.json (CI's first step)
+expo config introspect  PASS - RECORD_AUDIO and CAMERA both carry tools:node="remove" (F-10)
+expo export (android)   PASS - exit 0, 3.63 MB Hermes bundle; the CI "bundle" job's command
+SQL slice anchors       PASS - all 5 schema.sql sections resolve, every @requires names a real one
+
+GitHub Actions          NOT VERIFIABLE HERE - no gh CLI, and the repo is private so the
+                        unauthenticated REST API 404s. Check runs must be read in the browser.
+                        Do not record a CI result in this document from any other source.
+SQL settings_backfill   NOT RUN locally - no psql and no Docker on the dev machine. CI is their
+                        only execution; PR #7's run is the first. Only the anchor resolution
+                        above was checked locally, not the assertions.
 On-device screen reader NOT RUN - no device or emulator available
 Prebuild / built APK    NOT RUN - manifest verified by introspection only
 ```
+
+**Applied to the live Supabase project:** `supabase/schema.sql` was re-run successfully on
+28/08/2026, which is what discharges the ordering constraint in **Resume here**. The migration's
+own assertions were *not* observed - the `settings_backfill` suites need a local Postgres - so what
+is confirmed is that the script applied without error, not that the backfill produced the intended
+per-league values. If that matters, query `leagues.track_misses` on the live project directly.
 
 Each bug fix was confirmed to fail **before** the fix rather than assumed:
 
@@ -275,6 +324,12 @@ Each bug fix was confirmed to fail **before** the fix rather than assumed:
   3 failed), then restoring.
 - **F-22 and the policy** - CHECK 15 proven non-vacuous by deleting three disclosures (235 passed,
   3 failed), then restoring.
+- **N-10** - reproduced exactly as CI hit it (`TS1005` in the type check, `SyntaxError` on load),
+  and the fix verified by more than "it parses now": the resolved file was diffed against **both**
+  merge parents, and the only removals in either direction are the intentional replacements from
+  the other side (N-01's union boundaries, N-06's `SET_SETTINGS`, F-10's inverted `RECORD_AUDIO`
+  assertion). A clean re-merge in a throwaway worktree confirmed every *other* file in `62fb42b`
+  already matched, so the damage was isolated to one file.
 
 ---
 
@@ -285,15 +340,15 @@ Each bug fix was confirmed to fail **before** the fix rather than assumed:
 |----|----------|----------|---------|------------|------------|
 | F-01 | CRITICAL | Security | Plaintext admin password committed to git history in the initial commit | CONFIRMED | PARTIAL |
 | F-02 | HIGH | Security / Data Integrity | Live production Supabase URL + anon key tracked in git (`bpbl.txt`) | CONFIRMED | PARTIAL |
-| F-03 | HIGH | CI/CD | No CI pipeline runs tests, lint, type-check, or build on PRs | CONFIRMED | FIXED (PR) |
+| F-03 | HIGH | CI/CD | No CI pipeline runs tests, lint, type-check, or build on PRs | CONFIRMED | FIXED (merged) |
 | F-04 | HIGH | Correctness / Data Integrity | `DELETE_EVENT` doesn't reverse foul-out auto-bench, unlike `UNDO_EVENT` | CONFIRMED | FIXED (merged) |
-| F-05 | CRITICAL | Accessibility | Live two-tap stat entry has no screen-reader announcements (no live regions) | CONFIRMED | FIXED (PR) |
-| F-06 | HIGH | Accessibility | No accessibility roles/labels anywhere in the app, including the stat pad | CONFIRMED | FIXED (PR) |
-| F-07 | HIGH | Accessibility | Game deletion is swipe-gesture-only, with no non-gesture fallback | HIGH CONFIDENCE | FIXED (PR) |
-| F-08 | MEDIUM | CI/CD / Testing | `tests/run.js` cannot run natively on Windows (`execFileSync('npx')` ENOENT) | CONFIRMED | FIXED (PR) |
+| F-05 | CRITICAL | Accessibility | Live two-tap stat entry has no screen-reader announcements (no live regions) | CONFIRMED | FIXED (merged) |
+| F-06 | HIGH | Accessibility | No accessibility roles/labels anywhere in the app, including the stat pad | CONFIRMED | FIXED (merged) |
+| F-07 | HIGH | Accessibility | Game deletion is swipe-gesture-only, with no non-gesture fallback | HIGH CONFIDENCE | FIXED (merged) |
+| F-08 | MEDIUM | CI/CD / Testing | `tests/run.js` cannot run natively on Windows (`execFileSync('npx')` ENOENT) | CONFIRMED | FIXED (merged) |
 | F-09 | MEDIUM | CI/CD | No ESLint/Prettier configuration exists anywhere in the project | CONFIRMED | OPEN |
-| F-10 | MEDIUM | Mobile / Security | Unused, unexplained `RECORD_AUDIO` Android permission | CONFIRMED | FIXED (PR) |
-| F-11 | MEDIUM | Correctness | Tied final scores are silently recorded as home-team wins | CONFIRMED | FIXED (PR) |
+| F-10 | MEDIUM | Mobile / Security | Unused, unexplained `RECORD_AUDIO` Android permission | CONFIRMED | FIXED (merged) |
+| F-11 | MEDIUM | Correctness | Tied final scores are silently recorded as home-team wins | CONFIRMED | FIXED (merged) |
 | F-12 | MEDIUM | Correctness | `rosterParse.ts` misparses team names/headers under common real-world paste shapes | HIGH CONFIDENCE | OPEN |
 | F-13 | MEDIUM | Dependency | `npm audit`: 24 vulnerabilities in Expo/Metro build tooling (dev-time only) | CONFIRMED | OPEN |
 | F-14 | MEDIUM | Performance | `LiveGameScreen` recomputes box score/milestones on unrelated app-wide state changes | HIGH CONFIDENCE | OPEN |
@@ -304,7 +359,7 @@ Each bug fix was confirmed to fail **before** the fix rather than assumed:
 | F-19 | MEDIUM | Architecture | Duplicated ad hoc `setTimeout` retries for membership-row eventual consistency | HIGH CONFIDENCE | OPEN |
 | F-20 | MEDIUM | Accessibility | Foul-out danger and other risk cues communicated by colour alone | HIGH CONFIDENCE | PARTIAL |
 | F-21 | MEDIUM | Accessibility | Touch targets below guideline size on frequently-used live-game controls | CONFIRMED | OPEN |
-| F-22 | MEDIUM | Documentation | README architecture list is stale (missing 6 of 19 screens); troubleshooting doc's New Architecture claim is stale | CONFIRMED / HIGH CONFIDENCE | FIXED (PR) |
+| F-22 | MEDIUM | Documentation | README architecture list is stale (missing 6 of 19 screens); troubleshooting doc's New Architecture claim is stale | CONFIRMED / HIGH CONFIDENCE | FIXED (merged) |
 | F-23 | LOW | Code Quality | Duplicated image-picker and share/screenshot-fallback logic across screens | HIGH CONFIDENCE | OPEN |
 | F-24 | LOW | Code Quality | Several small duplicated helpers (`uid()`, team-resolution fallback, colour utilities embedded in a screen) | HIGH CONFIDENCE | PARTIAL |
 | F-25 | LOW | Accessibility | Icon-only buttons and dense stat tables lack accessible labels/semantics | CONFIRMED / MEDIUM CONFIDENCE | PARTIAL |
@@ -808,14 +863,15 @@ The one confirmed data-integrity defect found is F-04 (`DELETE_EVENT` failing to
 
 ## CI/CD Assessment
 
-> **Updated 28/08/2026.** Addressed on `chore/ci-and-windows-tests`, not yet merged.
+> **Updated 28/08/2026.** Addressed on `chore/ci-and-windows-tests`, merged to `main` in PR #2.
 > `.github/workflows/ci.yml` runs on `pull_request` and on pushes to `main`: a `verify` job
 > (`npm ci`, then `node tests/run.js` against a `postgres:16-alpine` service with
 > `ITALA_REQUIRE_DB=1`, covering the type check and all four suites plus the wired SQL suites,
 > output kept as an artifact) and a `bundle` job (`npx expo export`, Metro plus Hermes).
-> Linting is still absent (F-09) and is the recommended next addition. **The workflow has never
-> executed** - it runs for the first time on its own pull request, so its status is unknown.
-> The assessment below describes the state as audited.
+> Linting is still absent (F-09) and is the recommended next addition. The workflow has now run on
+> PRs #2-#7, but **its results cannot be read from this environment** (no `gh` CLI, private repo)
+> - see the caveat in **Verification evidence**. The assessment below describes the state as
+> audited.
 
 **Current state:** one workflow, and it does not verify code - it only keeps a Supabase project from auto-pausing. There is no automated verification of any pull request.
 
@@ -882,8 +938,8 @@ Problem: deleting a foul-out-causing event leaves a player stranded off-court. S
 
 ### P1 - High Priority
 
-> **Status:** all four items implemented and pushed, none merged. Item 4 **DONE**
-> (`chore/ci-and-windows-tests`), item 5 **DONE** but by a different mechanism than recommended
+> **Status:** all four items implemented and **merged to `main`**. Item 4 **DONE**
+> (`chore/ci-and-windows-tests`, PR #2), item 5 **DONE** but by a different mechanism than recommended
 > (see "Where the original finding was incomplete or wrong"), item 6 **DONE in code** with the
 > on-device screen-reader pass still outstanding (`feat/a11y-core`), item 7 **DONE** as a draw
 > rather than a blocked finish, and it turned out to span five call sites rather than three
@@ -903,7 +959,7 @@ Problem: ties silently recorded as home wins in three places. Solution: treat ti
 
 ### P2 - Medium Priority
 
-**8.** Add ESLint/Prettier and wire into CI (F-09). - **OPEN.** Recommended as the next P2 item now that CI exists.
+**8.** Add ESLint/Prettier and wire into CI (F-09). - **OPEN, and now the next item of work.** Recommended as the first P2 item now that CI exists and every P0/P1 fix is merged.
 **9.** Remove or justify the `RECORD_AUDIO` permission (F-10). - **DONE, differently.** The permission does not come from `app.json`; `expo-image-picker`'s config plugin adds it. Fixed with `microphonePermission: false` / `cameraPermission: false`, which also blocks `CAMERA`.
 **10.** Fix `rosterParse.ts` header-detection edge cases (F-12), with accompanying parser tests.
 **11.** Run `npm audit fix` for the non-breaking subset; schedule the `expo@57` migration deliberately (F-13).
