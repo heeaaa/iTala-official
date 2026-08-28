@@ -57,7 +57,13 @@ Windows Security → Firewall → Allow an app, or just use tunnel mode (#1).
 
 ## Other checks
 - Confirm Expo Go is the **SDK 54** build (latest from the App Store / Play Store).
-- This project ships with `newArchEnabled: false` — keep it that way for Expo Go.
+- This project runs with the **New Architecture enabled**. `app.json` does not set
+  `newArchEnabled` at all, and Expo SDK 54 defaults it to `true` when omitted. Verify for
+  yourself with `npx expo config --type introspect`, which reports `RCTNewArchEnabled: true`.
+  This doc previously claimed the opposite, which is worth knowing: if you are chasing a hang
+  or a native crash, the New Architecture is a live suspect, not one you can rule out. To turn
+  it off you have to set `"newArchEnabled": false` explicitly, and that is a real runtime
+  change worth testing on a device rather than a documentation tweak.
 - A red error screen on the phone is *progress*, not the hang — send the error text.
 
 ## Sanity check the server is healthy

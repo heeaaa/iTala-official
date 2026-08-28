@@ -1,6 +1,6 @@
 import { Alert } from 'react-native';
 import React, { createContext, useContext, useEffect, useReducer, useRef, useCallback } from 'react';
-import { AppState, League, Team, Player, Game, GameEvent, EventType, LocalPrefs } from '../types';
+import { AppState, League, Team, Player, Game, GameEvent, EventType, LocalPrefs, LegacyPersistedSettings } from '../types';
 import { setHapticsEnabled } from '../lib/haptics';
 import { ensureNotifPermission } from '../lib/notify';
 import { uid } from '../lib/format';
@@ -69,7 +69,10 @@ function undoneEventIds(): Set<string> {
 interface RecTeamInput { id: string; name: string; color?: string; players: { id: string; name: string; number?: string }[] }
 
 export type Action =
-  | { t: 'HYDRATE'; state: AppState }
+  // `settings` is the legacy app-wide toggle. It is no longer part of AppState,
+  // but a saved state loaded off an older build still carries it, so the shape
+  // is declared here and read once by the HYDRATE case below.
+  | { t: 'HYDRATE'; state: AppState & { settings?: LegacyPersistedSettings } }
   | { t: 'ADD_LEAGUE'; id: string; name: string; season: string; foulOutLimit?: number; kind?: 'league' | 'recreational'; trackMisses?: boolean; trackTurnovers?: boolean; isShared?: boolean; creationCode?: string }
   | { t: 'DELETE_LEAGUE'; leagueId: string }
   | { t: 'ADD_TEAM'; leagueId: string; name: string; teamOnly?: boolean; id?: string }
@@ -94,11 +97,9 @@ export type Action =
   | { t: 'SET_PERIOD'; leagueId: string; gameId: string; period: number }
   | { t: 'DUPLICATE_LEAGUE'; sourceLeagueId: string; newLeagueId: string; name: string; season: string }
   | { t: 'SET_LEAGUE_SETTINGS'; leagueId: string; trackMisses?: boolean; trackTurnovers?: boolean; isClosed?: boolean; isArchived?: boolean }
-  | { t: 'SET_SETTINGS'; settings: Partial<AppState['settings']> }
   | { t: 'REC_SETUP_GAME'; leagueId: string; gameId: string; location?: string; trackMisses?: boolean; trackTurnovers?: boolean; createdBy?: string; ensureLeague?: { name: string; isShared?: boolean }; teams: [RecTeamInput, RecTeamInput] }
 
-const defaultSettings = { trackMisses: true };
-const initial: AppState = { leagues: [], settings: { ...defaultSettings } };
+const initial: AppState = { leagues: [] };
 
 function mapLeague(state: AppState, id: string, fn: (l: League) => League): AppState {
   return { ...state, leagues: state.leagues.map(l => (l.id === id ? fn(l) : l)) };
@@ -141,8 +142,13 @@ export { guardUndoneEvent, releaseUndoGuard };
 export function reducer(state: AppState, a: Action): AppState {
   switch (a.t) {
     case 'HYDRATE': {
-      // older saved states may not have settings — backfill with defaults
-      const settings = { ...defaultSettings, ...(a.state.settings ?? {}) };
+      // LEGACY MIGRATION. Saved states written before leagues.track_misses
+      // existed carry an app-wide toggle instead. Read it once here to seed any
+      // league that predates the per-league column, then never again: nothing
+      // writes it, and it stopped being persisted when it left AppState. The
+      // `true` default matches the old defaultSettings value, so a device that
+      // never set it is unaffected.
+      const legacyTrackMisses = a.state.settings?.trackMisses ?? true;
       // Build a quick lookup of the CURRENT (pre-hydrate) games so we can
       // preserve just-written lineups that the incoming snapshot may not have
       // yet (see lineupGuard). Everything else takes the server value.
@@ -161,7 +167,7 @@ export function reducer(state: AppState, a: Action): AppState {
           ? { ...l, events: l.events.filter(e => !undone.has(e.id)) }
           : l;
         const migrated = withoutUndone.trackMisses === undefined
-          ? { ...withoutUndone, trackMisses: settings.trackMisses }
+          ? { ...withoutUndone, trackMisses: legacyTrackMisses }
           : withoutUndone;
         const games = migrated.games.map(g => {
           if (isLineupGuarded(g.id)) {
@@ -202,7 +208,7 @@ export function reducer(state: AppState, a: Action): AppState {
         .map(b => localLeagues.get(b.leagueId))
         .filter((l): l is League => !!l);
 
-      return { leagues: [...rescued, ...leagues], settings };
+      return { leagues: [...rescued, ...leagues] };
     }
 
     case 'ADD_LEAGUE': {
@@ -555,9 +561,6 @@ export function reducer(state: AppState, a: Action): AppState {
         ...(a.isArchived !== undefined ? { isArchived: a.isArchived } : {}),
       }));
 
-    case 'SET_SETTINGS':
-      return { ...state, settings: { ...state.settings, ...a.settings } };
-
     case 'REC_SETUP_GAME': {
       // Ensure the rec league exists locally first (create if needed).
       let leagues = state.leagues;
@@ -691,10 +694,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             try {
               const remote = await fetchAllState(sb);
               if (!cancelled && remote && remote.leagues && remote.leagues.length > 0) {
-                baseDispatch({ t: 'HYDRATE', state: {
-                  leagues: remote.leagues,
-                  settings: remote.settings ?? stateRef.current.settings,
-                } });
+                baseDispatch({ t: 'HYDRATE', state: { leagues: remote.leagues } });
                 return true;
               }
             } catch (e) {
@@ -729,10 +729,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             try {
               const remote = await fetchAllState(sb);
               if (!cancelled && remote && remote.leagues) {
-                baseDispatch({ t: 'HYDRATE', state: {
-                  leagues: remote.leagues,
-                  settings: remote.settings ?? stateRef.current.settings,
-                } });
+                baseDispatch({ t: 'HYDRATE', state: { leagues: remote.leagues } });
               }
             } catch {}
           });
@@ -762,10 +759,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       try {
         const remote = await fetchAllState(sb);
         if (remote && remote.leagues) {
-          baseDispatch({ t: 'HYDRATE', state: {
-            leagues: remote.leagues,
-            settings: remote.settings ?? stateRef.current.settings,
-          } });
+          baseDispatch({ t: 'HYDRATE', state: { leagues: remote.leagues } });
         }
       } finally {
         refetching = false;
@@ -782,10 +776,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (!sb) return;
     const remote = await fetchAllState(sb);
     if (remote && remote.leagues) {
-      baseDispatch({ t: 'HYDRATE', state: {
-        leagues: remote.leagues,
-        settings: remote.settings ?? stateRef.current.settings,
-      } });
+      baseDispatch({ t: 'HYDRATE', state: { leagues: remote.leagues } });
     }
   }, []);
 

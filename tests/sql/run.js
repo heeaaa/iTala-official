@@ -55,6 +55,38 @@ const SECTIONS = {
     insert into public.admin_secret (id, password) values (1, 'bpblcourtside')
     on conflict (id) do nothing;
   `,
+
+  // Leagues as they look on a project that predates leagues.track_misses:
+  // `lg-pre` has nulls (the column did not exist when the row was written),
+  // `lg-explicit` has a value someone actually chose. Kept as a literal - the
+  // point is to reproduce old rows, not to track today's schema.
+  legacy_leagues: () => `
+    insert into public.leagues (id, name, season, kind, track_misses, track_turnovers, created_at)
+    values ('lg-pre',      'Pre-migration', 'S1', 'league', null, null, 1),
+           ('lg-explicit', 'Explicit',      'S1', 'league', true, true, 2)
+    on conflict (id) do nothing;
+  `,
+
+  // The pre-migration app_settings layout plus a global set to FALSE, which is
+  // the value that must survive the migration. Kept as a literal on purpose:
+  // schema.sql no longer creates this table at all, so there is nothing to slice.
+  legacy_app_settings: () => `
+    create table if not exists public.app_settings (
+      key        text primary key,
+      value      jsonb not null,
+      updated_at timestamptz not null default now()
+    );
+    insert into public.app_settings (key, value)
+    values ('trackMisses', '{"trackMisses": false}'::jsonb)
+    on conflict (key) do nothing;
+  `,
+
+  // The one-shot trackMisses backfill and the drop that follows it, sliced out
+  // of schema.sql so the assertions run against the shipped SQL.
+  settings_backfill: () => slice(
+    '-- One-shot migration: the app-wide trackMisses toggle that used to live in',
+    'drop table if exists public.app_settings;',
+  ),
 };
 
 function havePsql() {

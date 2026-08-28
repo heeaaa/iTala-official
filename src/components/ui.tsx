@@ -3,6 +3,7 @@ import {
   View, Text, TextStyle, ViewStyle, Pressable, TextInput, ScrollView,
   StyleSheet, ScrollViewProps, Image, Animated, Modal, TouchableOpacity, Linking,
   KeyboardAvoidingView, Platform,
+  AccessibilityActionEvent, AccessibilityActionInfo,
 } from 'react-native';
 import { Swipeable, RectButton } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -172,6 +173,9 @@ export function Button({ title, onPress, kind = 'primary', style, disabled }:
   if (kind === 'primary') {
     return (
       <Pressable onPress={onPress} disabled={disabled}
+        accessibilityRole="button"
+        accessibilityLabel={title}
+        accessibilityState={{ disabled: !!disabled }}
         style={({ pressed }) => [{ borderRadius: radius.md, opacity: disabled ? 0.4 : pressed ? 0.9 : 1 }, style]}>
         <LinearGradient
           colors={brandGradient}
@@ -186,6 +190,9 @@ export function Button({ title, onPress, kind = 'primary', style, disabled }:
   const border = kind === 'danger' ? colors.red : colors.line;
   return (
     <Pressable onPress={onPress} disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      accessibilityState={{ disabled: !!disabled }}
       style={({ pressed }) => [{
         backgroundColor: 'transparent', borderColor: border, borderWidth: 1,
         paddingVertical: 14, paddingHorizontal: 18, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center',
@@ -196,14 +203,38 @@ export function Button({ title, onPress, kind = 'primary', style, disabled }:
   );
 }
 
-export function Card({ children, style, onPress }:
-  { children: React.ReactNode; style?: ViewStyle; onPress?: () => void }) {
+export function Card({ children, style, onPress, accessibilityLabel, accessibilityHint, accessibilityActions, onAccessibilityAction }:
+  {
+    children: React.ReactNode; style?: ViewStyle; onPress?: () => void;
+    // A pressable Card is usually a list row, and a row's secondary action is
+    // often a swipe gesture - which VoiceOver and TalkBack consume for their own
+    // element navigation, leaving the action unreachable. Forwarding
+    // accessibilityActions lets a screen expose that action without the gesture
+    // (see GamesOnDateScreen's delete). Label/hint are forwarded too, because a
+    // Pressable collapses its children into one node and the default reading
+    // order of a dense card is rarely the useful one.
+    accessibilityLabel?: string;
+    accessibilityHint?: string;
+    accessibilityActions?: ReadonlyArray<AccessibilityActionInfo>;
+    onAccessibilityAction?: (event: AccessibilityActionEvent) => void;
+  }) {
   const inner = (
     <View style={[{ backgroundColor: colors.surface, borderRadius: radius.lg, padding: space(4), borderWidth: 1, borderColor: colors.line }, style]}>
       {children}
     </View>
   );
-  if (onPress) return <Pressable onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}>{inner}</Pressable>;
+  if (onPress) return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityHint={accessibilityHint}
+      accessibilityActions={accessibilityActions}
+      onAccessibilityAction={onAccessibilityAction}
+      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}>
+      {inner}
+    </Pressable>
+  );
   return inner;
 }
 
@@ -224,6 +255,9 @@ export function Field({ label, value, onChangeText, placeholder, keyboardType }:
       <TextInput
         value={value} onChangeText={onChangeText} placeholder={placeholder}
         placeholderTextColor={colors.muted} keyboardType={keyboardType}
+        // RN does not associate a sibling <Txt> label with an input, so without
+        // this the field announces only its current value.
+        accessibilityLabel={label}
         style={{
           backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line,
           color: colors.text, paddingHorizontal: 14, paddingVertical: 12, fontFamily: font.body, fontSize: 16,
@@ -245,14 +279,20 @@ export function Empty({ title, subtitle }: { title: string; subtitle?: string })
 export function Segmented({ options, value, onChange }:
   { options: string[]; value: number; onChange: (i: number) => void }) {
   return (
-    <View style={{ flexDirection: 'row', backgroundColor: colors.surface, borderRadius: radius.md, padding: 4, borderWidth: 1, borderColor: colors.line }}>
+    <View accessibilityRole="tablist"
+      style={{ flexDirection: 'row', backgroundColor: colors.surface, borderRadius: radius.md, padding: 4, borderWidth: 1, borderColor: colors.line }}>
       {options.map((o, i) => {
         const active = i === value;
         const inner = (
           <Text style={{ fontFamily: font.bodyMed, fontSize: 13, color: active ? colors.bg : colors.muted, letterSpacing: 0.2 }}>{o}</Text>
         );
         return (
-          <Pressable key={o} onPress={() => onChange(i)} style={{ flex: 1 }}>
+          <Pressable key={o} onPress={() => onChange(i)} style={{ flex: 1 }}
+            accessibilityRole="tab"
+            accessibilityLabel={o}
+            // Selection is conveyed visually by a gradient fill only, so without
+            // this a screen reader cannot tell which segment is active.
+            accessibilityState={{ selected: active }}>
             {active ? (
               <LinearGradient colors={brandGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
                 style={{ paddingVertical: 8, borderRadius: radius.sm, alignItems: 'center' }}>
@@ -280,6 +320,8 @@ export function SwipeableRow({ children, onDelete }:
   ) => (
     <RectButton
       onPress={() => { ref.current?.close(); onDelete(); }}
+      accessibilityRole="button"
+      accessibilityLabel="Delete"
       style={{ width: 96, borderRadius: radius.lg, backgroundColor: colors.red, alignItems: 'center', justifyContent: 'center', marginLeft: 8 }}>
       <Text style={{ fontFamily: font.bodyBold, color: '#FFFFFF', fontSize: 14 }}>Delete</Text>
     </RectButton>
@@ -308,6 +350,12 @@ export function Toggle({ label, description, value, onChange }:
   { label: string; description?: string; value: boolean; onChange: (v: boolean) => void }) {
   return (
     <Pressable onPress={() => onChange(!value)}
+      accessibilityRole="checkbox"
+      accessibilityLabel={label}
+      accessibilityHint={description}
+      // The tick glyph is the only visual state cue; checkbox + checked is what
+      // a screen reader needs to announce "on" or "off".
+      accessibilityState={{ checked: value }}
       style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 4 }}>
       <View style={{
         width: 26, height: 26, borderRadius: 7, alignItems: 'center', justifyContent: 'center',

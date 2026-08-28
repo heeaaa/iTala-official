@@ -18,7 +18,7 @@
 
 'use strict';
 
-const TABLES = ['leagues', 'teams', 'players', 'games', 'events', 'app_settings'];
+const TABLES = ['leagues', 'teams', 'players', 'games', 'events'];
 
 function clone(x) { return x === undefined ? x : JSON.parse(JSON.stringify(x)); }
 

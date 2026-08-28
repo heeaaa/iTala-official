@@ -70,21 +70,29 @@ export function gameScore(league: League, game: Game): { home: number; away: num
   };
 }
 
+// Who won a game, if anybody. This existed inline as `home >= away` in five
+// separate places, which silently made every tie a home win: the standings
+// credited the home side, the share card handed it Player of the Game, and the
+// box score muted the away team as though it had lost. One place to decide it.
+export type GameOutcome = 'home' | 'away' | 'tie';
+export const outcomeOf = (home: number, away: number): GameOutcome =>
+  home === away ? 'tie' : home > away ? 'home' : 'away';
+
 export interface StandingRow {
-  team: Team; wins: number; losses: number;
+  team: Team; wins: number; losses: number; ties: number;
   pf: number; pa: number; diff: number; streak: string;
 }
 
 export function standings(league: League): StandingRow[] {
   const rows = new Map<string, StandingRow>();
   for (const t of league.teams)
-    rows.set(t.id, { team: t, wins: 0, losses: 0, pf: 0, pa: 0, diff: 0, streak: '' });
+    rows.set(t.id, { team: t, wins: 0, losses: 0, ties: 0, pf: 0, pa: 0, diff: 0, streak: '' });
 
   const finals = league.games
     .filter(g => g.status === 'final')
     .sort((a, b) => (a.finishedAt ?? 0) - (b.finishedAt ?? 0));
 
-  const streakLog = new Map<string, ('W' | 'L')[]>();
+  const streakLog = new Map<string, ('W' | 'L' | 'T')[]>();
   for (const g of finals) {
     const s = gameScore(league, g);
     const home = rows.get(g.homeTeamId);
@@ -92,11 +100,24 @@ export function standings(league: League): StandingRow[] {
     if (!home || !away) continue;
     home.pf += s.home; home.pa += s.away;
     away.pf += s.away; away.pa += s.home;
-    const homeWon = s.home >= s.away;
-    (homeWon ? home : away).wins++;
-    (homeWon ? away : home).losses++;
-    pushStreak(streakLog, g.homeTeamId, homeWon ? 'W' : 'L');
-    pushStreak(streakLog, g.awayTeamId, homeWon ? 'L' : 'W');
+    // A level score is a draw, not a home win. This used to read `home >= away`,
+    // which credited the home side a win and the away side a loss, and that fed
+    // win%, streaks, top-5 award eligibility and standings[0] as "Champion".
+    // Nothing prevents a game being marked final while tied, and a game marked
+    // final with no events at all scores 0-0, so this is reachable in ordinary
+    // use rather than only by mis-tapping Finish.
+    const outcome = outcomeOf(s.home, s.away);
+    if (outcome === 'tie') {
+      home.ties++; away.ties++;
+      pushStreak(streakLog, g.homeTeamId, 'T');
+      pushStreak(streakLog, g.awayTeamId, 'T');
+    } else {
+      const homeWon = outcome === 'home';
+      (homeWon ? home : away).wins++;
+      (homeWon ? away : home).losses++;
+      pushStreak(streakLog, g.homeTeamId, homeWon ? 'W' : 'L');
+      pushStreak(streakLog, g.awayTeamId, homeWon ? 'L' : 'W');
+    }
   }
   for (const r of rows.values()) {
     r.diff = r.pf - r.pa;
@@ -110,14 +131,13 @@ export function standings(league: League): StandingRow[] {
   });
 }
 
-const winPct = (r: StandingRow) =>
-  r.wins + r.losses === 0 ? 0 : r.wins / (r.wins + r.losses);
+const winPct = (r: StandingRow) => winPctOf(r.wins, r.losses, r.ties);
 
-function pushStreak(log: Map<string, ('W' | 'L')[]>, id: string, v: 'W' | 'L') {
+function pushStreak(log: Map<string, ('W' | 'L' | 'T')[]>, id: string, v: 'W' | 'L' | 'T') {
   if (!log.has(id)) log.set(id, []);
   log.get(id)!.push(v);
 }
-function formatStreak(arr: ('W' | 'L')[]): string {
+function formatStreak(arr: ('W' | 'L' | 'T')[]): string {
   if (arr.length === 0) return '—';
   const last = arr[arr.length - 1];
   let n = 0;
@@ -132,8 +152,14 @@ export interface LeaderRow {
   rating: number; // composite per-game rating used for MVP/awards
 }
 
-export const winPctOf = (wins: number, losses: number): number =>
-  wins + losses === 0 ? 0 : wins / (wins + losses);
+// A tie counts as half a win, the standard sporting convention, so a drawn game
+// ranks a team above a loss and below a win rather than being discarded from the
+// record entirely. `ties` is optional so existing two-argument callers are
+// unaffected.
+export const winPctOf = (wins: number, losses: number, ties = 0): number => {
+  const played = wins + losses + ties;
+  return played === 0 ? 0 : (wins + ties / 2) / played;
+};
 
 // Composite single-game value — the standard "game score"-style weighting.
 export const perfRating = (l: { pts: number; reb: number; ast: number; stl: number; blk: number; tov: number }): number =>

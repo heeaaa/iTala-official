@@ -154,6 +154,34 @@ create table if not exists public.leagues (
 -- Migrations for databases created before these columns existed:
 alter table public.leagues add column if not exists track_misses boolean;
 alter table public.leagues add column if not exists track_turnovers boolean;
+-- One-shot migration: the app-wide trackMisses toggle that used to live in
+-- app_settings is gone, replaced by leagues.track_misses above. Carry the old
+-- global value onto every pre-migration league (null = predates the column)
+-- BEFORE dropping the table, or a project whose global was false would silently
+-- get miss tracking turned back on for those leagues.
+--
+-- Guarded by to_regclass so a fresh install, where app_settings never existed,
+-- is a clean no-op. Idempotent: a re-run finds no nulls and no table.
+do $$
+declare legacy_track_misses boolean;
+begin
+  if to_regclass('public.app_settings') is not null then
+    execute $q$ select (value ->> 'trackMisses')::boolean
+                  from public.app_settings
+                 where key = 'trackMisses' $q$
+      into legacy_track_misses;
+  end if;
+
+  update public.leagues
+     set track_misses = coalesce(track_misses, legacy_track_misses, true)
+   where track_misses is null;
+
+  update public.leagues
+     set track_turnovers = coalesce(track_turnovers, true)
+   where track_turnovers is null;
+end $$;
+
+drop table if exists public.app_settings;
 alter table public.leagues add column if not exists is_shared boolean not null default false;
 alter table public.leagues add column if not exists is_closed boolean not null default false;
 alter table public.leagues add column if not exists is_archived boolean not null default false;
@@ -227,15 +255,6 @@ create index if not exists players_league_idx   on public.players (league_id);
 create index if not exists games_league_idx     on public.games (league_id);
 
 -- =============================================================================
--- 3) APP SETTINGS — a tiny key/value table for the global "trackMisses" flag
--- =============================================================================
-create table if not exists public.app_settings (
-  key        text primary key,
-  value      jsonb not null,
-  updated_at timestamptz not null default now()
-);
-
--- =============================================================================
 -- 4) ROW LEVEL SECURITY — read-anywhere, write-admin-only
 -- =============================================================================
 -- The goal: any signed-in user (including anonymous spectators) can READ every
@@ -249,7 +268,6 @@ alter table public.teams         enable row level security;
 alter table public.players       enable row level security;
 alter table public.games         enable row level security;
 alter table public.events        enable row level security;
-alter table public.app_settings  enable row level security;
 
 -- Helper: returns true if the current auth.uid() is an admin.
 create or replace function public.is_admin()
@@ -393,11 +411,10 @@ end $$;
 --   leagues:  update/delete owner; INSERT only via the create_league RPC
 --   teams:    insert/delete owner (or shared rec); update scorekeeper+ (player_ids)
 --   players/games/events: scorekeeper+
---   app_settings: legacy global row, super-only
 do $$
 declare t text;
 begin
-  foreach t in array array['leagues','teams','players','games','events','app_settings']
+  foreach t in array array['leagues','teams','players','games','events']
   loop
     execute format('drop policy if exists "read_all_%1$I"  on public.%1$I;', t);
     execute format('drop policy if exists "write_admin_%1$I" on public.%1$I;', t);
@@ -446,10 +463,6 @@ drop policy if exists "events_write_scorer" on public.events;
 create policy "events_write_scorer" on public.events for all
   using (public.can_score_game(game_id))
   with check (public.can_score_game(game_id));
-
-drop policy if exists "app_settings_write_admin" on public.app_settings;
-create policy "app_settings_write_admin" on public.app_settings for all
-  using (public.is_admin()) with check (public.is_admin());
 
 -- ---- RPCs ---------------------------------------------------------------------
 -- Super Admins mint single-use league-creation codes.
@@ -974,9 +987,6 @@ begin
   end if;
   if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and tablename='players') then
     alter publication supabase_realtime add table public.players;
-  end if;
-  if not exists (select 1 from pg_publication_tables where pubname='supabase_realtime' and tablename='app_settings') then
-    alter publication supabase_realtime add table public.app_settings;
   end if;
 end $$;
 

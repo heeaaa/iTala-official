@@ -1,7 +1,7 @@
 const M = require(process.env.ITALA_BUNDLE || '../.test-bundle.js');
 const { reducer, teamBoxScore, gameScore, standings, careerStats, leagueAwards,
         perfRating, lineScore, parseRoster, leaderboards, gamesPlayedMap,
-        effectiveFoulLimit, fouledOutSet, playerFouls } = M;
+        effectiveFoulLimit, fouledOutSet, playerFouls, winPctOf, outcomeOf } = M;
 
 let pass = 0, fail = 0;
 const failures = [];
@@ -14,7 +14,7 @@ function eq(name, actual, expected) {
   ok(name, a === e, `expected ${e}, got ${a}`);
 }
 
-const S0 = { leagues: [], settings: { trackMisses: true } };
+const S0 = { leagues: [] };
 const d = (state, action) => reducer(state, action);
 const L = (s, id = 'lg1') => s.leagues.find(x => x.id === id);
 
@@ -134,15 +134,14 @@ ok('D7 surviving-game team kept', L(sh).teams.some(t => t.id === 'tn'));
 // GROUP E — HYDRATE guard (the drop-in vanishing fix)
 // ===========================================================================
 // Simulate: local state has a fresh rec bundle; server snapshot lacks it.
-const serverSnapshot = { leagues: [ { ...L(sr, 'rec-shared'), games: [], teams: [], players: [] } ],
-                         settings: { trackMisses: true } };
+const serverSnapshot = { leagues: [ { ...L(sr, 'rec-shared'), games: [], teams: [], players: [] } ] };
 const afterHydrate = d(sr, { t: 'HYDRATE', state: serverSnapshot });
 const hy = L(afterHydrate, 'rec-shared');
 // NOTE: the guard is armed by dispatch(), not the raw reducer, so a raw
 // reducer HYDRATE legitimately takes the server value. This test documents
 // that boundary rather than asserting the guard.
 ok('E1 HYDRATE runs without throwing', !!hy);
-eq('E2 HYDRATE keeps settings', afterHydrate.settings.trackMisses, true);
+ok('E2 HYDRATE produces no app-wide settings key', !('settings' in afterHydrate));
 // HYDRATE must never produce dangling references in whatever it returns
 for (const lg of afterHydrate.leagues) {
   const tIds = new Set(lg.teams.map(t => t.id));
@@ -577,6 +576,127 @@ catch (e) { ok('J9 leagueAwards empty league no throw', false, e.message); }
 try { standings(L(d(S0, { t: 'ADD_LEAGUE', id: 'lq', name: 'q', season: 's' }), 'lq'));
       ok('J10 standings empty league no throw', true); }
 catch (e) { ok('J10 standings empty league no throw', false, e.message); }
+
+// ===========================================================================
+// GROUP N — legacy app-wide trackMisses migration. Before leagues.track_misses
+// existed, one global toggle governed every league on every device. The column
+// replaced it and the global is now gone, but a device upgrading from an older
+// build still carries the old value in its saved state, so HYDRATE reads it
+// once to seed leagues that predate the column. Getting this wrong silently
+// flips a scorekeeper's setting back on for every pre-migration league.
+// ===========================================================================
+const legacyLeague = (id, extra = {}) => ({
+  id, name: 'Legacy', season: 'S1',
+  teams: [], players: [], games: [], events: [], createdAt: 1,
+  ...extra,
+});
+const hydrateLegacy = (leagues, settings) =>
+  d(S0, { t: 'HYDRATE', state: settings === undefined ? { leagues } : { leagues, settings } });
+
+// The case that matters. A scorekeeper who turned misses OFF must not have them
+// turned back on by the upgrade.
+const nFalse = hydrateLegacy([legacyLeague('lgN1')], { trackMisses: false });
+eq('N1 legacy false seeds a pre-migration league', L(nFalse, 'lgN1').trackMisses, false);
+
+const nTrue = hydrateLegacy([legacyLeague('lgN2')], { trackMisses: true });
+eq('N2 legacy true seeds a pre-migration league', L(nTrue, 'lgN2').trackMisses, true);
+
+// An explicit per-league value always wins over the legacy global, in both
+// directions - the column is the source of truth once it is set.
+const nExplicitTrue = hydrateLegacy([legacyLeague('lgN3', { trackMisses: true })], { trackMisses: false });
+eq('N3 explicit per-league true beats a legacy false', L(nExplicitTrue, 'lgN3').trackMisses, true);
+
+const nExplicitFalse = hydrateLegacy([legacyLeague('lgN4', { trackMisses: false })], { trackMisses: true });
+eq('N4 explicit per-league false beats a legacy true', L(nExplicitFalse, 'lgN4').trackMisses, false);
+
+// The normal case from now on: no legacy key at all.
+const nNone = hydrateLegacy([legacyLeague('lgN5')], undefined);
+eq('N5 missing legacy key defaults to true', L(nNone, 'lgN5').trackMisses, true);
+
+// The global must not come back into state by any route.
+ok('N6 HYDRATE produces no settings key', !('settings' in nFalse));
+ok('N7 an ordinary action produces no settings key',
+   !('settings' in d(S0, { t: 'ADD_LEAGUE', id: 'lgN6', name: 'x', season: 'y' })));
+
+// trackTurnovers never had a global, so the migration must leave it untouched
+// rather than inventing a value for it.
+eq('N8 trackTurnovers untouched by the legacy migration',
+   L(nFalse, 'lgN1').trackTurnovers, undefined);
+// GROUP M — tied final scores (F-11). A level game used to resolve as a home
+// win, because every winner check was `home >= away`. That silently credited
+// the home side a win and the away side a loss, which then flowed into win%,
+// streaks, top-5 award eligibility and standings[0] as "Champion". A 0-0 game
+// marked final took the same path, so this was reachable without anybody
+// mis-tapping anything.
+// ===========================================================================
+let mt = d(S0, { t: 'ADD_LEAGUE', id: 'lgT', name: 'Ties', season: 'S1' });
+mt = d(mt, { t: 'ADD_TEAM', leagueId: 'lgT', name: 'Home', id: 'mH' });
+mt = d(mt, { t: 'ADD_TEAM', leagueId: 'lgT', name: 'Away', id: 'mA' });
+mt = d(mt, { t: 'ADD_PLAYER', leagueId: 'lgT', teamId: 'mH', name: 'H1', number: '1', id: 'mp1' });
+mt = d(mt, { t: 'ADD_PLAYER', leagueId: 'lgT', teamId: 'mA', name: 'A1', number: '2', id: 'mp2' });
+mt = d(mt, { t: 'CREATE_GAME', id: 'gT', leagueId: 'lgT', homeTeamId: 'mH', awayTeamId: 'mA' });
+const evT = (teamId, playerId, type, period = 1) =>
+  { mt = d(mt, { t: 'ADD_EVENT', leagueId: 'lgT', gameId: 'gT', teamId, playerId, type, period }); };
+// 6-6: three 2-pointers each.
+evT('mH', 'mp1', 'fg2_make'); evT('mH', 'mp1', 'fg2_make'); evT('mH', 'mp1', 'fg2_make');
+evT('mA', 'mp2', 'fg2_make'); evT('mA', 'mp2', 'fg2_make'); evT('mA', 'mp2', 'fg2_make');
+mt = d(mt, { t: 'SET_GAME_STATUS', leagueId: 'lgT', gameId: 'gT', status: 'final' });
+
+const tieScore = gameScore(L(mt, 'lgT'), L(mt, 'lgT').games[0]);
+eq('M1 fixture really is tied', [tieScore.home, tieScore.away], [6, 6]);
+
+const tt = standings(L(mt, 'lgT'));
+const tH = tt.find(r => r.team.id === 'mH');
+const tA = tt.find(r => r.team.id === 'mA');
+eq('M2 tie credits the home team no win', [tH.wins, tH.losses], [0, 0]);
+eq('M3 tie credits the away team no loss', [tA.wins, tA.losses], [0, 0]);
+eq('M4 tie counted as a tie for both sides', [tH.ties, tA.ties], [1, 1]);
+eq('M5 tie shows as T in the streak', [tH.streak, tA.streak], ['T1', 'T1']);
+eq('M6 tie is half a win in win%', winPctOf(tH.wins, tH.losses, tH.ties), 0.5);
+eq('M7 points for/against still recorded on a tie', [tH.pf, tH.pa, tA.pf, tA.pa], [6, 6, 6, 6]);
+
+// The win% ordering a tie has to sit inside: better than a loss, worse than a win.
+eq('M8 win% orders win > tie > loss',
+   [winPctOf(1, 0, 0), winPctOf(0, 0, 1), winPctOf(0, 1, 0)], [1, 0.5, 0]);
+eq('M9 winPctOf stays backward compatible with two arguments', winPctOf(1, 1), 0.5);
+eq('M10 winPctOf with no games played is 0', winPctOf(0, 0, 0), 0);
+
+// A 0-0 game marked final is the same bug reached with no events at all.
+let mz = d(S0, { t: 'ADD_LEAGUE', id: 'lgZ', name: 'Zero', season: 'S1' });
+mz = d(mz, { t: 'ADD_TEAM', leagueId: 'lgZ', name: 'Home', id: 'zH' });
+mz = d(mz, { t: 'ADD_TEAM', leagueId: 'lgZ', name: 'Away', id: 'zA' });
+mz = d(mz, { t: 'CREATE_GAME', id: 'gZ', leagueId: 'lgZ', homeTeamId: 'zH', awayTeamId: 'zA' });
+mz = d(mz, { t: 'SET_GAME_STATUS', leagueId: 'lgZ', gameId: 'gZ', status: 'final' });
+const zt = standings(L(mz, 'lgZ'));
+eq('M11 0-0 final is not a home win',
+   [zt.find(r => r.team.id === 'zH').wins, zt.find(r => r.team.id === 'zA').losses], [0, 0]);
+eq('M12 0-0 final counts as a tie', zt.find(r => r.team.id === 'zH').ties, 1);
+
+// Characterisation: a decided game must behave exactly as it did before.
+let md = d(S0, { t: 'ADD_LEAGUE', id: 'lgD', name: 'Decided', season: 'S1' });
+md = d(md, { t: 'ADD_TEAM', leagueId: 'lgD', name: 'Home', id: 'dH' });
+md = d(md, { t: 'ADD_TEAM', leagueId: 'lgD', name: 'Away', id: 'dA' });
+md = d(md, { t: 'ADD_PLAYER', leagueId: 'lgD', teamId: 'dA', name: 'A1', number: '1', id: 'dp1' });
+md = d(md, { t: 'CREATE_GAME', id: 'gD', leagueId: 'lgD', homeTeamId: 'dH', awayTeamId: 'dA' });
+md = d(md, { t: 'ADD_EVENT', leagueId: 'lgD', gameId: 'gD', teamId: 'dA', playerId: 'dp1', type: 'fg2_make', period: 1 });
+md = d(md, { t: 'SET_GAME_STATUS', leagueId: 'lgD', gameId: 'gD', status: 'final' });
+const dt = standings(L(md, 'lgD'));
+const dA = dt.find(r => r.team.id === 'dA');
+const dH = dt.find(r => r.team.id === 'dH');
+eq('M13 away win still recorded as a win', [dA.wins, dA.losses, dA.ties], [1, 0, 0]);
+eq('M14 home loss still recorded as a loss', [dH.wins, dH.losses, dH.ties], [0, 1, 0]);
+eq('M15 decided game still sorts the winner first', dt[0].team.id, 'dA');
+eq('M16 streaks unchanged for decided games', [dA.streak, dH.streak], ['W1', 'L1']);
+
+// outcomeOf is the single place the winner is decided, replacing the inline
+// `home >= away` that five call sites had each copied.
+eq('M17 outcomeOf reports a home win', outcomeOf(10, 5), 'home');
+eq('M18 outcomeOf reports an away win', outcomeOf(5, 10), 'away');
+eq('M19 outcomeOf reports a tie', outcomeOf(7, 7), 'tie');
+eq('M20 outcomeOf treats 0-0 as a tie, not a home win', outcomeOf(0, 0), 'tie');
+eq('M21 outcomeOf never reports a winner on equal scores',
+   [outcomeOf(1, 1), outcomeOf(99, 99)], ['tie', 'tie']);
+
 
 // ===========================================================================
 console.log('='.repeat(64));

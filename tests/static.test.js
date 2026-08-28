@@ -90,7 +90,17 @@ ok('non-null assertion scan ran', true);
 // sync layer forgets silently fails to persist.
 // ---------------------------------------------------------------------------
 const store = read('src/store/StoreProvider.tsx');
-const actionUnion = store.slice(store.indexOf('export type Action ='), store.indexOf('const defaultSettings'));
+// Both boundaries are checked. This slice used to end at `const defaultSettings`,
+// and when that constant was deleted indexOf returned -1, so slice(start, -1)
+// silently truncated the union: the check would still report "pass" while
+// verifying almost nothing. Fail loudly instead.
+const unionStart = store.indexOf('export type Action =');
+const unionEnd = store.indexOf('const initial: AppState');
+if (unionStart < 0 || unionEnd < 0) {
+  console.error('FATAL: could not locate the Action union boundaries in StoreProvider.tsx');
+  process.exit(2);
+}
+const actionUnion = store.slice(unionStart, unionEnd);
 const actions = [...actionUnion.matchAll(/t:\s*'([A-Z_]+)'/g)].map(m => m[1]);
 ok('action union parsed', actions.length > 20, `found ${actions.length}`);
 const reducerBody = store.slice(store.indexOf('export function reducer'));
@@ -99,7 +109,7 @@ for (const a of actions) {
   ok(`reducer handles ${a}`, reducerBody.includes(`case '${a}'`), 'no case in reducer');
 }
 // sync coverage: local-only actions legitimately have no server write
-const localOnly = new Set(['HYDRATE', 'SET_SETTINGS']);
+const localOnly = new Set(['HYDRATE']);
 // NOTE: UNDO_EVENT/REDO_EVENT must persist — a local-only undo reappears on the next pull.
 for (const a of actions) {
   if (localOnly.has(a)) continue;
@@ -326,6 +336,46 @@ for (const f of srcFiles) {
      'the venue field is user-typed text, and declaring device location would be false');
   ok('DEPLOYMENT.md still refuses "Data Not Collected"',
      /does collect data/.test(deploy));
+// CHECK 14 - accessibility floor. The app shipped with exactly one
+// accessibilityLabel across nineteen screens, and the live two-tap stat flow
+// announced nothing at all, which made its single most-used interaction
+// effectively unusable with a screen reader. These checks are structural, not
+// behavioural: they cannot prove VoiceOver reads something sensible, only that
+// the semantics have not been quietly deleted again. On-device VoiceOver and
+// TalkBack testing is still required and is not automatable here.
+// ---------------------------------------------------------------------------
+{
+  const ui = read('src/components/ui.tsx');
+  for (const [name, needle] of [
+    ['Button', 'accessibilityRole="button"'],
+    ['Segmented', 'accessibilityRole="tab"'],
+    ['Toggle', 'accessibilityRole="checkbox"'],
+  ]) {
+    ok(`ui.tsx ${name} declares an accessibility role`, ui.includes(needle),
+       'screen readers cannot tell the element is actionable without one');
+  }
+  ok('ui.tsx Card forwards accessibilityActions',
+     /accessibilityActions\?:/.test(ui) && /onAccessibilityAction\?:/.test(ui),
+     'a row whose only secondary action is a swipe is unreachable without it');
+
+  const live = read('src/screens/LiveGameScreen.tsx');
+  ok('LiveGameScreen announces to screen readers',
+     /AccessibilityInfo\.announceForAccessibility/.test(live),
+     'arming and logging a stat has no other non-visual confirmation');
+  ok('LiveGameScreen announces both arming and logging',
+     /armed\. Tap a/.test(live) && /logged for/.test(live),
+     'both taps of the two-tap flow need spoken confirmation, not just one');
+  ok('LiveGameScreen stat pad exposes its armed state',
+     /accessibilityState=\{\{ selected: on \}\}/.test(live),
+     'armed is conveyed by a background-colour swap and nothing else');
+  ok('LiveGameScreen player chips carry a spoken label',
+     /accessibilityLabel=\{spoken\}/.test(live),
+     'the chip renders as disconnected fragments (#17, 13, PTS, 4 PF) otherwise');
+
+  const games = read('src/screens/GamesOnDateScreen.tsx');
+  ok('GamesOnDateScreen offers a non-gesture delete',
+     /accessibilityActions=/.test(games) && /'delete'/.test(games),
+     'delete was reachable only by a left-swipe, which screen readers intercept');
 }
 
 console.log('='.repeat(64));

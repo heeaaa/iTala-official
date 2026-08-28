@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { useKeepAwake } from 'expo-keep-awake';
-import { View, Pressable, ScrollView, Alert, Modal, TextInput, ActivityIndicator } from 'react-native';
+import { View, Pressable, ScrollView, Alert, Modal, TextInput, ActivityIndicator, AccessibilityInfo } from 'react-native';
 import { Screen, Txt, Button, Segmented, TeamBadge, LivePip, PromoStrip } from '../components/ui';
 import { useStore, useLeague } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
@@ -32,6 +32,28 @@ const LABELS: Record<EventType, string> = {
   ft_make: '+1 FT', ft_miss: 'FT miss', reb: 'Rebound', oreb: 'O.Reb', dreb: 'D.Reb',
   ast: 'Assist', stl: 'Steal', blk: 'Block', tov: 'Turnover', pf: 'Foul', timeout: 'Timeout',
 };
+// Spoken names for the stat pad and the screen-reader announcements. The visible
+// labels are abbreviations and symbols ("2PT ✗", "+2", "FT") that VoiceOver and
+// TalkBack either spell out letter by letter or skip entirely.
+const SPOKEN: Record<EventType, string> = {
+  fg2_make: 'two point make', fg2_miss: 'two point miss',
+  fg3_make: 'three point make', fg3_miss: 'three point miss',
+  ft_make: 'free throw make', ft_miss: 'free throw miss',
+  reb: 'rebound', oreb: 'offensive rebound', dreb: 'defensive rebound',
+  ast: 'assist', stl: 'steal', blk: 'block', tov: 'turnover',
+  pf: 'foul', timeout: 'timeout',
+};
+
+// The entire two-tap flow confirms itself with a colour swap and a one-line
+// status label elsewhere on screen. Neither is announced, so a screen-reader
+// user gets no confirmation of what was armed or what was logged, and has to
+// navigate to the status line after every single tap to find out. The app has to
+// say it out loud instead.
+//
+// announceForAccessibility rather than accessibilityLiveRegion="polite": the
+// live region is Android-only, and setting both makes Android speak twice.
+const announce = (message: string) => AccessibilityInfo.announceForAccessibility(message);
+
 const PBP_LABEL: Record<EventType, string> = {
   fg2_make: 'made 2', fg2_miss: 'missed 2', fg3_make: 'made 3', fg3_miss: 'missed 3',
   ft_make: 'made FT', ft_miss: 'missed FT', reb: 'rebound', oreb: 'off. reb', dreb: 'def. reb',
@@ -68,10 +90,11 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   const score = useMemo(() => (league && game ? gameScore(league, game) : { home: 0, away: 0 }), [state, leagueId, gameId]);
 
   // Stat pad respects the LEAGUE's settings: the miss row and the TOV button
-  // appear only when enabled for this league. Misses fall back to the legacy
-  // global for old data; turnovers default on.
-  // Per-game overrides (drop-in games) win; otherwise the league setting.
-  const trackMisses = game?.trackMisses ?? league?.trackMisses ?? state.settings.trackMisses;
+  // appear only when enabled for this league. Per-game overrides (drop-in
+  // games) win; otherwise the league setting; otherwise both default on. There
+  // is no app-wide setting any more - HYDRATE seeds League.trackMisses from the
+  // old global once, for saved states that predate the column.
+  const trackMisses = game?.trackMisses ?? league?.trackMisses ?? true;
   const trackTurnovers = game?.trackTurnovers ?? league?.trackTurnovers ?? true;
   const PAD: PadBtn[][] = (() => {
     const rows = trackMisses ? [PAD_MAKES, MISS_ROW, ...PAD_OTHER] : [PAD_MAKES, ...PAD_OTHER];
@@ -167,6 +190,7 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
     bannerBusy.current = true;
     successFeedback();
     setMilestone(next);
+    announce(next);
     setTimeout(() => {
       setMilestone(null);
       bannerBusy.current = false;
@@ -290,6 +314,7 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
     // ALWAYS clear the armed stat after logging, and show a brief confirmation.
     setArmed(null);
     setFlash(`✓ ${verb} — ${who}`);
+    announce(`${SPOKEN[armed]} logged for ${who}.`);
   };
 
   // Timeout: logged against the active team, with the entered time remaining stored as note.
@@ -300,12 +325,39 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
     setTimeoutOpen(false);
     setArmed(null);
     setFlash(`✓ Timeout — ${activeTeam.name}${tr ? ` (${tr} left)` : ''}`);
+    announce(`Timeout logged for ${activeTeam.name}${tr ? `, ${tr} remaining` : ''}.`);
   };
 
-  const arm = (type: EventType | null) => { setFlash(null); setArmed(type); };
+  const arm = (type: EventType | null) => {
+    setFlash(null);
+    setArmed(type);
+    announce(type
+      ? `${SPOKEN[type]} armed. Tap a ${activeTeam.name} player.`
+      : 'Stat cleared.');
+  };
 
-  const undo = () => { undoFeedback(); dispatch({ t: 'UNDO_EVENT', leagueId, gameId }); setFlash(null); setMilestone(null); };
-  const redo = () => { tapFeedback(); dispatch({ t: 'REDO_EVENT', leagueId, gameId }); setFlash(null); };
+  const undo = () => {
+    undoFeedback();
+    // Read from the pre-dispatch state: after dispatching there is nothing left
+    // to describe.
+    const undone = lastEvent ? `${SPOKEN[lastEvent.type]} for ${nameOf(lastEvent.playerId)}` : null;
+    dispatch({ t: 'UNDO_EVENT', leagueId, gameId });
+    setFlash(null);
+    setMilestone(null);
+    announce(undone ? `Undid ${undone}.` : 'Nothing to undo.');
+  };
+  const redo = () => {
+    tapFeedback();
+    // REDO_EVENT pops the top of the stack, so that is what is about to come
+    // back. Named before dispatching, for the same reason as undo.
+    const stack = league?._redo?.[gameId] ?? [];
+    const next = stack[stack.length - 1];
+    dispatch({ t: 'REDO_EVENT', leagueId, gameId });
+    setFlash(null);
+    announce(next
+      ? `Redid ${SPOKEN[next.type]} for ${nameOf(next.playerId)}.`
+      : 'Nothing to redo.');
+  };
   const canRedo = (league?._redo?.[gameId]?.length ?? 0) > 0;
 
   const nextPeriod = () => {
@@ -368,6 +420,8 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
         {!readOnly && (
           <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: space(1) }}>
             <Pressable onPress={confirmExit}
+              accessibilityRole="button"
+              accessibilityLabel="Exit game tracker"
               style={{ flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 6, paddingHorizontal: 14, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.red, backgroundColor: 'rgba(255,90,90,0.12)' }}>
               <Txt k="body" color={colors.red} style={{ fontSize: 13 }}>✕  Exit</Txt>
             </Pressable>
@@ -457,6 +511,8 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
               })}
               {!readOnly && onCourtIds.length < LINEUP_SIZE && (
                 <Pressable onPress={() => setSubOpen(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Add player to court, ${onCourtIds.length} of ${LINEUP_SIZE} on court`}
                   style={{ flex: 1, marginVertical: 3, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center' }}>
                   <Txt k="body" color={colors.muted}>+ Add player to court ({onCourtIds.length}/{LINEUP_SIZE})</Txt>
                 </Pressable>
@@ -483,6 +539,12 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
                   const on = armed === btn.type;
                   return (
                     <Pressable key={btn.type} onPress={() => arm(on ? null : btn.type)}
+                      accessibilityRole="button"
+                      accessibilityLabel={SPOKEN[btn.type]}
+                      // Armed state is a background-colour swap and nothing else,
+                      // so it has to be stated rather than shown.
+                      accessibilityState={{ selected: on }}
+                      accessibilityHint={on ? 'Armed. Activate to clear.' : 'Activate to arm, then tap a player to log it.'}
                       style={{
                         flex: 1, backgroundColor: on ? btn.color : colors.surface, borderRadius: radius.md,
                         borderWidth: 1.5, borderColor: btn.color, paddingVertical: 14, alignItems: 'center',
@@ -571,9 +633,18 @@ function TimeoutModal({ teamName, period, onCancel, onSubmit }:
   );
 }
 
-function MiniBtn({ label, onPress, disabled }: { label: string; onPress: () => void; disabled?: boolean }) {
+function MiniBtn({ label, onPress, disabled, a11yLabel }: { label: string; onPress: () => void; disabled?: boolean; a11yLabel?: string }) {
+  // Every visible label leads with a glyph ("↺ Undo", "🔁 Subs") which a screen
+  // reader either announces by its Unicode name or skips, so the spoken label
+  // drops any leading non-alphanumeric characters. ASCII-only on purpose: these
+  // labels are all plain words once the glyph is gone, and Unicode property
+  // escapes are not dependable on Hermes.
+  const spoken = a11yLabel ?? label.replace(/^[^A-Za-z0-9]+/, '').trim();
   return (
     <Pressable onPress={onPress} disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={spoken}
+      accessibilityState={{ disabled: !!disabled }}
       style={{ flex: 1, opacity: disabled ? 0.35 : 1, paddingVertical: 7, paddingHorizontal: 4, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' }}>
       <Txt k="body"
         numberOfLines={1}
@@ -590,7 +661,14 @@ function MiniBtn({ label, onPress, disabled }: { label: string; onPress: () => v
 function SideScore({ team, score, active, onPress, right, teamFouls, timeouts }:
   { team: Team; score: number; active: boolean; onPress: () => void; right?: boolean; teamFouls: number; timeouts: number }) {
   return (
-    <Pressable onPress={onPress} style={{ flex: 1, alignItems: right ? 'flex-end' : 'flex-start' }}>
+    <Pressable onPress={onPress}
+      accessibilityRole="button"
+      // Without one label for the whole block a screen reader reads four
+      // disconnected fragments, and "active" is conveyed only by text colour.
+      accessibilityLabel={`${team.name}, ${score} points, ${teamFouls} team fouls, ${timeouts} timeouts used`}
+      accessibilityState={{ selected: active }}
+      accessibilityHint="Activate to make this the tracked team."
+      style={{ flex: 1, alignItems: right ? 'flex-end' : 'flex-start' }}>
       <Txt k="label" color={colors.muted} style={{ fontSize: 10 }}>Team Fouls: {teamFouls}</Txt>
       <Txt k="label" color={colors.muted} style={{ fontSize: 10 }}>Timeout used: {timeouts}</Txt>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
@@ -607,8 +685,23 @@ function SideScore({ team, score, active, onPress, right, teamFouls, timeouts }:
 function PlayerChip({ name, number, pts, color, onPress, disabled, grow, fouls, foulLimit }:
   { name: string; number?: string; pts?: number; color: string; onPress: () => void; disabled?: boolean; grow?: boolean; fouls?: number; foulLimit?: number }) {
   const danger = fouls !== undefined && foulLimit !== undefined && fouls >= foulLimit - 1;
+  // One label for the row. A Pressable collapses its children anyway, and the
+  // pieces ("#17", "13", "PTS", "4 PF") read as disconnected fragments in the
+  // default order. Foul danger is included because on screen it is nothing but
+  // red text, which a screen reader cannot convey.
+  const spoken = [
+    number ? `Number ${number}` : null,
+    name,
+    pts !== undefined ? `${pts} points` : null,
+    fouls !== undefined ? `${fouls} ${fouls === 1 ? 'foul' : 'fouls'}` : null,
+    danger ? 'one foul from fouling out' : null,
+  ].filter(Boolean).join(', ');
   return (
     <Pressable onPress={onPress} disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={spoken}
+      accessibilityState={{ disabled: !!disabled }}
+      accessibilityHint={disabled ? undefined : 'Activate to log the armed stat for this player.'}
       style={({ pressed }) => ({
         flex: grow ? 1 : undefined, marginVertical: 3,
         backgroundColor: colors.surface, borderRadius: radius.md,
