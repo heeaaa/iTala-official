@@ -109,42 +109,212 @@ SKIP (see above) - no local Postgres server available.
 
 ---
 
+## Remediation Progress
+
+**Progress last updated:** 28/08/2026. Original audit: 27/08/2026.
+
+Status values used in the Findings Summary below:
+
+| Status | Means |
+|---|---|
+| `FIXED (merged)` | On `main`. Done. |
+| `FIXED (PR)` | Implemented, pushed, PR open, **not merged**. |
+| `PARTIAL` | Partly addressed, or fixed in code but with an unverified step outside the repo. |
+| `OPEN` | Not started. |
+
+Counts: **11 fixed** (1 merged, 10 awaiting merge), **5 partial**, **15 open**, 1 informational.
+All P0 and P1 items are addressed. P2 and P3 are largely untouched.
+
+### Branch map
+
+Every branch below is a sibling built on `chore/ci-and-windows-tests`. **Merge that one first**;
+the rest then show only their own changes against `main`, and get CI, because a pull request only
+runs workflows that exist in its merge base.
+
+| Branch | Findings | State |
+|---|---|---|
+| `fix/delete-event-foulout` | F-04 | Merged (PR #1) |
+| `chore/ci-and-windows-tests` | F-03, F-08 | PR open. **Merge first.** |
+| `fix/tied-scores` | F-11 | PR open |
+| `feat/a11y-core` | F-05, F-06, F-07 | PR open |
+| `refactor/remove-legacy-global-settings` | N-06, and docs for the `person_id` decision | PR open |
+| `chore/store-compliance-and-privacy-policy` | F-10, N-05 | PR open |
+| `docs/review-progress-tracking` | F-22, this section | PR open |
+
+### Resume here
+
+In order, because some of these depend on each other:
+
+1. **Merge `chore/ci-and-windows-tests`.** Nothing else can be independently verified until CI
+   exists, and until it merges the other PRs run no workflows at all. This is also the first time
+   `.github/workflows/ci.yml` will ever have executed, so expect to fix something.
+2. **Apply the updated `supabase/schema.sql` to any live project before shipping a client built
+   from `refactor/remove-legacy-global-settings`.** The `track_misses` backfill has to run while
+   `app_settings` still exists. Ship the client first and any project whose old global was `false`
+   silently gets miss tracking switched back on for every pre-migration league. This is the only
+   hard ordering constraint in the whole batch.
+3. **Confirm the two credential rotations** (F-01, F-02). Both are `PARTIAL` only because rotation
+   happens in the Supabase dashboard and cannot be verified from the repo. If the old anon key
+   still works, removing it from git history achieved nothing.
+4. **Do the on-device screen-reader pass** for F-05/F-06/F-07 (`tests/MANUAL-REGRESSION.md`
+   section P6). This is the largest untested surface in the batch: the semantics are in place and
+   guarded by static checks, but nothing has confirmed a real screen reader reads them sensibly.
+5. **Fill in the privacy policy placeholders** and deploy it (see `site/README.md`), then paste
+   the URL into both store listings.
+6. Then P2, starting with **F-09 (ESLint/Prettier)** since CI is the natural place to enforce it
+   and every later change benefits.
+
+### Environment constraints hit during remediation
+
+Worth knowing before you assume something is broken:
+
+- **`psql` is not installed on the dev machine**, so `tests/sql/run.js` skips locally. The two new
+  `settings_backfill` suites have therefore **never executed**; CI is their first run.
+- **The `C:` drive was full** (0 bytes free at one point). Metro bundled all 1195 modules fine but
+  Hermes failed with `no space on device`, so no local bundle or prebuild verification was
+  possible. Clear space before trying `expo export` or `expo prebuild`.
+- **The `gh` CLI is not installed**, so PRs cannot be opened or CI status read from the shell.
+  Branches are pushed; the PRs have to be opened in the browser.
+
+### Where the original finding was incomplete or wrong
+
+Four findings turned out to differ from what this audit wrote. Recorded here because the
+difference is the useful part.
+
+- **F-10 named the wrong cause.** The finding said `app.json` declares an unused `RECORD_AUDIO`
+  permission. Deleting it changed nothing: `expo config` still reported the permission, because
+  `expo-image-picker`'s config plugin adds `RECORD_AUDIO` **and** `CAMERA` for video capture unless
+  told otherwise. The working fix is `microphonePermission: false` and `cameraPermission: false` on
+  the plugin, which both omits them and emits `tools:node="remove"`. Confirmed with
+  `expo config --type introspect`.
+- **F-11 listed three call sites; there are five.** The same inline `home >= away` was also
+  deciding the share card's Player of the Game (`src/lib/cardSpecs.ts`), the box score's share
+  layout, and `FinalScoreScreen`'s Player of the Game pool, so a drawn game handed the home team
+  the award and hid the away team's best game. There was also a second bug in the same area:
+  `TeamProfileScreen` excluded ties from games played while `pf`/`pa` still counted the drawn
+  game's points, inflating PPG and OPP PPG. All five now go through one `outcomeOf()` in
+  `src/lib/stats.ts`.
+- **F-08's recommended fix does not work on current Node.** The finding suggested invoking
+  `npx.cmd` explicitly. That fails `EINVAL` on Node 20.12 and later, which refuses to spawn
+  `.cmd`/`.bat` without a shell. `shell: true` starts but concatenates argv unescaped (`DEP0190`),
+  which mangles the esbuild `--alias` paths for any checkout under a directory containing a space,
+  including this one. The runner now resolves npm's own `npx-cli.js` and runs it under
+  `process.execPath`.
+- **F-22's New Architecture claim is now confirmed, not just likely.**
+  `expo config --type introspect` reports `RCTNewArchEnabled: true`. `TROUBLESHOOTING.md` has been
+  corrected rather than `app.json` changed, because forcing `newArchEnabled: false` is a runtime
+  change that needs device testing, not a documentation edit.
+
+One finding was deliberately not followed literally: F-06 lists `Pill` among the primitives needing
+an accessibility role. `Pill` is a static status badge (FINAL/LIVE/SCHEDULED). Giving it
+`accessibilityRole="button"` would tell screen-reader users it is actionable when it is not, so it
+was left alone. Its text already reads.
+
+### New findings raised during remediation
+
+Not in the original audit. Numbered `N-xx` to keep them distinct from the audit's own `F-xx`.
+
+| ID | Severity | Finding | Status |
+|----|----------|---------|--------|
+| N-01 | HIGH | `static.test.js` CHECK 5 sliced the `Action` union with `store.indexOf('const defaultSettings')` as its end anchor. Deleting that constant made `indexOf` return `-1`, so `slice(start, -1)` truncated the union and the check kept reporting "pass" while verifying almost nothing. Both boundaries are now anchored explicitly and abort loudly. | FIXED (PR) |
+| N-02 | MEDIUM | `tests/sql/run.js` exits 0 when no Postgres answers. Correct for a laptop, wrong for CI: a job that lost its database service would have gone green with zero database coverage. New `ITALA_REQUIRE_DB=1` turns the skip into a failure, and the CI workflow sets it. | FIXED (PR) |
+| N-03 | MEDIUM | `TeamProfileScreen` divided points for/against by wins+losses, excluding ties, while `pf`/`pa` still included the drawn game's points. PPG and OPP PPG were inflated. | FIXED (PR) |
+| N-04 | MEDIUM | Player of the Game fell back to the home team on a drawn game in both `cardSpecs.ts` and `FinalScoreScreen.tsx`, hiding the away side's best performance entirely. | FIXED (PR) |
+| N-05 | MEDIUM | Sponsor promo taps are recorded server-side (`onPromoTap` → `bump_promo_tap`, `update promos set taps = taps + 1`) and were declared on neither store form. Aggregate, no user id, but still advertising-interaction data. | FIXED (PR) |
+| N-06 | LOW | The app-wide `trackMisses` setting was dead code: per-league and per-game columns had replaced it, `AppSettings` was marked LEGACY, and `SET_SETTINGS` had no dispatcher anywhere. Removed, with the old global backfilled onto pre-migration leagues first. | FIXED (PR) |
+| N-07 | LOW | `tests/run.js` imports `execSync` and never uses it. | OPEN |
+| N-08 | INFO | `src/screens/LiveGameScreen.tsx` uses `[state, leagueId, gameId]` as a `useMemo` dependency, so the box score recomputes on any app-wide state change. This is F-14, confirmed in passing while working in the file. | OPEN (see F-14) |
+| N-09 | INFO | `showNextMilestone` in `LiveGameScreen` schedules `setTimeout` with no unmount cleanup. This is F-28, confirmed in passing. | OPEN (see F-28) |
+
+### Verification evidence
+
+Local results at the time of writing, per branch. `npm test` runs the type check plus the
+reducer/stats/parser, two-device sync and static structural suites, then the SQL suites.
+
+```text
+chore/ci-and-windows-tests
+  tsc --noEmit          PASS (clean)
+  reducer/stats/parser  PASS - 149/149
+  two-device sync       PASS - 32/32
+  static structural     PASS - 222/0 (+4 pre-existing advisory warnings)
+  SQL suites            SKIP - psql not on PATH
+
+fix/tied-scores
+  tsc --noEmit          PASS      reducer  PASS - 170/170 (GROUP M: 21 assertions)
+  sync PASS - 32/32     static   PASS - 222/0
+
+feat/a11y-core
+  tsc --noEmit          PASS      reducer  PASS - 149/149
+  sync PASS - 32/32     static   PASS - 231/0 (CHECK 14: 9 accessibility checks)
+
+refactor/remove-legacy-global-settings
+  tsc --noEmit          PASS      reducer  PASS - 157/157 (GROUP N: 8 assertions)
+  sync PASS - 32/32     static   PASS - 220/0
+
+chore/store-compliance-and-privacy-policy
+  tsc --noEmit          PASS      reducer  PASS - 149/149
+  sync PASS - 32/32     static   PASS - 238/0 (CHECK 15: 13 policy/declaration checks)
+
+GitHub Actions          NOT RUN - the workflow has never executed
+Metro/Hermes bundle     NOT RUN locally - disk full; Metro resolved all 1195 modules, Hermes failed
+SQL settings_backfill   NOT RUN - no psql locally; CI is its first execution
+On-device screen reader NOT RUN - no device or emulator available
+Prebuild / built APK    NOT RUN - manifest verified by introspection only
+```
+
+Each bug fix was confirmed to fail **before** the fix rather than assumed:
+
+- **F-11** - 10 of the 21 GROUP M assertions failed against the old code, including
+  `M11 0-0 final is not a home win :: expected [0,0], got [1,1]`.
+- **F-08** - reproduced directly as `ENOENT`, then confirmed a second time by accident: a branch
+  cut from `main` without the fix could not even bundle on Windows.
+- **N-06** - making the migration ignore the legacy value failed
+  `N1 legacy false seeds a pre-migration league :: expected false, got true`.
+- **F-03** - CHECK 13 failed 3 times before `ci.yml` existed.
+- **F-05/F-06/F-07** - CHECK 14 proven non-vacuous by stripping three semantics (228 passed,
+  3 failed), then restoring.
+- **F-22 and the policy** - CHECK 15 proven non-vacuous by deleting three disclosures (235 passed,
+  3 failed), then restoring.
+
+---
+
+
 ## Findings Summary
 
-| ID | Severity | Category | Finding | Confidence |
-|----|----------|----------|---------|------------|
-| F-01 | CRITICAL | Security | Plaintext admin password committed to git history in the initial commit | CONFIRMED |
-| F-02 | HIGH | Security / Data Integrity | Live production Supabase URL + anon key tracked in git (`bpbl.txt`) | CONFIRMED |
-| F-03 | HIGH | CI/CD | No CI pipeline runs tests, lint, type-check, or build on PRs | CONFIRMED |
-| F-04 | HIGH | Correctness / Data Integrity | `DELETE_EVENT` doesn't reverse foul-out auto-bench, unlike `UNDO_EVENT` | CONFIRMED |
-| F-05 | CRITICAL | Accessibility | Live two-tap stat entry has no screen-reader announcements (no live regions) | CONFIRMED |
-| F-06 | HIGH | Accessibility | No accessibility roles/labels anywhere in the app, including the stat pad | CONFIRMED |
-| F-07 | HIGH | Accessibility | Game deletion is swipe-gesture-only, with no non-gesture fallback | HIGH CONFIDENCE |
-| F-08 | MEDIUM | CI/CD / Testing | `tests/run.js` cannot run natively on Windows (`execFileSync('npx')` ENOENT) | CONFIRMED |
-| F-09 | MEDIUM | CI/CD | No ESLint/Prettier configuration exists anywhere in the project | CONFIRMED |
-| F-10 | MEDIUM | Mobile / Security | Unused, unexplained `RECORD_AUDIO` Android permission | CONFIRMED |
-| F-11 | MEDIUM | Correctness | Tied final scores are silently recorded as home-team wins | CONFIRMED |
-| F-12 | MEDIUM | Correctness | `rosterParse.ts` misparses team names/headers under common real-world paste shapes | HIGH CONFIDENCE |
-| F-13 | MEDIUM | Dependency | `npm audit`: 24 vulnerabilities in Expo/Metro build tooling (dev-time only) | CONFIRMED |
-| F-14 | MEDIUM | Performance | `LiveGameScreen` recomputes box score/milestones on unrelated app-wide state changes | HIGH CONFIDENCE |
-| F-15 | MEDIUM | Mobile / Performance | Team logo / promo images stored as base64 with no resize step, only quality compression | HIGH CONFIDENCE |
-| F-16 | MEDIUM | Performance | Unbounded play-by-play list rendered without virtualisation | MEDIUM CONFIDENCE |
-| F-17 | MEDIUM | Correctness / Concurrency | Substitution modal's "Set 5" lineup snapshot goes stale if state changes while open | MEDIUM CONFIDENCE |
-| F-18 | MEDIUM | Correctness / Mobile | No rapid double-tap lock on the live stat pad | MEDIUM CONFIDENCE |
-| F-19 | MEDIUM | Architecture | Duplicated ad hoc `setTimeout` retries for membership-row eventual consistency | HIGH CONFIDENCE |
-| F-20 | MEDIUM | Accessibility | Foul-out danger and other risk cues communicated by colour alone | HIGH CONFIDENCE |
-| F-21 | MEDIUM | Accessibility | Touch targets below guideline size on frequently-used live-game controls | CONFIRMED |
-| F-22 | MEDIUM | Documentation | README architecture list is stale (missing 6 of 19 screens); troubleshooting doc's New Architecture claim is stale | CONFIRMED / HIGH CONFIDENCE |
-| F-23 | LOW | Code Quality | Duplicated image-picker and share/screenshot-fallback logic across screens | HIGH CONFIDENCE |
-| F-24 | LOW | Code Quality | Several small duplicated helpers (`uid()`, team-resolution fallback, colour utilities embedded in a screen) | HIGH CONFIDENCE |
-| F-25 | LOW | Accessibility | Icon-only buttons and dense stat tables lack accessible labels/semantics | CONFIRMED / MEDIUM CONFIDENCE |
-| F-26 | LOW | Correctness | "Best all-around game" is selected by points only, not the existing composite rating | HIGH CONFIDENCE |
-| F-27 | LOW | Correctness | Share card can present a 0-stat player as "Player of the Game" at the start of a live game | HIGH CONFIDENCE |
-| F-28 | LOW | Mobile Reliability | Milestone-banner timers not cleared on `LiveGameScreen` unmount | HIGH CONFIDENCE |
-| F-29 | LOW | Security | Verbose, unconditional auth-flow console logging ships in release builds | HIGH CONFIDENCE |
-| F-30 | LOW | Build Config | `tsconfig.json` omits `noUncheckedIndexedAccess`, relevant to the project's own documented `.find()` concerns | MEDIUM CONFIDENCE |
-| F-31 | INFO | Security | `.gitignore` has no forward-looking patterns for keystores/service-account JSON that `DEPLOYMENT.md` instructs creating later | HIGH CONFIDENCE |
-| F-32 | INFO | Various | Positive findings (see below) | CONFIRMED |
+| ID | Severity | Category | Finding | Confidence | Status |
+|----|----------|----------|---------|------------|------------|
+| F-01 | CRITICAL | Security | Plaintext admin password committed to git history in the initial commit | CONFIRMED | PARTIAL |
+| F-02 | HIGH | Security / Data Integrity | Live production Supabase URL + anon key tracked in git (`bpbl.txt`) | CONFIRMED | PARTIAL |
+| F-03 | HIGH | CI/CD | No CI pipeline runs tests, lint, type-check, or build on PRs | CONFIRMED | FIXED (PR) |
+| F-04 | HIGH | Correctness / Data Integrity | `DELETE_EVENT` doesn't reverse foul-out auto-bench, unlike `UNDO_EVENT` | CONFIRMED | FIXED (merged) |
+| F-05 | CRITICAL | Accessibility | Live two-tap stat entry has no screen-reader announcements (no live regions) | CONFIRMED | FIXED (PR) |
+| F-06 | HIGH | Accessibility | No accessibility roles/labels anywhere in the app, including the stat pad | CONFIRMED | FIXED (PR) |
+| F-07 | HIGH | Accessibility | Game deletion is swipe-gesture-only, with no non-gesture fallback | HIGH CONFIDENCE | FIXED (PR) |
+| F-08 | MEDIUM | CI/CD / Testing | `tests/run.js` cannot run natively on Windows (`execFileSync('npx')` ENOENT) | CONFIRMED | FIXED (PR) |
+| F-09 | MEDIUM | CI/CD | No ESLint/Prettier configuration exists anywhere in the project | CONFIRMED | OPEN |
+| F-10 | MEDIUM | Mobile / Security | Unused, unexplained `RECORD_AUDIO` Android permission | CONFIRMED | FIXED (PR) |
+| F-11 | MEDIUM | Correctness | Tied final scores are silently recorded as home-team wins | CONFIRMED | FIXED (PR) |
+| F-12 | MEDIUM | Correctness | `rosterParse.ts` misparses team names/headers under common real-world paste shapes | HIGH CONFIDENCE | OPEN |
+| F-13 | MEDIUM | Dependency | `npm audit`: 24 vulnerabilities in Expo/Metro build tooling (dev-time only) | CONFIRMED | OPEN |
+| F-14 | MEDIUM | Performance | `LiveGameScreen` recomputes box score/milestones on unrelated app-wide state changes | HIGH CONFIDENCE | OPEN |
+| F-15 | MEDIUM | Mobile / Performance | Team logo / promo images stored as base64 with no resize step, only quality compression | HIGH CONFIDENCE | OPEN |
+| F-16 | MEDIUM | Performance | Unbounded play-by-play list rendered without virtualisation | MEDIUM CONFIDENCE | OPEN |
+| F-17 | MEDIUM | Correctness / Concurrency | Substitution modal's "Set 5" lineup snapshot goes stale if state changes while open | MEDIUM CONFIDENCE | OPEN |
+| F-18 | MEDIUM | Correctness / Mobile | No rapid double-tap lock on the live stat pad | MEDIUM CONFIDENCE | OPEN |
+| F-19 | MEDIUM | Architecture | Duplicated ad hoc `setTimeout` retries for membership-row eventual consistency | HIGH CONFIDENCE | OPEN |
+| F-20 | MEDIUM | Accessibility | Foul-out danger and other risk cues communicated by colour alone | HIGH CONFIDENCE | PARTIAL |
+| F-21 | MEDIUM | Accessibility | Touch targets below guideline size on frequently-used live-game controls | CONFIRMED | OPEN |
+| F-22 | MEDIUM | Documentation | README architecture list is stale (missing 6 of 19 screens); troubleshooting doc's New Architecture claim is stale | CONFIRMED / HIGH CONFIDENCE | FIXED (PR) |
+| F-23 | LOW | Code Quality | Duplicated image-picker and share/screenshot-fallback logic across screens | HIGH CONFIDENCE | OPEN |
+| F-24 | LOW | Code Quality | Several small duplicated helpers (`uid()`, team-resolution fallback, colour utilities embedded in a screen) | HIGH CONFIDENCE | PARTIAL |
+| F-25 | LOW | Accessibility | Icon-only buttons and dense stat tables lack accessible labels/semantics | CONFIRMED / MEDIUM CONFIDENCE | PARTIAL |
+| F-26 | LOW | Correctness | "Best all-around game" is selected by points only, not the existing composite rating | HIGH CONFIDENCE | OPEN |
+| F-27 | LOW | Correctness | Share card can present a 0-stat player as "Player of the Game" at the start of a live game | HIGH CONFIDENCE | OPEN |
+| F-28 | LOW | Mobile Reliability | Milestone-banner timers not cleared on `LiveGameScreen` unmount | HIGH CONFIDENCE | OPEN |
+| F-29 | LOW | Security | Verbose, unconditional auth-flow console logging ships in release builds | HIGH CONFIDENCE | OPEN |
+| F-30 | LOW | Build Config | `tsconfig.json` omits `noUncheckedIndexedAccess`, relevant to the project's own documented `.find()` concerns | MEDIUM CONFIDENCE | OPEN |
+| F-31 | INFO | Security | `.gitignore` has no forward-looking patterns for keystores/service-account JSON that `DEPLOYMENT.md` instructs creating later | HIGH CONFIDENCE | FIXED |
+| F-32 | INFO | Various | Positive findings (see below) | CONFIRMED | n/a |
 
 ---
 
@@ -638,6 +808,15 @@ The one confirmed data-integrity defect found is F-04 (`DELETE_EVENT` failing to
 
 ## CI/CD Assessment
 
+> **Updated 28/08/2026.** Addressed on `chore/ci-and-windows-tests`, not yet merged.
+> `.github/workflows/ci.yml` runs on `pull_request` and on pushes to `main`: a `verify` job
+> (`npm ci`, then `node tests/run.js` against a `postgres:16-alpine` service with
+> `ITALA_REQUIRE_DB=1`, covering the type check and all four suites plus the wired SQL suites,
+> output kept as an artifact) and a `bundle` job (`npx expo export`, Metro plus Hermes).
+> Linting is still absent (F-09) and is the recommended next addition. **The workflow has never
+> executed** - it runs for the first time on its own pull request, so its status is unknown.
+> The assessment below describes the state as audited.
+
 **Current state:** one workflow, and it does not verify code - it only keeps a Supabase project from auto-pausing. There is no automated verification of any pull request.
 
 **Missing, relative to what the project's own `tests/README.md` says should run:** type checking, the reducer/stats/parser suite, the two-device sync suite, static structural checks, the SQL suite, and (since no tooling exists for it at all - F-09) linting/formatting.
@@ -664,13 +843,33 @@ No confirmed, measured performance defects were found (nothing was profiled on-d
 
 ## Accessibility Assessment
 
+> **Updated 28/08/2026.** Addressed on `feat/a11y-core`, not yet merged. F-05, F-06 and F-07 are
+> implemented: `AccessibilityInfo.announceForAccessibility` on arm, log, timeout, undo, redo and
+> the milestone banner; roles, labels and state on the shared `ui.tsx` primitives and on every
+> bespoke control on `LiveGameScreen`; and a non-gesture "Delete game" accessibility action.
+> `static.test.js` CHECK 14 guards the semantics.
+>
+> **F-20 and F-21 remain open**, and the crucial caveat stands: **no screen reader has been run
+> against any of this.** Static checks prove the semantics exist, not that VoiceOver or TalkBack
+> read them sensibly or in the right order. See `tests/MANUAL-REGRESSION.md` section P6. Until
+> that pass is done, treat this category as implemented-but-unverified rather than closed.
+
 This is the area with the largest gap between the app's actual quality elsewhere and its current state: there is effectively no accessibility support anywhere in the app (F-06), and the single most-used screen has no live-region feedback at all for its core two-tap interaction (F-05, CRITICAL) plus undersized touch targets on its most-tapped secondary controls (F-21) and colour-only risk indicators (F-20). The swipe-only game-deletion flow (F-07) is the one destructive action in the app with no accessible alternative. None of this is contradicted by any positive finding in this category - the one bright spot (F-32's note on the stat pad's non-colour-only make/miss distinction) is a partial mitigation, not a substitute for the missing roles and announcements. This should be treated as a first-class workstream, not a follow-up polish pass, given how central `LiveGameScreen` is to the app's entire purpose.
 
 ---
 
 ## Recommended Remediation Plan
 
+> **This plan is the original 27/08/2026 recommendation, kept as written.** For what has actually
+> been done since, which branch each fix is on, and what to pick up next, see
+> **Remediation Progress** near the top of this document. Items below carry a status marker where
+> the outcome differed from the recommendation.
+
 ### P0 - Immediate
+
+> **Status:** item 1 **PARTIAL** (history rewritten; rotation not verifiable from the repo),
+> item 2 **PARTIAL** (`bpbl.txt` gone from tree and history; anon-key rotation not verifiable),
+> item 3 **DONE and merged** (PR #1).
 
 **1. Confirm/complete the admin-password rotation and decide on git-history remediation (F-01).**
 Problem: a plaintext admin password is permanently in git history from the initial commit. Solution: verify `set_admin_password()` was run on every project that used it; decide whether to rewrite history. Expected benefit: closes a credential-compromise risk that has likely already been substantially reduced by the code-level fix, but is not fully closed until rotation is confirmed. Risk of change: history rewriting requires a coordinated force-push; low risk if skipped in favour of rotation-only. Suggested tests: none needed beyond confirming `tests/sql/admin_secret.test.sql` still passes after any change.
@@ -682,6 +881,13 @@ Problem: live credentials tracked in git under a non-obvious filename. Solution:
 Problem: deleting a foul-out-causing event leaves a player stranded off-court. Solution: mirror `UNDO_EVENT`'s reversal logic. Expected benefit: closes a real, reachable data-integrity bug during live games. Risk of change: low, localised to one reducer case. Suggested tests: a reducer test that adds fouls to the limit, deletes the limit-crossing `'pf'` event, and asserts the player is restored to court (space permitting).
 
 ### P1 - High Priority
+
+> **Status:** all four items implemented and pushed, none merged. Item 4 **DONE**
+> (`chore/ci-and-windows-tests`), item 5 **DONE** but by a different mechanism than recommended
+> (see "Where the original finding was incomplete or wrong"), item 6 **DONE in code** with the
+> on-device screen-reader pass still outstanding (`feat/a11y-core`), item 7 **DONE** as a draw
+> rather than a blocked finish, and it turned out to span five call sites rather than three
+> (`fix/tied-scores`).
 
 **4. Stand up a CI pipeline (F-03).**
 Problem: no automated verification of PRs. Solution: add a GitHub Actions workflow running `tsc`, the existing `tests/run.js` suites, and ideally a build sanity check, on `push`/`pull_request`. Expected benefit: catches regressions before merge; makes CI the authoritative verification the project's own standards call for. Risk of change: low; may surface pre-existing flakiness once running regularly on a fresh runner each time. Suggested tests: the workflow run itself is the test.
@@ -697,8 +903,8 @@ Problem: ties silently recorded as home wins in three places. Solution: treat ti
 
 ### P2 - Medium Priority
 
-**8.** Add ESLint/Prettier and wire into CI (F-09).
-**9.** Remove or justify the `RECORD_AUDIO` permission (F-10).
+**8.** Add ESLint/Prettier and wire into CI (F-09). - **OPEN.** Recommended as the next P2 item now that CI exists.
+**9.** Remove or justify the `RECORD_AUDIO` permission (F-10). - **DONE, differently.** The permission does not come from `app.json`; `expo-image-picker`'s config plugin adds it. Fixed with `microphonePermission: false` / `cameraPermission: false`, which also blocks `CAMERA`.
 **10.** Fix `rosterParse.ts` header-detection edge cases (F-12), with accompanying parser tests.
 **11.** Run `npm audit fix` for the non-breaking subset; schedule the `expo@57` migration deliberately (F-13).
 **12.** Scope `LiveGameScreen`'s `useMemo`/`useEffect` dependencies to the current game, not the whole app state (F-14).
@@ -707,13 +913,13 @@ Problem: ties silently recorded as home wins in three places. Solution: treat ti
 **15.** Resync the substitution modal's lineup snapshot (F-17); add a double-tap lock to the stat pad (F-18).
 **16.** Consolidate the duplicated membership-visibility retry logic (F-19).
 **17.** Add non-colour cues for foul-out danger and other risk indicators (F-20); enlarge undersized touch targets (F-21).
-**18.** Update README's screen list and correct the `TROUBLESHOOTING.md` New Architecture claim (F-22).
+**18.** Update README's screen list and correct the `TROUBLESHOOTING.md` New Architecture claim (F-22). - **DONE.** All 19 screens plus every `lib`/`sync`/`components` module now listed, and the New Architecture claim corrected against `expo config --type introspect`, which reports `RCTNewArchEnabled: true`.
 
 ### P3 - Improvement
 
-**19.** Deduplicate image-picker and share-fallback logic into shared helpers (F-23); consolidate the other small duplicated helpers (F-24).
-**20.** Add accessible labels to icon-only buttons and improve stat-table screen-reader semantics (F-25).
-**21.** Correct or rename the "best all-around game" label (F-26); gate the share card's "Player of the Game" section on non-zero stats (F-27).
+**19.** Deduplicate image-picker and share-fallback logic into shared helpers (F-23); consolidate the other small duplicated helpers (F-24). - **F-24 PARTIAL.** The duplicated winner check is centralised as `outcomeOf()` in `src/lib/stats.ts`; `uid()`, the team-resolution fallback and the colour helpers are untouched.
+**20.** Add accessible labels to icon-only buttons and improve stat-table screen-reader semantics (F-25). - **PARTIAL.** The shared `ui.tsx` primitives and every control on `LiveGameScreen` are done; the other screens have not been swept, and the box-score table still has no table semantics.
+**21.** Correct or rename the "best all-around game" label (F-26); gate the share card's "Player of the Game" section on non-zero stats (F-27). - **Both still OPEN**, but note the F-11 work changed adjacent code: Player of the Game now considers both teams on a drawn game (see N-04). The zero-stat gate is a separate change.
 **22.** Clean up the milestone-banner timer leak and celebration-ratchet gap (F-28).
 **23.** Gate diagnostic auth-flow logging behind `__DEV__` (F-29).
 **24.** Incrementally enable `noUncheckedIndexedAccess` and `noFallthroughCasesInSwitch` in `tsconfig.json` (F-30).
@@ -768,6 +974,11 @@ Prioritised, not exhaustive:
 ---
 
 ## Unknowns / Unverified Areas
+
+> **Still current as of 28/08/2026.** Remediation did not clear any of these. No Postgres, no
+> device and no EAS build were available then either, and the dev machine additionally ran out of
+> disk, so no bundle or prebuild verification happened. The first three items below are now
+> tracked as concrete next steps in **Remediation Progress → Resume here**.
 
 - **Whether the leaked admin password (F-01) was rotated on any live Supabase project.** No database access was available or sought in this read-only audit; this must be confirmed by someone with access to the actual deployed project(s).
 - **SQL-level RLS/RPC tests (`tests/sql/`).** Skipped cleanly (by the suite's own design) because no local Postgres server was available in this environment. These tests are designed to run against a real Postgres and were not executed as part of this audit's verification.
