@@ -116,6 +116,28 @@ mixed makes, box scores, standings, career stats, foul-outs, awards), and the
 roster parser against a deliberately messy real-world paste. Also asserts
 immutability and that unknown ids never throw.
 
+Three later groups are worth calling out because they cover things a reducer test
+does not usually reach:
+
+- **GROUP O** - the roster parser's header detection. Team names containing
+  digits ("Eagles 2024", "U14 Warriors") used to be parsed as players, and the
+  team lost its name to a `Team N` placeholder. Also covers the pure
+  `promoteStrayToTeam`, which is how the review screen splits two teams pasted
+  with no blank line between them. One assertion (O13) pins a **known
+  limitation** rather than a fix: `"Team 2"` is structurally identical to
+  `"Pedro Santos 9"` and is still read as a player.
+- **GROUP P** - live-game input safety, against the pure helpers in
+  `src/lib/liveInput.ts`. `claimOnce` is the double-tap guard: React state is not
+  a safe gate, because `armed` is captured in the tap handler's closure and two
+  taps before the re-render commits both see it set. `reconcileLineup` decides
+  what a lineup picker does when the court changes underneath it.
+- **GROUP Q** - the composite-rating award selection (the "best all-around game"
+  used to be the best *scoring* game), the zero-stat award gates, and the
+  `__DEV__` behaviour of `src/lib/log.ts` across absent, false and true.
+
+These exist as pure functions specifically so they can be tested: the bugs are
+about React state and timing, and this project has no component-render harness.
+
 **Two-device sync (`sync.test.js`)** - the suite the undo bug needed. The reducer
 suite proves what an action does LOCALLY; this one proves what it does on the
 SERVER, and what the other device sees afterwards. It drives the real reducer, the
@@ -168,7 +190,13 @@ converge on an ordinary sequence of stats and undos.
   screen reader reads them sensibly
 - the privacy policy still covers what the store declarations depend on
   (CHECK 15) - presence checks on prose, so they stop a section vanishing but
-  cannot stop it becoming wrong
+  cannot stop it becoming wrong. Also that no `[OPERATOR]`/`[CONTACT EMAIL]`
+  placeholder or draft notice has reappeared: the policy is published and a store
+  listing points at it, so a placeholder there is a compliance failure
+- console output goes only through `src/lib/log.ts` (CHECK 18). Nothing logged
+  today is sensitive, which is why it needed a gate - the risk is a future edit
+  putting a token or an email in a release log with nothing to notice. The check
+  is what makes the chokepoint real rather than a convention
 
 Warnings are reported separately from failures. The positional-lookup warnings
 in `sync.ts` are known and currently safe, because `pushAction` receives the

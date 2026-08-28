@@ -192,7 +192,9 @@ src/
   lib/
     stats.ts             ALL stat derivation (box score, standings, leaders, career, outcomeOf)
     cardSpecs.ts         Which share cards a player/season qualifies for, and their content
-    rosterParse.ts       Bulk-import parser for pasted roster text
+    rosterParse.ts       Bulk-import parser for pasted roster text (+ promoteStrayToTeam)
+    liveInput.ts         Live-game input safety: one-shot tap claim, lineup reconciliation
+    log.ts               The only place the app writes to the console (__DEV__-gated)
     format.ts            id + formatting helpers
     haptics.ts           Tap/undo/success feedback, honouring the Settings toggle
     notify.ts            Local (on-device) game reminders and final-score alerts

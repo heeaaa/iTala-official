@@ -117,7 +117,7 @@ SKIP (see above) - no local Postgres server available.
 
 ## Remediation Progress
 
-**Progress last updated:** 28/08/2026. Original audit: 27/08/2026.
+**Progress last updated:** 29/08/2026. Original audit: 27/08/2026.
 
 Status values used in the Findings Summary below:
 
@@ -131,7 +131,7 @@ Status values used in the Findings Summary below:
 | `OPEN` | Not started. |
 
 Counts: **19 fixed** (one of them a recorded risk acceptance), **1 not a defect**, **5 partial**,
-**6 open**, 1 informational.
+**6 open**, 1 informational. **Everything fixed is merged to `main`; nothing is awaiting a PR.**
 **All P0 and P1 items are closed.** No CRITICAL or HIGH finding remains open or partial: both
 credential rotations are confirmed done (28/08/2026), and the historical exposure behind F-01 is
 formally accepted (see below). P2 is largely done: F-09 (ESLint), N-17 (drop-in authorisation suites), F-12 (roster parser),
@@ -146,75 +146,107 @@ plus F-26/F-29. Of the 6 open findings, 4 are MEDIUM (F-13, F-15, F-19, F-21) an
 
 ### Branch map
 
-Every branch was a sibling built on `chore/ci-and-windows-tests` and merged in that order, so each
-PR showed only its own changes against `main` and picked up CI. **All seven are now merged and
-`main` (`477c891`) contains every one of them.** The table is kept for traceability.
+**All work is merged; every remediation branch has been deleted.** Kept as a record of which PR
+carried what, because the findings reference each other across them.
 
-| Branch | Findings | State |
-|---|---|---|
-| `fix/delete-event-foulout` | F-04 | Merged (PR #1) |
-| `chore/ci-and-windows-tests` | F-03, F-08, N-01, N-02 | Merged (PR #2) |
-| `fix/tied-scores` | F-11, N-03, N-04 | Merged (PR #3) |
-| `feat/a11y-core` | F-05, F-06, F-07 | Merged (PR #4) |
-| `refactor/remove-legacy-global-settings` | N-06, and docs for the `person_id` decision | Merged (PR #5) |
-| `docs/review-progress-tracking` | F-22, this section | Merged (PR #6) |
-| `chore/store-compliance-and-privacy-policy` | F-10, N-05, N-10 | Merged (PR #7) |
+Trace any of these with `git log --oneline --merges main`.
 
-The sibling-stacking approach worked, but it cost one real incident: see **N-10**. Stacking
-branches means every one of them carries a merge of `main`, and a merge resolution is a hand edit
-that no reviewer diffs as carefully as a code change.
+| PR | Findings |
+|---|---|
+| #1 | F-04 |
+| #2 | F-03, F-08, N-01, N-02 |
+| #3 | F-11, N-03, N-04 |
+| #4 | F-05, F-06, F-07 |
+| #5 | N-06, and docs for the `person_id` decision |
+| #6 | F-22 |
+| #7 | F-10, N-05, N-10 |
+| #8 | tracker refresh |
+| #9 | F-09 (ESLint half), N-07, N-11, N-12, N-13, N-15 |
+| #10, #13 | SQL evidence, F-01 risk acceptance, N-17 raised |
+| #11 | N-17 (drop-in authorisation suites) |
+| #12 | F-12 |
+| #14 | F-17, F-18, N-18 |
+| #15 | F-14, F-16, F-26, F-28, F-29; F-27 closed as not a defect |
+| #16 | privacy policy operator and contact details |
+
+**One process note worth keeping.** The #10 ← #11 ← #12 stack was merged
+bottom-first, so #11 and #12 landed in intermediate branches instead of `main` and had to be
+re-homed by #14. If a stack is used again, merge it top-down, or squash it into one PR against
+`main`.
+
+Stacking cost two incidents worth remembering: **N-10**, where a merge resolution silently dropped
+a brace and left a whole test suite unparseable, and the mis-ordered stack above. A merge
+resolution is a hand edit that no reviewer diffs as carefully as a code change.
 
 ### Resume here
 
-Steps 1 and 2 of the original list are **discharged**:
+**All P0 and P1 work is closed and merged.** No CRITICAL or HIGH finding is open or partial. What
+remains is two things nobody can do from inside this repository, and a quality backlog.
 
-- Every branch is merged; `.github/workflows/ci.yml` has run.
-- `supabase/schema.sql` was applied to the live project on **28/08/2026**, so the `track_misses`
-  backfill ran while `app_settings` still existed and before any client without the legacy global
-  reached users. That was the only hard ordering constraint in the batch.
+#### Blocking a store submission - not code
 
-What is actually left, in order of consequence:
+1. **Deploy `site/` and paste the URL into both listings.** The policy is written and filled in;
+   steps are in `site/README.md` (Cloudflare Pages: framework preset None, build command empty,
+   output directory `site`, production branch `main`). The policy then lives at
+   `https://<project>.pages.dev/privacy/`. Both listings need it. The two contact mailboxes are
+   load-bearing - they are how someone who never installed the app gets their name removed, and the
+   policy promises a reply within 20 working days - so they have to stay monitored.
+2. **Do the on-device screen-reader pass** for F-05/F-06/F-07 (`tests/MANUAL-REGRESSION.md`
+   section P6). This is the largest genuinely untested surface in the project. The semantics are in
+   place and CHECK 14 stops them being deleted, but no real screen reader has read them, and a
+   structural check cannot tell you whether what it reads out makes sense.
 
-1. ~~**Confirm the two credential rotations, and decide on the historical exposure** (F-01, F-02).~~
-   **Done 28/08/2026.** Both rotations confirmed by the operator; the historical exposure is
-   formally accepted. F-01 and F-02 are both closed, and with them all of P0.
-2. ~~**Fill in the privacy policy placeholders**~~ **Done 29/08/2026.** The policy names Hanna Abejo
-   Santos and Harold Abejo as the joint agency responsible, with abejohanna@gmail.com and
-   abejoharold@gmail.com as contacts, and the draft notice is gone. CHECK 15 now fails the build if
-   a placeholder or the notice reappears.
-   **Still to do, and it is not a code change:** deploy `site/` to Cloudflare Pages (steps in
-   `site/README.md`) and paste `https://<project>.pages.dev/privacy/` into both store listings.
-   Those two mailboxes are load-bearing - they are how someone who never installed the app gets
-   their name removed - so they have to stay monitored.
-3. **Do the on-device screen-reader pass** for F-05/F-06/F-07 (`tests/MANUAL-REGRESSION.md`
-   section P6). This is the largest untested surface in the batch: the semantics are in place and
-   guarded by CHECK 14, but nothing has confirmed a real screen reader reads them sensibly.
-4. **Land the Prettier reformat** and turn on the `format:check` gate. F-09's ESLint half is done
-   and gating in CI; the formatting half is not, because Prettier rewrites all 54 files in the repo
-   and that belongs in its own mechanical commit. Whoever does it must re-verify CHECK 1-16
-   afterwards: several of those checks match exact source strings, so reformatting can silently
-   make one vacuous.
-5. Then the rest of P2. **F-14** is the natural next one - it is the only finding that lint now
-   reports on every single run (`react-hooks/exhaustive-deps`, deliberately left as a warning),
-   so it will be visible until it is fixed.
+#### Quality backlog, in the order I would take it
+
+3. **N-16 - CI runs an unsupported Node.** `node-version: '20'` left maintenance LTS in April 2026,
+   and its bundled npm 10 already caused one red build (N-15). SDK 54 supports Node 22. One line,
+   and it is the runner every other verification depends on, so it goes first.
+4. **F-21 - touch targets.** Accessibility *and* mis-taps, in the same live-game flow F-18 just
+   hardened. Those two belong together.
+5. **F-15, F-16 follow-ups, F-19** - image resizing, then the duplicated membership-retry logic.
+6. **F-13 - `npm audit`.** Needs a deliberate `expo@57` decision, not a blind `npm audit fix`.
+   All 24 are build-time only and none reach the shipped bundle, which is why this is not urgent.
+7. **F-09's Prettier half - do this last.** It reformats all 54 files, so it will conflict with
+   anything in flight. Whoever lands it **must re-verify CHECK 1-18 afterwards**: several match
+   exact source strings, so a reformat can make a check vacuous without failing it.
+
+#### Known limitations that are decisions, not debt
+
+- **F-12**: `"Team 2"` as a team header is still read as a player. It is structurally identical to
+  `"Pedro Santos 9"`, and this parser's contract is that it never guesses destructively. Asserted
+  as O13 so it stays visible.
+- **F-27**: closed as NOT A DEFECT. The guards were already there; the audit call was wrong.
+- **F-01**: closed by a recorded risk acceptance, not by remediation - the exposure is in a
+  predecessor repository that cannot be rewritten from here, and the credential is rotated.
 
 ### Environment constraints hit during remediation
 
 Worth knowing before you assume something is broken:
 
-- **`psql` is not installed on the dev machine**, and neither is Docker, so `tests/sql/run.js`
-  skips locally. The two `settings_backfill` suites have therefore **never run on this machine**;
-  CI is their only execution. What *can* be checked without a database is that every
-  `schema.sql` slice anchor still resolves and every suite's `@requires` names a real section -
-  that was verified after the PR #7 merge, since a moved anchor makes the runner throw.
-- **The `C:` drive was full** during the first pass (0 bytes free at one point), which is why the
-  earlier revision of this document recorded no local bundle verification. Space was freed
-  afterwards and `npx expo export --platform android` has since completed cleanly (exit 0,
-  3.63 MB Hermes bundle), so the CI `bundle` job's command is known to work on this tree.
-- **The `gh` CLI is not installed**, so PRs cannot be opened and **CI status cannot be read from
-  the shell**. The repository is private, so the unauthenticated GitHub REST API returns 404 as
-  well. CI results have to be checked in the browser, and **nothing in this document may record a
-  CI run as passing on any other basis**.
+All three constraints the earlier revisions of this document recorded have since been lifted. Kept
+because the workarounds are reusable, and because two of them caused real incidents.
+
+- **The SQL suites run locally now.** There is still no installed Postgres and no Docker, so
+  `tests/sql/run.js` skips by default. A portable server fixes that with no installer and no admin
+  rights: download the EnterpriseDB *binaries-only* zip
+  (`postgresql-17.6-1-windows-x64-binaries.zip`, not the installer), `initdb`, and start it from a
+  batch file that puts `pgsql\bin` on `PATH` **first** - without that the forked backend dies with
+  `exception 0xC0000142`, a DLL-init failure, even though `initdb` itself succeeded. Then run with
+  `PGPORT=55432 ITALA_REQUIRE_DB=1`. This is what made converting the four skipped authorisation
+  suites (N-17) practical: verifying SQL through CI alone is a multi-minute loop per iteration.
+- **The `C:` drive was full** during the first pass (0 bytes free at one point), which is why an
+  earlier revision recorded no local bundle verification. Space was freed and
+  `npx expo export --platform android` has completed cleanly on every subsequent branch.
+- **`gh` is installed and authenticated** (2.98.0, as of 29/08/2026), and the repository is now
+  public. CI results and the per-suite counts in the `test-output` artifact can be read first-hand
+  with `gh pr checks` and `gh run download`, which is what the "never claim CI passed" rule
+  actually needs. Note `gh` is **not** on the default `PATH` here - prepend
+  `/c/Program Files/GitHub CLI`. Job logs and artifact downloads need authentication even on a
+  public repo, so `gh` is the only route; the unauthenticated REST API returns 403/401 for those.
+- **A push to an already-merged branch triggers no CI at all** - not `pull_request` (the PR is
+  closed) and not `push` (which fires only for `main`). The push succeeds silently, so the commit
+  is stranded and unverified. This happened once and needed a cherry-pick to recover. Check the PR
+  state before pushing a follow-up.
 
 ### Where the original finding was incomplete or wrong
 
@@ -262,18 +294,18 @@ Not in the original audit. Numbered `N-xx` to keep them distinct from the audit'
 | N-04 | MEDIUM | Player of the Game fell back to the home team on a drawn game in both `cardSpecs.ts` and `FinalScoreScreen.tsx`, hiding the away side's best performance entirely. | FIXED (merged) |
 | N-05 | MEDIUM | Sponsor promo taps are recorded server-side (`onPromoTap` → `bump_promo_tap`, `update promos set taps = taps + 1`) and were declared on neither store form. Aggregate, no user id, but still advertising-interaction data. | FIXED (merged) |
 | N-06 | LOW | The app-wide `trackMisses` setting was dead code: per-league and per-game columns had replaced it, `AppSettings` was marked LEGACY, and `SET_SETTINGS` had no dispatcher anywhere. Removed, with the old global backfilled onto pre-migration leagues first. | FIXED (merged) |
-| N-07 | LOW | `tests/run.js` imports `execSync` and never uses it. | FIXED (PR) |
+| N-07 | LOW | `tests/run.js` imports `execSync` and never uses it. | FIXED (merged) |
 | N-08 | INFO | `src/screens/LiveGameScreen.tsx` uses `[state, leagueId, gameId]` as a `useMemo` dependency, so the box score recomputes on any app-wide state change. This is F-14, confirmed in passing while working in the file. | OPEN (see F-14) |
 | N-09 | INFO | `showNextMilestone` in `LiveGameScreen` schedules `setTimeout` with no unmount cleanup. This is F-28, confirmed in passing. | OPEN (see F-28) |
 | N-10 | HIGH | Merge `62fb42b` (`main` into `chore/store-compliance-and-privacy-policy`) resolved its only conflict by concatenating both sides of `tests/static.test.js` but dropping the `}` closing CHECK 15 and the `// ---` separator opening CHECK 14. The file stopped parsing (`TS1005`, then `SyntaxError: Unexpected end of input`), so `node tests/run.js` failed twice and **the static suite ran zero checks** - including the CHECK 15 assertions that this very branch added to guard the store declarations and the privacy policy. Fixed forward in `ef766b2`; the resolution was then verified to be the exact union of both parents, not merely parseable. | FIXED (merged) |
-| N-11 | HIGH | `EditTeamScreen` calls `useState` **after** an early `return` (`if (!league || !team)`). React identifies hooks by call order, so the hook count changes between renders: mount before the store has the league (it is empty until the first `HYDRATE` lands in synced mode), then re-render once it arrives, and React throws "Rendered more hooks than during the previous render". Reachable by opening the screen on a cold start with sync enabled. Found by `react-hooks/rules-of-hooks` on its first ever run - nothing else in the project could have caught it. | FIXED (PR) |
-| N-12 | LOW | `PlayerProfileScreen` defines `Big` and `Avg` twice: as arrow consts inside the component (which shadow, and are what actually renders) and again at module scope. The module-level pair was dead, and its comment claimed they were "used in the on-screen layout" - so editing them changed nothing on screen. Removed; behaviour identical. | FIXED (PR) |
-| N-13 | LOW | `tests/run.js` discarded the caught error on a bundling failure and printed a fixed guess about network access, so a syntax error or a bad `--alias` target reported the wrong cause. Now prints `e.message`. | FIXED (PR) |
+| N-11 | HIGH | `EditTeamScreen` calls `useState` **after** an early `return` (`if (!league \|\| !team)`). React identifies hooks by call order, so the hook count changes between renders: mount before the store has the league (it is empty until the first `HYDRATE` lands in synced mode), then re-render once it arrives, and React throws "Rendered more hooks than during the previous render". Reachable by opening the screen on a cold start with sync enabled. Found by `react-hooks/rules-of-hooks` on its first ever run - nothing else in the project could have caught it. | FIXED (merged) |
+| N-12 | LOW | `PlayerProfileScreen` defines `Big` and `Avg` twice: as arrow consts inside the component (which shadow, and are what actually renders) and again at module scope. The module-level pair was dead, and its comment claimed they were "used in the on-screen layout" - so editing them changed nothing on screen. Removed; behaviour identical. | FIXED (merged) |
+| N-13 | LOW | `tests/run.js` discarded the caught error on a bundling failure and printed a fixed guess about network access, so a syntax error or a bad `--alias` target reported the wrong cause. Now prints `e.message`. | FIXED (merged) |
 | N-14 | INFO | `ui.tsx`'s `OnboardingSheet` accepts an `isSignedIn` prop and never reads it, so the first-run copy is identical for guests and signed-in users despite callers passing the flag. Left in the prop type (the sheet is the obvious place to vary that copy) but removed from the destructuring. Latent incomplete feature, not a defect. | OPEN |
-| N-15 | HIGH | Adding the F-09 lint dependencies produced a `package-lock.json` that **npm 11 accepted and npm 10 rejected** (`Missing: @emnapi/core@1.11.3 from lock file`). npm 11 recorded those packages only as nested entries under `@unrs/resolver-binding-wasm32-wasi` (`eslint-config-expo` -> `eslint-import-resolver-typescript` -> `unrs-resolver`); npm 10 also wants the hoisted copies. `node-version: '20'` means CI runs npm 10, so **all three CI jobs failed at `npm ci`** while `npm ci --dry-run` passed locally on npm 11 - a false green. Regenerated with `npx npm@10 install`, which records the superset, and verified under both majors. No direct dependency version changed. | FIXED (PR) |
+| N-15 | HIGH | Adding the F-09 lint dependencies produced a `package-lock.json` that **npm 11 accepted and npm 10 rejected** (`Missing: @emnapi/core@1.11.3 from lock file`). npm 11 recorded those packages only as nested entries under `@unrs/resolver-binding-wasm32-wasi` (`eslint-config-expo` -> `eslint-import-resolver-typescript` -> `unrs-resolver`); npm 10 also wants the hoisted copies. `node-version: '20'` means CI runs npm 10, so **all three CI jobs failed at `npm ci`** while `npm ci --dry-run` passed locally on npm 11 - a false green. Regenerated with `npx npm@10 install`, which records the superset, and verified under both majors. No direct dependency version changed. | FIXED (merged) |
 | N-16 | MEDIUM | `.github/workflows/ci.yml` pins `node-version: '20'`. Node 20 left maintenance LTS in April 2026, so CI verifies every pull request against an unsupported runtime, and its bundled npm 10 is what caused N-15. Expo SDK 54 supports Node 20 and 22. Not changed as part of F-09: moving the version changes what CI verifies against and deserves its own PR and its own green run, rather than being bundled into a lint change. | OPEN |
-| N-17 | MEDIUM | ~~Four of the eight SQL suites never ran in CI.~~ **FIXED.** All eight now run: `rec_setup` (9), `bundles` (12), `community_creator_only` (10) and `private_rec_ownership` (8) were converted from diagnostic `select 'label', value` scripts into asserting suites, taking their expected values from the intent already written in their labels. Needed five new sliceable `schema.sql` sections (`is_admin`, `authz`, `games_created_by`, `rec_setup`, `bulk_roster`), an `auth.users` stub for the `created_by` foreign key, and the harness stub parameters renamed to match `schema.sql` - `create or replace function` cannot change an input parameter name, so `member_role(p text)` blocked the real `member_role(p_league_id text)` from loading. SQL coverage went 39 -> 78 assertions. CHECK 17 now fails the build if any suite loses its marker, requires a section that does not exist, or stops printing its counter. | FIXED (PR) | **Four of the eight SQL suites never run in CI.** `bundles`, `community_creator_only`, `private_rec_ownership` and `rec_setup` carry no `-- @requires:` marker, so `tests/sql/run.js` skips them loudly by design (running them would load only `harness.sql`, leaving every check querying empty tables and "passing" vacuously). The skip is honest, but the coverage gap is not harmless: these are the drop-in-game **authorisation** tests, covering `rec_setup_game`, `can_score_game`, `member_role`, `can_score` and `is_admin`, including one that reproduces a real ownership bug (a private league row existing with no membership row, for a non-admin user). They are also written as diagnostic scripts - `\set ON_ERROR_STOP off` plus `select 'label', value` rows - rather than self-asserting suites, so converting them needs both an `@requires` section sliced out of `schema.sql` and real PASS/FAIL assertions. Until then, the RLS/RPC layer that decides who may score a drop-in game has no automated verification. | OPEN |
-| N-18 | LOW | ~~`bulk_import_roster` aborts an entire import on one nameless player.~~ **FIXED** - same `coalesce(nullif(ply->>'name', ''), 'Player')` fallback `rec_setup_game` already applied. Proven first: without it, D12 raised `null value in column "name" ... violates not-null constraint` and D14 showed `players=4 (expected 7)` - the other three players in the same call were never written. **Requires re-running `supabase/schema.sql`** on any live project to take effect. | `bulk_import_roster` inserts `ply->>'name'` directly, while `rec_setup_game` guards the same column with `coalesce(nullif(ply->>'name', ''), 'Player')`. `players.name` is `not null`, so a pasted roster containing one player object with no `name` key aborts the **entire** import with a not-null violation, where the drop-in path would have defaulted it. Reachable from `BulkImportScreen`, and adjacent to F-12, which is about that parser producing exactly this kind of malformed row. Not fixed here: it is a behaviour change in a shipped RPC and belongs with the F-12 work. Pinned as a characterization assertion (`bundles` D12) so the current behaviour cannot change silently. | OPEN |
+| N-17 | MEDIUM | ~~Four of the eight SQL suites never ran in CI.~~ **FIXED.** They were the drop-in-game authorisation tests - `rec_setup_game`, `can_score_game`, `member_role`, `can_score`, `is_admin`, `bulk_import_roster` - and carried no `-- @requires:` marker, so the runner skipped them: the layer deciding who may score a game had no automated verification at all. They were also diagnostic `select 'label', value` scripts rather than asserting suites, so a marker alone would not have been enough. All eight now run, and SQL coverage went 39 -> 81 assertions. Needed five new sliceable `schema.sql` sections (`is_admin`, `authz`, `games_created_by`, `rec_setup`, `bulk_roster`), an `auth.users` stub for the `created_by` foreign key, and the harness stub parameters renamed to match `schema.sql` - `create or replace function` cannot change an input parameter name, so `member_role(p text)` blocked the real `member_role(p_league_id text)` from loading. CHECK 17 fails the build if a suite loses its marker, names a section that does not exist, or stops printing its counter. | FIXED (merged) |
+| N-18 | LOW | ~~`bulk_import_roster` aborts an entire roster import on one nameless player.~~ **FIXED** - it inserted `ply->>'name'` raw while `rec_setup_game` guarded the same NOT NULL column, so a single player object with no name key took down the whole call. It now applies the same `Player` fallback. Proven first: without it D12 raised a not-null violation on `players.name`, and D14 showed `players=4 (expected 7)` - the other three players in the same call were never written. Applied to the live project 29/08/2026. | FIXED (merged) |
 
 ### Verification evidence
 
@@ -402,11 +434,11 @@ Each bug fix was confirmed to fail **before** the fix rather than assumed:
 | F-11 | MEDIUM | Correctness | Tied final scores are silently recorded as home-team wins | CONFIRMED | FIXED (merged) |
 | F-12 | MEDIUM | Correctness | `rosterParse.ts` misparses team names/headers under common real-world paste shapes | CONFIRMED | PARTIAL |
 | F-13 | MEDIUM | Dependency | `npm audit`: 24 vulnerabilities in Expo/Metro build tooling (dev-time only) | CONFIRMED | OPEN |
-| F-14 | MEDIUM | Performance | `LiveGameScreen` recomputes box score/milestones on unrelated app-wide state changes | HIGH CONFIDENCE | FIXED (PR) |
+| F-14 | MEDIUM | Performance | `LiveGameScreen` recomputes box score/milestones on unrelated app-wide state changes | HIGH CONFIDENCE | FIXED (merged) |
 | F-15 | MEDIUM | Mobile / Performance | Team logo / promo images stored as base64 with no resize step, only quality compression | HIGH CONFIDENCE | OPEN |
-| F-16 | MEDIUM | Performance | Unbounded play-by-play list rendered without virtualisation | MEDIUM CONFIDENCE | FIXED (PR) |
-| F-17 | MEDIUM | Correctness / Concurrency | Substitution modal's "Set 5" lineup snapshot goes stale if state changes while open | CONFIRMED | FIXED (PR) |
-| F-18 | MEDIUM | Correctness / Mobile | No rapid double-tap lock on the live stat pad | CONFIRMED | FIXED (PR) |
+| F-16 | MEDIUM | Performance | Unbounded play-by-play list rendered without virtualisation | MEDIUM CONFIDENCE | FIXED (merged) |
+| F-17 | MEDIUM | Correctness / Concurrency | Substitution modal's "Set 5" lineup snapshot goes stale if state changes while open | CONFIRMED | FIXED (merged) |
+| F-18 | MEDIUM | Correctness / Mobile | No rapid double-tap lock on the live stat pad | CONFIRMED | FIXED (merged) |
 | F-19 | MEDIUM | Architecture | Duplicated ad hoc `setTimeout` retries for membership-row eventual consistency | HIGH CONFIDENCE | OPEN |
 | F-20 | MEDIUM | Accessibility | Foul-out danger and other risk cues communicated by colour alone | HIGH CONFIDENCE | PARTIAL |
 | F-21 | MEDIUM | Accessibility | Touch targets below guideline size on frequently-used live-game controls | CONFIRMED | OPEN |
@@ -414,10 +446,10 @@ Each bug fix was confirmed to fail **before** the fix rather than assumed:
 | F-23 | LOW | Code Quality | Duplicated image-picker and share/screenshot-fallback logic across screens | HIGH CONFIDENCE | OPEN |
 | F-24 | LOW | Code Quality | Several small duplicated helpers (`uid()`, team-resolution fallback, colour utilities embedded in a screen) | HIGH CONFIDENCE | PARTIAL |
 | F-25 | LOW | Accessibility | Icon-only buttons and dense stat tables lack accessible labels/semantics | CONFIRMED / MEDIUM CONFIDENCE | PARTIAL |
-| F-26 | LOW | Correctness | "Best all-around game" is selected by points only, not the existing composite rating | HIGH CONFIDENCE | FIXED (PR) |
+| F-26 | LOW | Correctness | "Best all-around game" is selected by points only, not the existing composite rating | HIGH CONFIDENCE | FIXED (merged) |
 | F-27 | LOW | Correctness | Share card can present a 0-stat player as "Player of the Game" at the start of a live game | HIGH CONFIDENCE | NOT A DEFECT |
-| F-28 | LOW | Mobile Reliability | Milestone-banner timers not cleared on `LiveGameScreen` unmount | HIGH CONFIDENCE | FIXED (PR) |
-| F-29 | LOW | Security | Verbose, unconditional auth-flow console logging ships in release builds | HIGH CONFIDENCE | FIXED (PR) |
+| F-28 | LOW | Mobile Reliability | Milestone-banner timers not cleared on `LiveGameScreen` unmount | HIGH CONFIDENCE | FIXED (merged) |
+| F-29 | LOW | Security | Verbose, unconditional auth-flow console logging ships in release builds | HIGH CONFIDENCE | FIXED (merged) |
 | F-30 | LOW | Build Config | `tsconfig.json` omits `noUncheckedIndexedAccess`, relevant to the project's own documented `.find()` concerns | MEDIUM CONFIDENCE | OPEN |
 | F-31 | INFO | Security | `.gitignore` has no forward-looking patterns for keystores/service-account JSON that `DEPLOYMENT.md` instructs creating later | HIGH CONFIDENCE | FIXED |
 | F-32 | INFO | Various | Positive findings (see below) | CONFIRMED | n/a |
