@@ -1,6 +1,21 @@
 create schema if not exists auth;
 create table if not exists auth_state(uid uuid, anon boolean);
 insert into auth_state values ('11111111-1111-1111-1111-111111111111', false);
+
+-- Stand-in for Supabase's auth.users. Only needed because schema.sql's
+-- `games.created_by` and `creation_codes.created_by` carry a real foreign key to
+-- it, so any suite that loads those columns needs the referenced table to exist
+-- and to contain the uids it writes. Seeded with every uid the suites switch
+-- between via auth_state - an FK violation here would otherwise look like a
+-- failure in the code under test rather than missing scaffolding.
+create table if not exists auth.users (id uuid primary key);
+insert into auth.users (id) values
+  ('11111111-1111-1111-1111-111111111111'),
+  ('22222222-2222-2222-2222-222222222222'),
+  ('aaaaaaaa-0000-0000-0000-000000000001'),
+  ('bbbbbbbb-0000-0000-0000-000000000002'),
+  ('cccccccc-0000-0000-0000-000000000003')
+on conflict (id) do nothing;
 create or replace function auth.uid() returns uuid language sql stable as $$ select uid from auth_state limit 1 $$;
 create or replace function auth.jwt() returns jsonb language sql stable as $$ select jsonb_build_object('is_anonymous',(select anon from auth_state limit 1)) $$;
 
@@ -25,10 +40,17 @@ create or replace function public.is_authed_user() returns boolean language sql 
   select auth.uid() is not null and not coalesce((auth.jwt()->>'is_anonymous')::boolean,false) $$;
 create or replace function public.is_admin() returns boolean language sql stable as $$
   select coalesce((select is_admin from profiles where id=auth.uid()),false) $$;
-create or replace function public.member_role(p text) returns text language sql stable as $$
-  select role from league_members where league_id=p and user_id=auth.uid() $$;
-create or replace function public.is_shared_rec(p text) returns boolean language sql stable as $$
-  select coalesce((select kind='recreational' and is_shared from leagues where id=p),false) $$;
-create or replace function public.can_score(p text) returns boolean language sql stable as $$
-  select public.is_admin() or public.member_role(p) is not null
-      or (public.is_shared_rec(p) and public.is_authed_user()) $$;
+-- Parameter names below MUST stay identical to schema.sql's. A suite that
+-- @requires the real `authz` section loads it on top of these stubs with
+-- `create or replace function`, and Postgres refuses to change the name of an
+-- input parameter that way - `member_role(p text)` here against
+-- `member_role(p_league_id text)` there fails with
+-- "cannot change name of input parameter". Renaming these to match is what lets
+-- the real definitions override the stubs instead of erroring.
+create or replace function public.member_role(p_league_id text) returns text language sql stable as $$
+  select role from league_members where league_id=p_league_id and user_id=auth.uid() $$;
+create or replace function public.is_shared_rec(p_league_id text) returns boolean language sql stable as $$
+  select coalesce((select kind='recreational' and is_shared from leagues where id=p_league_id),false) $$;
+create or replace function public.can_score(p_league_id text) returns boolean language sql stable as $$
+  select public.is_admin() or public.member_role(p_league_id) is not null
+      or (public.is_shared_rec(p_league_id) and public.is_authed_user()) $$;
