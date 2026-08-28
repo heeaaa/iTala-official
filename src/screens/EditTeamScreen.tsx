@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, ScrollView, Pressable, TextInput, Alert, Image } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { Screen, Txt, Card, Button, Field, TeamBadge } from '../components/ui';
+import { Screen, Txt, Button, Field, TeamBadge } from '../components/ui';
 import { useStore, useLeague } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
 import { colors, space, radius, font, teamColors } from '../theme';
@@ -55,10 +55,15 @@ export default function EditTeamScreen({ route, navigation }: ScreenProps<'EditT
     league?.players.forEach(p => { d[p.id] = { name: p.name, num: p.number ?? '' }; });
     return d;
   });
+  // Must stay above the early return below. React identifies hooks by call
+  // order, so a hook after a conditional return changes the hook count between
+  // renders: mount with no league/team (the store is empty until the first
+  // HYDRATE lands in synced mode), then re-render once it arrives, and React
+  // throws "Rendered more hooks than during the previous render".
+  const [savedTick, setSavedTick] = useState(false);
 
   if (!league || !team) return <Screen><Txt k="body">Team not found.</Txt></Screen>;
 
-  const [savedTick, setSavedTick] = useState(false);
   const saveDetails = () => {
     dispatch({ t: 'UPDATE_TEAM', leagueId, teamId, name, coach });
     setSavedTick(true);

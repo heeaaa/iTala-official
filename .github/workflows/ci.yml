@@ -19,6 +19,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Kept as its own job rather than a step inside `verify`: lint failures are
+  # cheap and mechanical, and a separate job reports them in about a minute
+  # instead of behind a Postgres service and the whole regression suite. It also
+  # means a lint failure and a test failure are visible in the same run rather
+  # than the first one masking the second.
+  lint:
+    name: Lint (ESLint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `eslint .` exits non-zero on any error. The config promotes the rules
+      # that were fixed to clean (unused symbols, import ordering) to errors, so
+      # a new violation fails here. react-hooks/exhaustive-deps is deliberately
+      # left as a warning - its two current hits are F-14 and correcting them is
+      # a behaviour change, not a lint fix. See eslint.config.js.
+      #
+      # `npm run format:check` is intentionally NOT run yet: Prettier would
+      # reformat all 54 files in the repo, so the gate is added only once that
+      # mechanical reformat lands on its own. See CODE_REVIEW.md F-09.
+      - name: Run ESLint
+        run: npm run lint
+
   verify:
     name: Types, reducer, sync, static, database
     runs-on: ubuntu-latest

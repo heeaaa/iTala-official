@@ -14,7 +14,7 @@ import { gameCardOptions, seasonCardOptions, seasonAveragesSpec } from '../lib/c
 // from the route params (game / season / averages), lets the user pick which
 // achievement and which layout (Story portrait vs Feed square), previews it,
 // and shares a high-resolution PNG.
-export default function ShareCardScreen({ route, navigation }: ScreenProps<'ShareCard'>) {
+export default function ShareCardScreen({ route }: ScreenProps<'ShareCard'>) {
   const { leagueId } = route.params;
   const league = useLeague(leagueId);
   const { role } = useAdmin();

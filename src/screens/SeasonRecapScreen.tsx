@@ -1,10 +1,10 @@
 import React, { useRef } from 'react';
-import { View, ScrollView, Share } from 'react-native';
+import { View, Share } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
 import { Screen, Txt, Button, TeamBadge, SponsorMark } from '../components/ui';
 import { useLeague } from '../store/StoreProvider';
-import { colors, space, radius, font } from '../theme';
+import { colors, space, radius } from '../theme';
 import { ScreenProps } from '../navigation';
 import { leagueAwards, standings } from '../lib/stats';
 

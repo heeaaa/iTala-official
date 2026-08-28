@@ -398,22 +398,3 @@ function MiniStat({ label, value }: { label: string; value: string }) {
     </View>
   );
 }
-
-// Visible profile stat tiles (used in the on-screen layout, separate from the share card).
-function Big({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={{ flex: 1 }}>
-      <Txt color={colors.text} style={{ fontFamily: font.display, fontSize: 30, lineHeight: 32 }}>{value}</Txt>
-      <Txt k="label" color={colors.muted}>{label}</Txt>
-    </View>
-  );
-}
-
-function Avg({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={{ flex: 1 }}>
-      <Txt color={colors.text} style={{ fontFamily: font.displaySemi, fontSize: 18 }}>{value}</Txt>
-      <Txt k="label" color={colors.muted}>{label}</Txt>
-    </View>
-  );
-}

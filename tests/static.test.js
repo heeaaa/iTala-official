@@ -382,6 +382,59 @@ for (const f of srcFiles) {
      'delete was reachable only by a left-swipe, which screen readers intercept');
 }
 
+
+// ---------------------------------------------------------------------------
+// CHECK 16 - lint tooling must exist and CI must run it (F-09). The project had
+// no ESLint or Prettier config at all, so there was no lint step a workflow
+// could even have called. These checks guard the three parts that make the gate
+// real: the config, the script, and a workflow that actually invokes it. A
+// config with no CI step is decoration.
+//
+// Structural only: they cannot tell whether the rules are good, just that the
+// gate has not been quietly removed.
+// ---------------------------------------------------------------------------
+{
+  const hasFlat = fs.existsSync(path.join(ROOT, 'eslint.config.js'));
+  ok('an ESLint config exists', hasFlat,
+     'without one there is no lint step CI could run - F-09');
+
+  if (hasFlat) {
+    const cfg = read('eslint.config.js');
+    ok('the ESLint config builds on eslint-config-expo',
+       /eslint-config-expo/.test(cfg),
+       'the shared Expo config is what supplies the React Hooks and RN-aware rules');
+    ok('eslint-config-prettier is applied so the two tools cannot disagree',
+       /eslint-config-prettier/.test(cfg),
+       'without it ESLint and Prettier fight over the same lines');
+    // The whole point of the F-09 cleanup was to start from zero violations so
+    // this rule can gate. If someone drops it back to a warning, CI goes green
+    // on new dead code again.
+    ok('unused symbols are an error, not a warning',
+       /'@typescript-eslint\/no-unused-vars':\s*\['error'/.test(cfg),
+       'as a warning it does not fail CI, and dead imports accumulate again');
+  }
+
+  const pkg = JSON.parse(read('package.json'));
+  ok('package.json exposes a lint script', typeof pkg.scripts?.lint === 'string',
+     'CI and contributors must run the same command');
+  ok('ESLint and Prettier are devDependencies, not runtime dependencies',
+     !!pkg.devDependencies?.eslint && !!pkg.devDependencies?.prettier
+       && !pkg.dependencies?.eslint && !pkg.dependencies?.prettier,
+     'lint tooling must never ship in the app bundle');
+
+  const wfDir = path.join(ROOT, '.github', 'workflows');
+  const bodies = fs.existsSync(wfDir)
+    ? fs.readdirSync(wfDir).filter(f => /\.ya?ml$/.test(f))
+        .map(f => fs.readFileSync(path.join(wfDir, f), 'utf8'))
+    : [];
+  const linter = bodies.find(b => /run:\s*npm run lint\b/.test(b));
+  ok('a GitHub Actions workflow runs npm run lint', !!linter,
+     'a lint config nothing executes does not prevent anything');
+  ok('the lint workflow runs before merge, on pull_request',
+     !!linter && /^\s*pull_request:/m.test(linter),
+     'linting after merge to main defeats the point');
+}
+
 console.log('='.repeat(64));
 console.log(`STATIC CHECKS:  ${pass} passed,  ${fail} failed,  ${warn} warnings`);
 if (problems.length) {

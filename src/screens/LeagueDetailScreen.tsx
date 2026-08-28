@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, ScrollView, Pressable, TextInput, Alert, Share } from 'react-native';
-import { Screen, Txt, Card, Button, Pill, Segmented, Empty, sep, TeamBadge, LivePip, Toggle } from '../components/ui';
+import { Screen, Txt, Card, Button, Pill, Segmented, Empty, TeamBadge, LivePip, Toggle } from '../components/ui';
 import { useStore, useLeague } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
 import { colors, space, font, radius } from '../theme';

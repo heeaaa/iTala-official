@@ -16,7 +16,7 @@
 // (share-card capture, haptics, image picker) and live Supabase/RLS behaviour.
 // Those still need a device. See tests/sql/ for the database-side checks.
 
-const { execFileSync, execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -73,7 +73,11 @@ const esbuildArgs = [
 try {
   npx(esbuildArgs);
 } catch (e) {
-  console.error('\n✗ bundling failed. Is network access available for npx esbuild?');
+  // The reason was previously discarded, so every bundling failure printed the
+  // same guess about the network - unhelpful when the real cause was a syntax
+  // error or a missing alias target.
+  console.error('\n✗ bundling failed:', e.message);
+  console.error('  (if that looks like a fetch problem, check network access for npx esbuild)');
   process.exit(2);
 }
 if (!fs.existsSync(BUNDLE)) { console.error('✗ bundle not produced'); process.exit(2); }

@@ -297,7 +297,6 @@ async function s6_rls_silent_delete() {
   const A = await seed(server);
   A.dispatch(score('lg1', 'g1', 'tH', 'p1', '3pm', 1));
   await A.settle();
-  const evId = A.eventIds()[0];
 
   // Rights lapse: deletes on events are now silently filtered out.
   server.rls.events = (_row, op) => op !== 'delete';

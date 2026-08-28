@@ -28,6 +28,12 @@ iTala is a well-engineered, deliberately-scoped mobile app for offline-first bas
 
 **Immediate priorities:** rotate/confirm rotation of the historical admin password and scrub or accept the git-history exposure; remove `bpbl.txt` and rotate its Supabase anon key; stand up a CI workflow that runs the project's own existing test suite; fix the `DELETE_EVENT` foul-out desync and the tied-score handling; add accessibility roles and live-region announcements to `LiveGameScreen`.
 
+> **Status as of 28/08/2026: every one of those immediate priorities is closed.** Both credentials
+> are rotated, the historical exposure is formally accepted (F-01, and it turned out to sit in a
+> predecessor repository rather than this one), CI runs on every pull request and is green, and the
+> `DELETE_EVENT`, tied-score and accessibility fixes are all merged. See **Remediation Progress**
+> below for the current state; the rest of this summary is the original 27/08/2026 audit text.
+
 ---
 
 ## Application Overview
@@ -118,13 +124,16 @@ Status values used in the Findings Summary below:
 | Status | Means |
 |---|---|
 | `FIXED (merged)` | On `main`. Done. |
+| `FIXED (risk accepted)` | Closed by a recorded, dated risk acceptance rather than by further remediation. Used once, for F-01. |
 | `FIXED (PR)` | Implemented, pushed, PR open, **not merged**. |
 | `PARTIAL` | Partly addressed, or fixed in code but with an unverified step outside the repo. |
 | `OPEN` | Not started. |
 
-Counts: **10 fixed** (all merged), **5 partial**, **16 open**, 1 informational.
-All P0 and P1 items are addressed, and **no CRITICAL or HIGH finding remains open**. P2 and P3 are
-largely untouched: of the 16 open findings, 10 are MEDIUM and 6 are LOW.
+Counts: **12 fixed**, **4 partial**, **15 open**, 1 informational.
+**All P0 and P1 items are closed.** No CRITICAL or HIGH finding remains open or partial: both
+credential rotations are confirmed done (28/08/2026), and the historical exposure behind F-01 is
+formally accepted (see below). P2 has started (F-09); of the 15 open findings, 9 are MEDIUM and
+6 are LOW.
 
 > The previous revision of this section read "11 fixed ... 15 open". That was an arithmetic slip,
 > not a change in scope - the table has always held 31 numbered findings plus F-32. The counts
@@ -161,17 +170,23 @@ Steps 1 and 2 of the original list are **discharged**:
 
 What is actually left, in order of consequence:
 
-1. **Confirm the two credential rotations** (F-01, F-02). Both are `PARTIAL` only because rotation
-   happens in the Supabase dashboard and cannot be verified from the repo. If the old anon key
-   still works, removing it from git history achieved nothing.
+1. ~~**Confirm the two credential rotations, and decide on the historical exposure** (F-01, F-02).~~
+   **Done 28/08/2026.** Both rotations confirmed by the operator; the historical exposure is
+   formally accepted. F-01 and F-02 are both closed, and with them all of P0.
 2. **Fill in the privacy policy placeholders** (`[OPERATOR]`, `[CONTACT EMAIL]`) and deploy the
    site (see `site/README.md`), then paste the URL into both store listings. The policy ships with
    a deliberate visible notice, so it cannot be published half-finished by accident.
 3. **Do the on-device screen-reader pass** for F-05/F-06/F-07 (`tests/MANUAL-REGRESSION.md`
    section P6). This is the largest untested surface in the batch: the semantics are in place and
    guarded by CHECK 14, but nothing has confirmed a real screen reader reads them sensibly.
-4. Then P2, starting with **F-09 (ESLint/Prettier)** since CI is the natural place to enforce it
-   and every later change benefits.
+4. **Land the Prettier reformat** and turn on the `format:check` gate. F-09's ESLint half is done
+   and gating in CI; the formatting half is not, because Prettier rewrites all 54 files in the repo
+   and that belongs in its own mechanical commit. Whoever does it must re-verify CHECK 1-16
+   afterwards: several of those checks match exact source strings, so reformatting can silently
+   make one vacuous.
+5. Then the rest of P2. **F-14** is the natural next one - it is the only finding that lint now
+   reports on every single run (`react-hooks/exhaustive-deps`, deliberately left as a warning),
+   so it will be visible until it is fixed.
 
 ### Environment constraints hit during remediation
 
@@ -237,9 +252,15 @@ Not in the original audit. Numbered `N-xx` to keep them distinct from the audit'
 | N-04 | MEDIUM | Player of the Game fell back to the home team on a drawn game in both `cardSpecs.ts` and `FinalScoreScreen.tsx`, hiding the away side's best performance entirely. | FIXED (merged) |
 | N-05 | MEDIUM | Sponsor promo taps are recorded server-side (`onPromoTap` → `bump_promo_tap`, `update promos set taps = taps + 1`) and were declared on neither store form. Aggregate, no user id, but still advertising-interaction data. | FIXED (merged) |
 | N-06 | LOW | The app-wide `trackMisses` setting was dead code: per-league and per-game columns had replaced it, `AppSettings` was marked LEGACY, and `SET_SETTINGS` had no dispatcher anywhere. Removed, with the old global backfilled onto pre-migration leagues first. | FIXED (merged) |
-| N-07 | LOW | `tests/run.js` imports `execSync` and never uses it. | OPEN |
+| N-07 | LOW | `tests/run.js` imports `execSync` and never uses it. | FIXED (PR) |
 | N-08 | INFO | `src/screens/LiveGameScreen.tsx` uses `[state, leagueId, gameId]` as a `useMemo` dependency, so the box score recomputes on any app-wide state change. This is F-14, confirmed in passing while working in the file. | OPEN (see F-14) |
 | N-09 | INFO | `showNextMilestone` in `LiveGameScreen` schedules `setTimeout` with no unmount cleanup. This is F-28, confirmed in passing. | OPEN (see F-28) |
+| N-11 | HIGH | `EditTeamScreen` calls `useState` **after** an early `return` (`if (!league || !team)`). React identifies hooks by call order, so the hook count changes between renders: mount before the store has the league (it is empty until the first `HYDRATE` lands in synced mode), then re-render once it arrives, and React throws "Rendered more hooks than during the previous render". Reachable by opening the screen on a cold start with sync enabled. Found by `react-hooks/rules-of-hooks` on its first ever run - nothing else in the project could have caught it. | FIXED (PR) |
+| N-12 | LOW | `PlayerProfileScreen` defines `Big` and `Avg` twice: as arrow consts inside the component (which shadow, and are what actually renders) and again at module scope. The module-level pair was dead, and its comment claimed they were "used in the on-screen layout" - so editing them changed nothing on screen. Removed; behaviour identical. | FIXED (PR) |
+| N-13 | LOW | `tests/run.js` discarded the caught error on a bundling failure and printed a fixed guess about network access, so a syntax error or a bad `--alias` target reported the wrong cause. Now prints `e.message`. | FIXED (PR) |
+| N-14 | INFO | `ui.tsx`'s `OnboardingSheet` accepts an `isSignedIn` prop and never reads it, so the first-run copy is identical for guests and signed-in users despite callers passing the flag. Left in the prop type (the sheet is the obvious place to vary that copy) but removed from the destructuring. Latent incomplete feature, not a defect. | OPEN |
+| N-15 | HIGH | Adding the F-09 lint dependencies produced a `package-lock.json` that **npm 11 accepted and npm 10 rejected** (`Missing: @emnapi/core@1.11.3 from lock file`). npm 11 recorded those packages only as nested entries under `@unrs/resolver-binding-wasm32-wasi` (`eslint-config-expo` -> `eslint-import-resolver-typescript` -> `unrs-resolver`); npm 10 also wants the hoisted copies. `node-version: '20'` means CI runs npm 10, so **all three CI jobs failed at `npm ci`** while `npm ci --dry-run` passed locally on npm 11 - a false green. Regenerated with `npx npm@10 install`, which records the superset, and verified under both majors. No direct dependency version changed. | FIXED (PR) |
+| N-16 | MEDIUM | `.github/workflows/ci.yml` pins `node-version: '20'`. Node 20 left maintenance LTS in April 2026, so CI verifies every pull request against an unsupported runtime, and its bundled npm 10 is what caused N-15. Expo SDK 54 supports Node 20 and 22. Not changed as part of F-09: moving the version changes what CI verifies against and deserves its own PR and its own green run, rather than being bundled into a lint change. | OPEN |
 | N-10 | HIGH | Merge `62fb42b` (`main` into `chore/store-compliance-and-privacy-policy`) resolved its only conflict by concatenating both sides of `tests/static.test.js` but dropping the `}` closing CHECK 15 and the `// ---` separator opening CHECK 14. The file stopped parsing (`TS1005`, then `SyntaxError: Unexpected end of input`), so `node tests/run.js` failed twice and **the static suite ran zero checks** - including the CHECK 15 assertions that this very branch added to guard the store declarations and the privacy policy. Fixed forward in `ef766b2`; the resolution was then verified to be the exact union of both parents, not merely parseable. | FIXED (merged) |
 
 ### Verification evidence
@@ -295,12 +316,19 @@ expo config introspect  PASS - RECORD_AUDIO and CAMERA both carry tools:node="re
 expo export (android)   PASS - exit 0, 3.63 MB Hermes bundle; the CI "bundle" job's command
 SQL slice anchors       PASS - all 5 schema.sql sections resolve, every @requires names a real one
 
-GitHub Actions          NOT VERIFIABLE HERE - no gh CLI, and the repo is private so the
-                        unauthenticated REST API 404s. Check runs must be read in the browser.
-                        Do not record a CI result in this document from any other source.
-SQL settings_backfill   NOT RUN locally - no psql and no Docker on the dev machine. CI is their
-                        only execution; PR #7's run is the first. Only the anchor resolution
-                        above was checked locally, not the assertions.
+GitHub Actions          PASS - run 33168091475 on 1a813a4 (PR #9), all three jobs green:
+                        Lint (ESLint) 30s, Types/reducer/sync/static/database 56s,
+                        Bundle (Metro + Hermes) 47s. Read from the Actions REST API, which
+                        became reachable when the repository was made public; the job and
+                        step conclusions are the source, not an inference.
+SQL settings_backfill   PASS - first execution anywhere. The `verify` job's "Run regression
+                        suite" step succeeded with ITALA_REQUIRE_DB=1 set. That flag makes
+                        tests/sql/run.js exit 1 rather than skip when no database answers,
+                        and tests/run.js:108 counts that exit and fails the run, so a green
+                        step means the SQL suites ran against the postgres:16-alpine service
+                        and passed. The per-suite counts are in the `test-output` artifact
+                        on that run; downloading it needs authentication, so the counts
+                        themselves have not been read here.
 On-device screen reader NOT RUN - no device or emulator available
 Prebuild / built APK    NOT RUN - manifest verified by introspection only
 ```
@@ -338,15 +366,15 @@ Each bug fix was confirmed to fail **before** the fix rather than assumed:
 
 | ID | Severity | Category | Finding | Confidence | Status |
 |----|----------|----------|---------|------------|------------|
-| F-01 | CRITICAL | Security | Plaintext admin password committed to git history in the initial commit | CONFIRMED | PARTIAL |
-| F-02 | HIGH | Security / Data Integrity | Live production Supabase URL + anon key tracked in git (`bpbl.txt`) | CONFIRMED | PARTIAL |
+| F-01 | CRITICAL | Security | Plaintext admin password committed to git history in the initial commit | CONFIRMED | FIXED (risk accepted) |
+| F-02 | HIGH | Security / Data Integrity | Live production Supabase URL + anon key tracked in git (`bpbl.txt`) | CONFIRMED | FIXED |
 | F-03 | HIGH | CI/CD | No CI pipeline runs tests, lint, type-check, or build on PRs | CONFIRMED | FIXED (merged) |
 | F-04 | HIGH | Correctness / Data Integrity | `DELETE_EVENT` doesn't reverse foul-out auto-bench, unlike `UNDO_EVENT` | CONFIRMED | FIXED (merged) |
 | F-05 | CRITICAL | Accessibility | Live two-tap stat entry has no screen-reader announcements (no live regions) | CONFIRMED | FIXED (merged) |
 | F-06 | HIGH | Accessibility | No accessibility roles/labels anywhere in the app, including the stat pad | CONFIRMED | FIXED (merged) |
 | F-07 | HIGH | Accessibility | Game deletion is swipe-gesture-only, with no non-gesture fallback | HIGH CONFIDENCE | FIXED (merged) |
 | F-08 | MEDIUM | CI/CD / Testing | `tests/run.js` cannot run natively on Windows (`execFileSync('npx')` ENOENT) | CONFIRMED | FIXED (merged) |
-| F-09 | MEDIUM | CI/CD | No ESLint/Prettier configuration exists anywhere in the project | CONFIRMED | OPEN |
+| F-09 | MEDIUM | CI/CD | No ESLint/Prettier configuration exists anywhere in the project | CONFIRMED | PARTIAL |
 | F-10 | MEDIUM | Mobile / Security | Unused, unexplained `RECORD_AUDIO` Android permission | CONFIRMED | FIXED (merged) |
 | F-11 | MEDIUM | Correctness | Tied final scores are silently recorded as home-team wins | CONFIRMED | FIXED (merged) |
 | F-12 | MEDIUM | Correctness | `rosterParse.ts` misparses team names/headers under common real-world paste shapes | HIGH CONFIDENCE | OPEN |
@@ -376,6 +404,41 @@ Each bug fix was confirmed to fail **before** the fix rather than assumed:
 ## Critical Findings
 
 ### F-01: Plaintext admin password committed to git history
+
+> **RISK ACCEPTED - 28/08/2026, by the operator (repository owner).** F-01 is closed on this basis
+> rather than by further remediation, because no remediation available to this repository can reach
+> the exposure.
+>
+> **What was exposed:** the plaintext Super Admin password, committed in the initial commit of a
+> **different repository** - the earlier, public predecessor of this project. It is not in this
+> repository's history: `iTala-official` was started fresh, and its root commit is `3fab4c8`
+> ("Fresh history: remove leaked secrets from git"). 21 commits, one root.
+>
+> **Why acceptance is the only option:** the exposure lives in another repository's history, which
+> cannot be rewritten from here, and any clone or fork taken from it retains the value regardless.
+> Git history rewriting is not a containment mechanism for a credential that has already been
+> published - rotation is. So the decision is not "rewrite or accept", it is "rotate and accept".
+>
+> **Why it is a reasonable acceptance:** the credential is dead. The password has been rotated
+> (confirmed 28/08/2026), so the published value no longer authenticates anything. The design it
+> guarded has also changed: `supabase/schema.sql` now stores a bcrypt hash rather than a plaintext
+> column, `elevate_to_admin` throttles guesses through `admin_attempts` with a 5-attempt /
+> 15-minute lockout, and the comparison is constant-time. That matters more than it might appear,
+> because the RPC is granted to `anon` and the anon key is inlined into the JS bundle by Metro -
+> so the guess rate an attacker gets is whatever the database allows, from anywhere, with no app
+> involved. CHECK 10 fails the build if a plaintext literal reappears in the client, the schema,
+> `app.json`, `.env.example` or the docs.
+>
+> **One thing to know, since this repository is now public:** the old password value is still
+> present in this tree on purpose, in three `tests/sql/` fixtures - `run.js`'s `legacy_admin`
+> section, `admin_secret.test.sql` and `admin_upgrade.test.sql`. They reproduce the pre-hardening
+> layout so the upgrade path can be tested against the real shipped SQL, and they are deliberately
+> outside CHECK 10's file list. This is safe **only because the value is rotated and dead**. If it
+> were ever reused anywhere, those fixtures would republish it.
+>
+> **Residual risk:** an attacker who found the old value in the predecessor repository learns the
+> project's historical password-choice habits, and nothing more. No live credential is recoverable
+> from it.
 
 **Severity:** CRITICAL
 **Category:** Security - secrets management
@@ -519,6 +582,40 @@ case 'DELETE_EVENT':
 ---
 
 ### F-09: No ESLint/Prettier configuration exists
+
+> **Updated 28/08/2026. PARTIAL.** ESLint is in place and gating; the Prettier half is not.
+>
+> **Done:** `eslint.config.js` (flat config) on `eslint-config-expo` 10.x - the SDK 54-era release,
+> since later versions renumbered to track SDK numbers and 55.x+ pull the wrong plugin set - plus
+> `eslint-config-prettier` so the two tools cannot disagree about the same line. `npm run lint`,
+> `lint:fix`, `format` and `format:check` scripts, and a dedicated `lint` CI job running on
+> `pull_request`. CHECK 16 guards that the config, the script and the workflow step all still exist,
+> and that unused symbols stay an *error* rather than drifting back to a warning.
+>
+> **The first run reported 59 problems, and all were fixed rather than suppressed.** That is where
+> the value turned out to be: it surfaced **N-11**, a genuine crash (`useState` after an early
+> return in `EditTeamScreen`, which throws "Rendered more hooks than during the previous render"
+> once a league arrives via `HYDRATE`), plus N-07, N-12 and N-13. Nothing else in the project could
+> have found N-11 - `react-hooks/rules-of-hooks` had never run.
+>
+> **Two deliberate relaxations, both justified rather than convenient:**
+> - `react/no-unescaped-entities` **off**. It exists to stop a bare apostrophe breaking HTML
+>   parsing. RN's `<Text>` renders string children literally, so `"Player's"` is correct as written
+>   and escaping it would show the user a literal `&apos;`. It accounted for 18 of the 59.
+> - `react-hooks/exhaustive-deps` **warn**. Its only two hits are F-14. Correcting a dependency
+>   array changes when a memo recomputes, which needs the F-14 work and its own tests, not a
+>   drive-by edit in a tooling PR. Left visible on every run so it is not forgotten.
+>
+> **CI history, for honesty:** the first push of this work failed all three CI jobs at `npm ci`
+> (N-15). The lint job itself had never run. Nothing in the ESLint work was wrong; the lockfile
+> was. Recorded because "the linter is green locally" was not the same as "CI is green", which is
+> the whole point of F-03.
+>
+> **Not done:** Prettier is installed and configured but **not applied and not gated**. It would
+> reformat all 54 files in the repo; that is a mechanical commit of its own, and it carries a real
+> hazard worth flagging - CHECK 1-16 match exact source strings in places, so a reformat can make a
+> check vacuous without failing it. Three CHECK 14 needles were spot-checked and survive Prettier,
+> but the full set has not been verified. `npm run format:check` currently reports 54 files.
 
 **Severity:** MEDIUM
 **Category:** CI/CD
@@ -923,9 +1020,16 @@ This is the area with the largest gap between the app's actual quality elsewhere
 
 ### P0 - Immediate
 
-> **Status:** item 1 **PARTIAL** (history rewritten; rotation not verifiable from the repo),
-> item 2 **PARTIAL** (`bpbl.txt` gone from tree and history; anon-key rotation not verifiable),
-> item 3 **DONE and merged** (PR #1).
+> **Status (updated 28/08/2026): all three P0 items are closed.**
+>
+> Item 1 (F-01) **FIXED (risk accepted)** - see the risk acceptance under F-01 below.
+> Item 2 (F-02) **FIXED** - `bpbl.txt` is gone from the tree and this repository's history, and the
+> anon key it exposed has been rotated.
+> Item 3 **DONE and merged** (PR #1).
+>
+> Note on evidence: both rotations happen in the Supabase dashboard and **cannot be verified from
+> this repository**. These entries record the operator's confirmation, which is attestation rather
+> than something the test suite proves.
 
 **1. Confirm/complete the admin-password rotation and decide on git-history remediation (F-01).**
 Problem: a plaintext admin password is permanently in git history from the initial commit. Solution: verify `set_admin_password()` was run on every project that used it; decide whether to rewrite history. Expected benefit: closes a credential-compromise risk that has likely already been substantially reduced by the code-level fix, but is not fully closed until rotation is confirmed. Risk of change: history rewriting requires a coordinated force-push; low risk if skipped in favour of rotation-only. Suggested tests: none needed beyond confirming `tests/sql/admin_secret.test.sql` still passes after any change.
@@ -959,7 +1063,7 @@ Problem: ties silently recorded as home wins in three places. Solution: treat ti
 
 ### P2 - Medium Priority
 
-**8.** Add ESLint/Prettier and wire into CI (F-09). - **OPEN, and now the next item of work.** Recommended as the first P2 item now that CI exists and every P0/P1 fix is merged.
+**8.** Add ESLint/Prettier and wire into CI (F-09). - **PARTIAL.** ESLint is in place (`eslint.config.js` on `eslint-config-expo` 10.x, matched to SDK 54) with `npm run lint` gating a dedicated CI job, and all 59 initial violations were fixed rather than suppressed - which surfaced one genuine crash (N-11) and three smaller defects (N-07, N-12, N-13). Prettier is installed and configured with `npm run format` / `format:check`, but is **not applied and not gated**: it would rewrite all 54 files, which is a mechanical commit of its own. One rule was deliberately relaxed - `react/no-unescaped-entities`, which is an HTML concern that does not apply to RN `<Text>` - and one deliberately left as a warning, `react-hooks/exhaustive-deps`, whose only two hits are F-14.
 **9.** Remove or justify the `RECORD_AUDIO` permission (F-10). - **DONE, differently.** The permission does not come from `app.json`; `expo-image-picker`'s config plugin adds it. Fixed with `microphonePermission: false` / `cameraPermission: false`, which also blocks `CAMERA`.
 **10.** Fix `rosterParse.ts` header-detection edge cases (F-12), with accompanying parser tests.
 **11.** Run `npm audit fix` for the non-breaking subset; schedule the `expo@57` migration deliberately (F-13).

@@ -1,12 +1,12 @@
 import React, { useRef, useState } from 'react';
-import { View, ScrollView, Pressable, Platform, Share, ActivityIndicator } from 'react-native';
+import { View, ScrollView, Pressable, Share, ActivityIndicator } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Sharing from 'expo-sharing';
 import { Screen, Txt, Card, Segmented, Button, Pill, TeamBadge, LivePip, MiniWordmark, SignInModal, SponsorMark } from '../components/ui';
 import { useStore, useLeague } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
-import { colors, space, radius, font, brandGradient, wordmarkGradient } from '../theme';
+import { colors, space, font, wordmarkGradient } from '../theme';
 import { ScreenProps } from '../navigation';
 import { teamBoxScore, gameScore, lineScore, statPlayersOfGame } from '../lib/stats';
 import { pct } from '../lib/format';

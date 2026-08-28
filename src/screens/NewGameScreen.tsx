@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Pressable, ScrollView } from 'react-native';
+import { View, ScrollView } from 'react-native';
 import { Screen, Txt, Card, Button, Field, TeamBadge } from '../components/ui';
 import { useStore, useLeague } from '../store/StoreProvider';
 import { colors, space } from '../theme';

@@ -1,4 +1,4 @@
-import { League, GameEvent, StatLine, Game, Team, EventType } from '../types';
+import { League, StatLine, Game, Team, EventType } from '../types';
 import { pct } from './format';
 import { DEFAULT_FOUL_OUT } from '../theme';
 

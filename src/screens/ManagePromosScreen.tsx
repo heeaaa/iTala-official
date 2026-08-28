@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { View, ScrollView, Pressable, Alert, TextInput, Image } from 'react-native';
+import { View, Pressable, Alert, Image } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Screen, Txt, Card, Button, Toggle, Field } from '../components/ui';
 import { useAdmin } from '../store/AdminProvider';
-import { colors, space, radius, font } from '../theme';
+import { colors, space, radius } from '../theme';
 import { ScreenProps } from '../navigation';
 import { Promo } from '../types';
 import { usePromos } from '../lib/usePromos';
@@ -12,7 +12,7 @@ import { upsertPromo, deletePromo } from '../lib/promos';
 const uid = () => `promo_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 
 // Super-Admin-only screen to create and manage sponsor promos.
-export default function ManagePromosScreen({ navigation }: ScreenProps<'ManagePromos'>) {
+export default function ManagePromosScreen(_props: ScreenProps<'ManagePromos'>) {
   const { isAdmin } = useAdmin();
   const { promos, reload } = usePromos();
   const [editing, setEditing] = useState<Promo | null>(null);
