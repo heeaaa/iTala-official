@@ -336,6 +336,10 @@ for (const f of srcFiles) {
      'the venue field is user-typed text, and declaring device location would be false');
   ok('DEPLOYMENT.md still refuses "Data Not Collected"',
      /does collect data/.test(deploy));
+}
+
+
+// ---------------------------------------------------------------------------
 // CHECK 14 - accessibility floor. The app shipped with exactly one
 // accessibilityLabel across nineteen screens, and the live two-tap stat flow
 // announced nothing at all, which made its single most-used interaction
