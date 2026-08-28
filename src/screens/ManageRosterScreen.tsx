@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, TextInput, Pressable, ScrollView } from 'react-native';
-import { Screen, Txt, Card, Button, Pill, Field, TeamBadge } from '../components/ui';
+import { Screen, Txt, Card, Button, Pill, TeamBadge } from '../components/ui';
 import { useStore, useLeague } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
 import { colors, space, radius, font } from '../theme';

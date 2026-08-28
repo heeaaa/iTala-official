@@ -215,7 +215,7 @@ export function Card({ children, style, onPress, accessibilityLabel, accessibili
     // order of a dense card is rarely the useful one.
     accessibilityLabel?: string;
     accessibilityHint?: string;
-    accessibilityActions?: ReadonlyArray<AccessibilityActionInfo>;
+    accessibilityActions?: readonly AccessibilityActionInfo[];
     onAccessibilityAction?: (event: AccessibilityActionEvent) => void;
   }) {
   const inner = (
@@ -534,7 +534,7 @@ export function InviteCodeModal({ visible, title = 'Enter invite code', message,
 
 // First-run explainer — a friendly, dismissible welcome that demystifies the
 // guest/sign-in model and the invite-code system before the user hits it cold.
-export function OnboardingSheet({ visible, isSignedIn, onClose, onNeverShow }:
+export function OnboardingSheet({ visible, onClose, onNeverShow }:
   { visible: boolean; isSignedIn: boolean; onClose: () => void; onNeverShow: () => void }) {
   const Row = ({ icon, title, body }: { icon: string; title: string; body: string }) => (
     <View style={{ flexDirection: 'row', gap: 12, marginBottom: space(3) }}>

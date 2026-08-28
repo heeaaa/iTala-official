@@ -105,7 +105,8 @@ export async function fetchAllState(sb: SupabaseClient): Promise<Partial<AppStat
 
 // Logs PostgREST/RLS-style errors from a Supabase response. Network failures
 // throw and are caught below; row-level rejections come back in .error.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// `any` is deliberate: this only ever reads .error off an arbitrary PostgREST
+// response shape, and narrowing it would mean restating every response type.
 function check(label: string, res: { error: any }): void {
   if (res?.error) {
     console.warn(`[sync] ${label} rejected:`, res.error.message ?? res.error);

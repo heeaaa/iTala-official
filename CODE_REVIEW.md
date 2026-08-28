@@ -122,9 +122,9 @@ Status values used in the Findings Summary below:
 | `PARTIAL` | Partly addressed, or fixed in code but with an unverified step outside the repo. |
 | `OPEN` | Not started. |
 
-Counts: **10 fixed** (all merged), **5 partial**, **16 open**, 1 informational.
-All P0 and P1 items are addressed, and **no CRITICAL or HIGH finding remains open**. P2 and P3 are
-largely untouched: of the 16 open findings, 10 are MEDIUM and 6 are LOW.
+Counts: **10 fixed** (all merged), **6 partial**, **15 open**, 1 informational.
+All P0 and P1 items are addressed, and **no CRITICAL or HIGH finding remains open**. P2 has started
+(F-09); of the 15 open findings, 9 are MEDIUM and 6 are LOW.
 
 > The previous revision of this section read "11 fixed ... 15 open". That was an arithmetic slip,
 > not a change in scope - the table has always held 31 numbered findings plus F-32. The counts
@@ -170,8 +170,14 @@ What is actually left, in order of consequence:
 3. **Do the on-device screen-reader pass** for F-05/F-06/F-07 (`tests/MANUAL-REGRESSION.md`
    section P6). This is the largest untested surface in the batch: the semantics are in place and
    guarded by CHECK 14, but nothing has confirmed a real screen reader reads them sensibly.
-4. Then P2, starting with **F-09 (ESLint/Prettier)** since CI is the natural place to enforce it
-   and every later change benefits.
+4. **Land the Prettier reformat** and turn on the `format:check` gate. F-09's ESLint half is done
+   and gating in CI; the formatting half is not, because Prettier rewrites all 54 files in the repo
+   and that belongs in its own mechanical commit. Whoever does it must re-verify CHECK 1-16
+   afterwards: several of those checks match exact source strings, so reformatting can silently
+   make one vacuous.
+5. Then the rest of P2. **F-14** is the natural next one - it is the only finding that lint now
+   reports on every single run (`react-hooks/exhaustive-deps`, deliberately left as a warning),
+   so it will be visible until it is fixed.
 
 ### Environment constraints hit during remediation
 
@@ -237,9 +243,13 @@ Not in the original audit. Numbered `N-xx` to keep them distinct from the audit'
 | N-04 | MEDIUM | Player of the Game fell back to the home team on a drawn game in both `cardSpecs.ts` and `FinalScoreScreen.tsx`, hiding the away side's best performance entirely. | FIXED (merged) |
 | N-05 | MEDIUM | Sponsor promo taps are recorded server-side (`onPromoTap` → `bump_promo_tap`, `update promos set taps = taps + 1`) and were declared on neither store form. Aggregate, no user id, but still advertising-interaction data. | FIXED (merged) |
 | N-06 | LOW | The app-wide `trackMisses` setting was dead code: per-league and per-game columns had replaced it, `AppSettings` was marked LEGACY, and `SET_SETTINGS` had no dispatcher anywhere. Removed, with the old global backfilled onto pre-migration leagues first. | FIXED (merged) |
-| N-07 | LOW | `tests/run.js` imports `execSync` and never uses it. | OPEN |
+| N-07 | LOW | `tests/run.js` imports `execSync` and never uses it. | FIXED (PR) |
 | N-08 | INFO | `src/screens/LiveGameScreen.tsx` uses `[state, leagueId, gameId]` as a `useMemo` dependency, so the box score recomputes on any app-wide state change. This is F-14, confirmed in passing while working in the file. | OPEN (see F-14) |
 | N-09 | INFO | `showNextMilestone` in `LiveGameScreen` schedules `setTimeout` with no unmount cleanup. This is F-28, confirmed in passing. | OPEN (see F-28) |
+| N-11 | HIGH | `EditTeamScreen` calls `useState` **after** an early `return` (`if (!league || !team)`). React identifies hooks by call order, so the hook count changes between renders: mount before the store has the league (it is empty until the first `HYDRATE` lands in synced mode), then re-render once it arrives, and React throws "Rendered more hooks than during the previous render". Reachable by opening the screen on a cold start with sync enabled. Found by `react-hooks/rules-of-hooks` on its first ever run - nothing else in the project could have caught it. | FIXED (PR) |
+| N-12 | LOW | `PlayerProfileScreen` defines `Big` and `Avg` twice: as arrow consts inside the component (which shadow, and are what actually renders) and again at module scope. The module-level pair was dead, and its comment claimed they were "used in the on-screen layout" - so editing them changed nothing on screen. Removed; behaviour identical. | FIXED (PR) |
+| N-13 | LOW | `tests/run.js` discarded the caught error on a bundling failure and printed a fixed guess about network access, so a syntax error or a bad `--alias` target reported the wrong cause. Now prints `e.message`. | FIXED (PR) |
+| N-14 | INFO | `ui.tsx`'s `OnboardingSheet` accepts an `isSignedIn` prop and never reads it, so the first-run copy is identical for guests and signed-in users despite callers passing the flag. Left in the prop type (the sheet is the obvious place to vary that copy) but removed from the destructuring. Latent incomplete feature, not a defect. | OPEN |
 | N-10 | HIGH | Merge `62fb42b` (`main` into `chore/store-compliance-and-privacy-policy`) resolved its only conflict by concatenating both sides of `tests/static.test.js` but dropping the `}` closing CHECK 15 and the `// ---` separator opening CHECK 14. The file stopped parsing (`TS1005`, then `SyntaxError: Unexpected end of input`), so `node tests/run.js` failed twice and **the static suite ran zero checks** - including the CHECK 15 assertions that this very branch added to guard the store declarations and the privacy policy. Fixed forward in `ef766b2`; the resolution was then verified to be the exact union of both parents, not merely parseable. | FIXED (merged) |
 
 ### Verification evidence
@@ -346,7 +356,7 @@ Each bug fix was confirmed to fail **before** the fix rather than assumed:
 | F-06 | HIGH | Accessibility | No accessibility roles/labels anywhere in the app, including the stat pad | CONFIRMED | FIXED (merged) |
 | F-07 | HIGH | Accessibility | Game deletion is swipe-gesture-only, with no non-gesture fallback | HIGH CONFIDENCE | FIXED (merged) |
 | F-08 | MEDIUM | CI/CD / Testing | `tests/run.js` cannot run natively on Windows (`execFileSync('npx')` ENOENT) | CONFIRMED | FIXED (merged) |
-| F-09 | MEDIUM | CI/CD | No ESLint/Prettier configuration exists anywhere in the project | CONFIRMED | OPEN |
+| F-09 | MEDIUM | CI/CD | No ESLint/Prettier configuration exists anywhere in the project | CONFIRMED | PARTIAL |
 | F-10 | MEDIUM | Mobile / Security | Unused, unexplained `RECORD_AUDIO` Android permission | CONFIRMED | FIXED (merged) |
 | F-11 | MEDIUM | Correctness | Tied final scores are silently recorded as home-team wins | CONFIRMED | FIXED (merged) |
 | F-12 | MEDIUM | Correctness | `rosterParse.ts` misparses team names/headers under common real-world paste shapes | HIGH CONFIDENCE | OPEN |
@@ -519,6 +529,35 @@ case 'DELETE_EVENT':
 ---
 
 ### F-09: No ESLint/Prettier configuration exists
+
+> **Updated 28/08/2026. PARTIAL.** ESLint is in place and gating; the Prettier half is not.
+>
+> **Done:** `eslint.config.js` (flat config) on `eslint-config-expo` 10.x - the SDK 54-era release,
+> since later versions renumbered to track SDK numbers and 55.x+ pull the wrong plugin set - plus
+> `eslint-config-prettier` so the two tools cannot disagree about the same line. `npm run lint`,
+> `lint:fix`, `format` and `format:check` scripts, and a dedicated `lint` CI job running on
+> `pull_request`. CHECK 16 guards that the config, the script and the workflow step all still exist,
+> and that unused symbols stay an *error* rather than drifting back to a warning.
+>
+> **The first run reported 59 problems, and all were fixed rather than suppressed.** That is where
+> the value turned out to be: it surfaced **N-11**, a genuine crash (`useState` after an early
+> return in `EditTeamScreen`, which throws "Rendered more hooks than during the previous render"
+> once a league arrives via `HYDRATE`), plus N-07, N-12 and N-13. Nothing else in the project could
+> have found N-11 - `react-hooks/rules-of-hooks` had never run.
+>
+> **Two deliberate relaxations, both justified rather than convenient:**
+> - `react/no-unescaped-entities` **off**. It exists to stop a bare apostrophe breaking HTML
+>   parsing. RN's `<Text>` renders string children literally, so `"Player's"` is correct as written
+>   and escaping it would show the user a literal `&apos;`. It accounted for 18 of the 59.
+> - `react-hooks/exhaustive-deps` **warn**. Its only two hits are F-14. Correcting a dependency
+>   array changes when a memo recomputes, which needs the F-14 work and its own tests, not a
+>   drive-by edit in a tooling PR. Left visible on every run so it is not forgotten.
+>
+> **Not done:** Prettier is installed and configured but **not applied and not gated**. It would
+> reformat all 54 files in the repo; that is a mechanical commit of its own, and it carries a real
+> hazard worth flagging - CHECK 1-16 match exact source strings in places, so a reformat can make a
+> check vacuous without failing it. Three CHECK 14 needles were spot-checked and survive Prettier,
+> but the full set has not been verified. `npm run format:check` currently reports 54 files.
 
 **Severity:** MEDIUM
 **Category:** CI/CD
@@ -959,7 +998,7 @@ Problem: ties silently recorded as home wins in three places. Solution: treat ti
 
 ### P2 - Medium Priority
 
-**8.** Add ESLint/Prettier and wire into CI (F-09). - **OPEN, and now the next item of work.** Recommended as the first P2 item now that CI exists and every P0/P1 fix is merged.
+**8.** Add ESLint/Prettier and wire into CI (F-09). - **PARTIAL.** ESLint is in place (`eslint.config.js` on `eslint-config-expo` 10.x, matched to SDK 54) with `npm run lint` gating a dedicated CI job, and all 59 initial violations were fixed rather than suppressed - which surfaced one genuine crash (N-11) and three smaller defects (N-07, N-12, N-13). Prettier is installed and configured with `npm run format` / `format:check`, but is **not applied and not gated**: it would rewrite all 54 files, which is a mechanical commit of its own. One rule was deliberately relaxed - `react/no-unescaped-entities`, which is an HTML concern that does not apply to RN `<Text>` - and one deliberately left as a warning, `react-hooks/exhaustive-deps`, whose only two hits are F-14.
 **9.** Remove or justify the `RECORD_AUDIO` permission (F-10). - **DONE, differently.** The permission does not come from `app.json`; `expo-image-picker`'s config plugin adds it. Fixed with `microphonePermission: false` / `cameraPermission: false`, which also blocks `CAMERA`.
 **10.** Fix `rosterParse.ts` header-detection edge cases (F-12), with accompanying parser tests.
 **11.** Run `npm audit fix` for the non-breaking subset; schedule the `expo@57` migration deliberately (F-13).

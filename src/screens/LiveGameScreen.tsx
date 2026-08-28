@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useCallback } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { useKeepAwake } from 'expo-keep-awake';
 import { View, Pressable, ScrollView, Alert, Modal, TextInput, ActivityIndicator, AccessibilityInfo } from 'react-native';
 import { Screen, Txt, Button, Segmented, TeamBadge, LivePip, PromoStrip } from '../components/ui';
@@ -290,8 +290,6 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   const lastEvent = events[events.length - 1];
 
   const nameOf = (id: string | null) => id ? (league.players.find(p => p.id === id)?.name ?? 'Player') : activeTeam.name;
-  const homeBoxNow = () => teamBoxScore(league, gameId, game.homeTeamId);
-  const awayBoxNow = () => teamBoxScore(league, gameId, game.awayTeamId);
 
   const log = (playerId: string | null) => {
     if (!armed) return;

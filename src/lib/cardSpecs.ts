@@ -35,7 +35,6 @@ export function gameCardOptions(league: League, gameId: string, playerId: string
   const home = league.teams.find(t => t.id === game.homeTeamId);
   const away = league.teams.find(t => t.id === game.awayTeamId);
   const sc = gameScore(league, game);
-  const opp = team?.id === game.homeTeamId ? away : home;
   const dateMs = game.finishedAt ?? game.scheduledAt;
   const contextLine = `${home?.name ?? 'Home'} ${sc.home}–${sc.away} ${away?.name ?? 'Away'}${dateMs ? ` · ${dateLabel(dateMs)}` : ''}`;
 

@@ -1,7 +1,5 @@
 import React, { useRef, useState } from 'react';
 import { View, FlatList, Pressable, Alert, TextInput, ScrollView, Dimensions, RefreshControl, ActivityIndicator } from 'react-native';
-
-const SCREEN_W = Dimensions.get('window').width;
 import {
   Screen, Txt, Card, Button, Pill, Empty, Wordmark, PasswordModal, LivePip,
   ProfileButton, ProfileSheet, InviteCodeModal, SyncBadge, OnboardingSheet, PromoCard,
@@ -11,6 +9,8 @@ import { useStore } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
 import { colors, space, font, radius } from '../theme';
 import { ScreenProps } from '../navigation';
+
+const SCREEN_W = Dimensions.get('window').width;
 
 // Tap the wordmark this many times (with <1.5s between taps) to reveal the
 // hidden password lock — the emergency admin backup when Google sign-in or
@@ -23,7 +23,7 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
   const [onboardingClosed, setOnboardingClosed] = useState(false);
   const { activePromos, reload: reloadPromos } = usePromos();
   const onRefresh = async () => { setRefreshing(true); try { await Promise.all([refresh(), reloadPromos()]); } finally { setRefreshing(false); } };
-  const { role, isAdmin, user, unlock, lock, signOut, signInWithGoogle, appleAvailable, signInWithApple, authBusy, lastError, canScore, isOwner, redeemCode, createCreationCode, canScoreGame } = useAdmin();
+  const { role, isAdmin, user, unlock, lock, signOut, signInWithGoogle, appleAvailable, signInWithApple, authBusy, lastError, isOwner, redeemCode, createCreationCode, canScoreGame } = useAdmin();
   const [askPw, setAskPw] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);

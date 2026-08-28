@@ -26,6 +26,11 @@ failures. The CI workflow sets it, so the database suites are mandatory there.
 
 `.github/workflows/ci.yml` runs on every pull request and every push to `main`:
 
+- **lint** - `npm ci`, then `npm run lint`. Its own job rather than a step inside
+  `verify`, so a lint failure reports in about a minute instead of behind a
+  Postgres service and the whole regression suite, and a lint failure and a test
+  failure are both visible in the same run. `npm run format:check` is
+  deliberately **not** wired in yet - see the note below.
 - **verify** - `npm ci`, then `node tests/run.js` against a `postgres:16-alpine`
   service with `ITALA_REQUIRE_DB=1`, so the type check, all four JS suites and
   the wired SQL suites must pass. The console output is kept as a `test-output`
@@ -40,6 +45,39 @@ A note for Windows contributors: `npm test` runs natively, no workaround needed.
 `EINVAL` as `npx.cmd` on Node 20.12 and later), so the runner resolves npm's own
 `npx-cli.js` and runs it under the current `node` binary. `static.test.js`
 CHECK 12 stops that regressing.
+
+## Linting and formatting
+
+```text
+npm run lint          eslint .            fails on any error
+npm run lint:fix      eslint . --fix      auto-fixable subset only
+npm run format        prettier --write .  NOT yet applied repo-wide
+npm run format:check  prettier --check .  currently reports 54 files
+```
+
+`eslint.config.js` builds on `eslint-config-expo` 10.x, which is the SDK 54-era
+release - later versions renumbered to track SDK numbers, so 55.x and above pull
+the plugin set for a different SDK. `eslint-config-prettier` is applied last so
+ESLint never argues with Prettier about the same line.
+
+Two rules are set deliberately, both explained inline in the config:
+
+- `react/no-unescaped-entities` is **off**. It stops a bare apostrophe breaking
+  HTML parsing; RN's `<Text>` renders string children literally, so escaping
+  would render a literal `&apos;` to the user.
+- `react-hooks/exhaustive-deps` is a **warning**, not an error. Its only two hits
+  are CODE_REVIEW.md F-14, and changing a dependency array changes when a memo
+  recomputes - a behaviour change that needs its own tests. It stays visible on
+  every run until F-14 lands.
+
+Everything else that fired on the first run was fixed rather than suppressed, so
+the gate starts from zero errors. **Prettier is configured but not applied**: it
+would reformat all 54 files, so that belongs in its own mechanical commit. When
+someone does it, re-verify the CHECK blocks afterwards - several match exact
+source strings, so a reformat can make a check vacuous without failing it.
+
+CHECK 16 guards that the config, the `lint` script and the CI step all still
+exist, and that unused symbols stay an error rather than drifting to a warning.
 
 ## What is covered
 
@@ -95,6 +133,15 @@ converge on an ordinary sequence of stats and undos.
   while the app has quietly stopped calling them
 - no hard-coded password literal in the schema, the client, or the docs; the
   schema stores a hash, seeds no usable secret, and throttles attempts
+- CI actually verifies pull requests: a workflow runs `tests/run.js` on
+  `pull_request` with `ITALA_REQUIRE_DB=1`, and another runs `npm run lint`
+  (CHECK 13 and CHECK 16). A config nothing executes prevents nothing.
+- the accessibility semantics of the live stat flow and the shared `ui.tsx`
+  primitives are still declared (CHECK 14) - structural only, it cannot prove a
+  screen reader reads them sensibly
+- the privacy policy still covers what the store declarations depend on
+  (CHECK 15) - presence checks on prose, so they stop a section vanishing but
+  cannot stop it becoming wrong
 
 Warnings are reported separately from failures. The positional-lookup warnings
 in `sync.ts` are known and currently safe, because `pushAction` receives the

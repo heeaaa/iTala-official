@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Animated, Easing } from 'react-native';
+import { View, Animated } from 'react-native';
 import { Screen, Txt, Button, TeamBadge, PromoStrip } from '../components/ui';
 import { useLeague } from '../store/StoreProvider';
 import { colors, space, radius, font } from '../theme';
