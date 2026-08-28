@@ -9,6 +9,7 @@ import { loadState, saveState, loadPrefs, savePrefs } from './storage';
 import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
 import { fetchAllState, pushAction, subscribeRealtime } from '../sync/sync';
 import { enqueuePush, __resetPushQueue } from '../sync/pushQueue';
+import { warn } from '../lib/log';
 
 // gameId -> expiry timestamp. Lineups written locally are protected from being
 // overwritten by a lagging realtime echo until the expiry passes.
@@ -698,7 +699,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
                 return true;
               }
             } catch (e) {
-              console.warn('Supabase pull attempt failed:', (e as Error).message);
+              warn('Supabase pull attempt failed:', (e as Error).message);
             }
             return false;
           };

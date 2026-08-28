@@ -75,14 +75,17 @@ module.exports = [
       'no-unused-vars': 'off', // superseded by the TypeScript-aware rule above
       'import/first': 'error',
 
-      // DELIBERATELY LEFT AS A WARNING. The two current violations
-      // (LiveGameScreen's box-score memo, FinalScoreScreen's promo memo) are
-      // exactly F-14: the memo depends on app-wide `state` rather than the
-      // current game. Correcting the dependency arrays changes when those memos
-      // recompute, which is a behaviour change that needs the F-14 work and its
-      // own tests - not a drive-by fix in a tooling PR. Kept visible on every
-      // run so it is not forgotten; promote to error when F-14 lands.
-      'react-hooks/exhaustive-deps': 'warn',
+      // Promoted from warn to error now that F-14 has landed. The two violations
+      // this was holding open - LiveGameScreen's score memo and milestone effect
+      // depending on app-wide `state`, and FinalScoreScreen's promo memo keyed on
+      // `activePromos.length` - are both gone, so the gate starts clean.
+      //
+      // Note for the next person tempted to silence this rule: FinalScoreScreen's
+      // case was a memo that deliberately did NOT want to re-derive on a
+      // dependency change. The fix was to express that as a lazily-filled ref
+      // rather than to suppress the rule, because a suppression there would have
+      // hidden the real F-14 violation sitting next to it.
+      'react-hooks/exhaustive-deps': 'error',
     },
   },
 ];

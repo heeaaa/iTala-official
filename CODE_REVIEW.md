@@ -124,17 +124,21 @@ Status values used in the Findings Summary below:
 | Status | Means |
 |---|---|
 | `FIXED (merged)` | On `main`. Done. |
+| `NOT A DEFECT` | Investigated and the reported behaviour does not occur; the property is now pinned by a test. Used once, for F-27. |
 | `FIXED (risk accepted)` | Closed by a recorded, dated risk acceptance rather than by further remediation. Used once, for F-01. |
 | `FIXED (PR)` | Implemented, pushed, PR open, **not merged**. |
 | `PARTIAL` | Partly addressed, or fixed in code but with an unverified step outside the repo. |
 | `OPEN` | Not started. |
 
-Counts: **14 fixed**, **5 partial**, **12 open**, 1 informational.
+Counts: **19 fixed** (one of them a recorded risk acceptance), **1 not a defect**, **5 partial**,
+**6 open**, 1 informational.
 **All P0 and P1 items are closed.** No CRITICAL or HIGH finding remains open or partial: both
 credential rotations are confirmed done (28/08/2026), and the historical exposure behind F-01 is
-formally accepted (see below). P2 is under way - F-09 (ESLint), N-17 (the drop-in authorisation
-suites), F-12 (the roster parser) and F-17/F-18 (live-game input safety); of the 12 open findings,
-6 are MEDIUM and 6 are LOW.
+formally accepted (see below). P2 is largely done: F-09 (ESLint), N-17 (drop-in authorisation suites), F-12 (roster parser),
+F-17/F-18 (live-game input safety), and now F-14/F-16/F-28 (live-game performance and lifecycle)
+plus F-26/F-29. Of the 6 open findings, 4 are MEDIUM (F-13, F-15, F-19, F-21) and 2 are LOW
+(F-23, F-30). **ESLint now reports zero errors and zero warnings**, so
+`react-hooks/exhaustive-deps` was promoted to an error - see F-09 and F-14.
 
 > The previous revision of this section read "11 fixed ... 15 open". That was an arithmetic slip,
 > not a change in scope - the table has always held 31 numbered findings plus F-32. The counts
@@ -393,9 +397,9 @@ Each bug fix was confirmed to fail **before** the fix rather than assumed:
 | F-11 | MEDIUM | Correctness | Tied final scores are silently recorded as home-team wins | CONFIRMED | FIXED (merged) |
 | F-12 | MEDIUM | Correctness | `rosterParse.ts` misparses team names/headers under common real-world paste shapes | CONFIRMED | PARTIAL |
 | F-13 | MEDIUM | Dependency | `npm audit`: 24 vulnerabilities in Expo/Metro build tooling (dev-time only) | CONFIRMED | OPEN |
-| F-14 | MEDIUM | Performance | `LiveGameScreen` recomputes box score/milestones on unrelated app-wide state changes | HIGH CONFIDENCE | OPEN |
+| F-14 | MEDIUM | Performance | `LiveGameScreen` recomputes box score/milestones on unrelated app-wide state changes | HIGH CONFIDENCE | FIXED (PR) |
 | F-15 | MEDIUM | Mobile / Performance | Team logo / promo images stored as base64 with no resize step, only quality compression | HIGH CONFIDENCE | OPEN |
-| F-16 | MEDIUM | Performance | Unbounded play-by-play list rendered without virtualisation | MEDIUM CONFIDENCE | OPEN |
+| F-16 | MEDIUM | Performance | Unbounded play-by-play list rendered without virtualisation | MEDIUM CONFIDENCE | FIXED (PR) |
 | F-17 | MEDIUM | Correctness / Concurrency | Substitution modal's "Set 5" lineup snapshot goes stale if state changes while open | CONFIRMED | FIXED (PR) |
 | F-18 | MEDIUM | Correctness / Mobile | No rapid double-tap lock on the live stat pad | CONFIRMED | FIXED (PR) |
 | F-19 | MEDIUM | Architecture | Duplicated ad hoc `setTimeout` retries for membership-row eventual consistency | HIGH CONFIDENCE | OPEN |
@@ -405,10 +409,10 @@ Each bug fix was confirmed to fail **before** the fix rather than assumed:
 | F-23 | LOW | Code Quality | Duplicated image-picker and share/screenshot-fallback logic across screens | HIGH CONFIDENCE | OPEN |
 | F-24 | LOW | Code Quality | Several small duplicated helpers (`uid()`, team-resolution fallback, colour utilities embedded in a screen) | HIGH CONFIDENCE | PARTIAL |
 | F-25 | LOW | Accessibility | Icon-only buttons and dense stat tables lack accessible labels/semantics | CONFIRMED / MEDIUM CONFIDENCE | PARTIAL |
-| F-26 | LOW | Correctness | "Best all-around game" is selected by points only, not the existing composite rating | HIGH CONFIDENCE | OPEN |
-| F-27 | LOW | Correctness | Share card can present a 0-stat player as "Player of the Game" at the start of a live game | HIGH CONFIDENCE | OPEN |
-| F-28 | LOW | Mobile Reliability | Milestone-banner timers not cleared on `LiveGameScreen` unmount | HIGH CONFIDENCE | OPEN |
-| F-29 | LOW | Security | Verbose, unconditional auth-flow console logging ships in release builds | HIGH CONFIDENCE | OPEN |
+| F-26 | LOW | Correctness | "Best all-around game" is selected by points only, not the existing composite rating | HIGH CONFIDENCE | FIXED (PR) |
+| F-27 | LOW | Correctness | Share card can present a 0-stat player as "Player of the Game" at the start of a live game | HIGH CONFIDENCE | NOT A DEFECT |
+| F-28 | LOW | Mobile Reliability | Milestone-banner timers not cleared on `LiveGameScreen` unmount | HIGH CONFIDENCE | FIXED (PR) |
+| F-29 | LOW | Security | Verbose, unconditional auth-flow console logging ships in release builds | HIGH CONFIDENCE | FIXED (PR) |
 | F-30 | LOW | Build Config | `tsconfig.json` omits `noUncheckedIndexedAccess`, relevant to the project's own documented `.find()` concerns | MEDIUM CONFIDENCE | OPEN |
 | F-31 | INFO | Security | `.gitignore` has no forward-looking patterns for keystores/service-account JSON that `DEPLOYMENT.md` instructs creating later | HIGH CONFIDENCE | FIXED |
 | F-32 | INFO | Various | Positive findings (see below) | CONFIRMED | n/a |
@@ -988,6 +992,23 @@ case 'DELETE_EVENT':
 **Confidence:** HIGH CONFIDENCE
 
 ### F-27: Share card can present a 0-stat player as "Player of the Game"
+
+> **Updated 29/08/2026. NOT A DEFECT.** Investigated for the fix and the reported behaviour does
+> not occur. Every award card is already gated:
+> `cardSpecs.ts` filters the Player-of-the-Game pool with `perfRating(l) > 0`, the Career High
+> card requires `line.pts > 0 && line.pts >= c.highPts`, and the double/triple-double and 25-point
+> cards need real thresholds. `FinalScoreScreen` filters its own pool the same way. `git log -S`
+> shows those filters predate this remediation batch, so the audit's HIGH CONFIDENCE call was
+> mistaken rather than fixed by adjacent work.
+>
+> `perfRating` of an all-zero line is exactly `0` (`pts + 1.2reb + 1.5ast + 3stl + 3blk - tov`), so
+> `> 0` genuinely excludes a player who has done nothing, and a line with only a turnover is
+> negative. The one card always offered is "Game Stat Line", which is a plain stat line rather than
+> an award and is honest at 0.
+>
+> Rather than change nothing and move on, the property is now pinned: **Q6-Q10** assert the rating
+> boundaries and that a 0-stat player in a fresh live game is offered `['line']` only, with no
+> `potg` key. So if a future edit removes a gate, a test fails.
 
 **Severity:** LOW | **Category:** Correctness
 **Location:** `src/screens/BoxScoreScreen.tsx:59-63`

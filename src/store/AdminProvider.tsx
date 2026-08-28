@@ -4,6 +4,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
+import { devLog, warn } from '../lib/log';
 
 // ---------------------------------------------------------------------------
 // Auth + roles module.
@@ -104,7 +105,7 @@ function withTimeout<T>(p: PromiseLike<T>, ms: number, fallback: T, label: strin
   return Promise.race([
     Promise.resolve(p),
     new Promise<T>((resolve) =>
-      setTimeout(() => { console.warn(`[auth] ${label} timed out after ${ms}ms`); resolve(fallback); }, ms)
+      setTimeout(() => { warn(`[auth] ${label} timed out after ${ms}ms`); resolve(fallback); }, ms)
     ),
   ]);
 }
@@ -273,7 +274,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
       // Deep link back into the app. Expo Go → exp://.../--/auth-callback,
       // dev/prod builds → itala://auth-callback (scheme from app.json).
       const redirectTo = Linking.createURL('auth-callback');
-      console.log('[auth] OAuth redirect URL (add to Supabase → Auth → URL Configuration):', redirectTo);
+      devLog('[auth] OAuth redirect URL (add to Supabase → Auth → URL Configuration):', redirectTo);
 
       const start = await withTimeout(
         sb.auth.signInWithOAuth({
@@ -306,7 +307,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
 
       return await completeSignIn(sb);
     } catch (e) {
-      console.warn('[auth] signInWithGoogle threw:', (e as Error).message);
+      warn('[auth] signInWithGoogle threw:', (e as Error).message);
       setLastError('Sign-in failed. Check your connection and try again.');
       return null;
     } finally {
@@ -357,7 +358,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       const code = (e as { code?: string })?.code;
       if (code === 'ERR_REQUEST_CANCELED') return null; // user closed the sheet
-      console.warn('[auth] signInWithApple threw:', (e as Error).message);
+      warn('[auth] signInWithApple threw:', (e as Error).message);
       setLastError('Apple sign-in failed. Try again.');
       return null;
     } finally {
@@ -547,7 +548,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
 
     if (res.error) {
       const msg = res.error.message ?? '';
-      console.warn('[auth] elevate_to_admin error:', msg);
+      warn('[auth] elevate_to_admin error:', msg);
       if (msg === 'timeout') {
         setLastError('Server did not respond. Check your Supabase config / network.');
       } else if (/too many attempts/i.test(msg)) {
@@ -611,13 +612,13 @@ async function createSessionFromUrl(sb: NonNullable<ReturnType<typeof getSupabas
     const parsed = Linking.parse(url);
     const qp = (parsed.queryParams ?? {}) as Record<string, string | string[]>;
     const errDesc = str(qp['error_description']);
-    if (errDesc) { console.warn('[auth] OAuth error:', errDesc); return false; }
+    if (errDesc) { warn('[auth] OAuth error:', errDesc); return false; }
 
     const code = str(qp['code']);
     if (code) {
       const res = await withTimeout(sb.auth.exchangeCodeForSession(code), 8000,
         { data: { session: null }, error: { message: 'timeout' } } as any, 'exchangeCodeForSession');
-      if (res?.error) { console.warn('[auth] exchangeCodeForSession:', res.error.message); return false; }
+      if (res?.error) { warn('[auth] exchangeCodeForSession:', res.error.message); return false; }
       return !!res?.data?.session;
     }
 
@@ -630,13 +631,13 @@ async function createSessionFromUrl(sb: NonNullable<ReturnType<typeof getSupabas
       if (access_token && refresh_token) {
         const res = await withTimeout(sb.auth.setSession({ access_token, refresh_token }), 8000,
           { data: { session: null }, error: { message: 'timeout' } } as any, 'setSession');
-        if (res?.error) { console.warn('[auth] setSession:', res.error.message); return false; }
+        if (res?.error) { warn('[auth] setSession:', res.error.message); return false; }
         return !!res?.data?.session;
       }
     }
     return false;
   } catch (e) {
-    console.warn('[auth] createSessionFromUrl threw:', (e as Error).message);
+    warn('[auth] createSessionFromUrl threw:', (e as Error).message);
     return false;
   }
 }
@@ -674,13 +675,13 @@ async function ensureSession(sb: ReturnType<typeof getSupabase>): Promise<{ uid:
 
     const signin = await withTimeout(sb.auth.signInAnonymously(), 6000, { data: { user: null, session: null }, error: { message: 'timeout' } } as any, 'signInAnonymously');
     if (signin?.error) {
-      console.warn('[auth] anonymous sign-in failed:', signin.error.message, '— is Anonymous sign-in enabled in Supabase → Authentication → Providers?');
+      warn('[auth] anonymous sign-in failed:', signin.error.message, '— is Anonymous sign-in enabled in Supabase → Authentication → Providers?');
       return null;
     }
     const uid = signin?.data?.user?.id ?? signin?.data?.session?.user?.id ?? null;
     return uid ? { uid, user: null } : null;
   } catch (e) {
-    console.warn('[auth] ensureSession threw:', (e as Error).message);
+    warn('[auth] ensureSession threw:', (e as Error).message);
     return null;
   }
 }
