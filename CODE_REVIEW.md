@@ -178,9 +178,14 @@ What is actually left, in order of consequence:
 1. ~~**Confirm the two credential rotations, and decide on the historical exposure** (F-01, F-02).~~
    **Done 28/08/2026.** Both rotations confirmed by the operator; the historical exposure is
    formally accepted. F-01 and F-02 are both closed, and with them all of P0.
-2. **Fill in the privacy policy placeholders** (`[OPERATOR]`, `[CONTACT EMAIL]`) and deploy the
-   site (see `site/README.md`), then paste the URL into both store listings. The policy ships with
-   a deliberate visible notice, so it cannot be published half-finished by accident.
+2. ~~**Fill in the privacy policy placeholders**~~ **Done 29/08/2026.** The policy names Hanna Abejo
+   Santos and Harold Abejo as the joint agency responsible, with abejohanna@gmail.com and
+   abejoharold@gmail.com as contacts, and the draft notice is gone. CHECK 15 now fails the build if
+   a placeholder or the notice reappears.
+   **Still to do, and it is not a code change:** deploy `site/` to Cloudflare Pages (steps in
+   `site/README.md`) and paste `https://<project>.pages.dev/privacy/` into both store listings.
+   Those two mailboxes are load-bearing - they are how someone who never installed the app gets
+   their name removed - so they have to stay monitored.
 3. **Do the on-device screen-reader pass** for F-05/F-06/F-07 (`tests/MANUAL-REGRESSION.md`
    section P6). This is the largest untested surface in the batch: the semantics are in place and
    guarded by CHECK 14, but nothing has confirmed a real screen reader reads them sensibly.

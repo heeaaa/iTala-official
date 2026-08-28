@@ -297,7 +297,9 @@ required, capture from a device or simulator), the **privacy nutrition labels** 
 prerequisite gotcha #2: email, name, photos, roster content and venue text, user ID, all linked to
 the user and all App Functionality; plus sponsor promo tap counts as Usage Data, not linked; no
 tracking), a **privacy policy URL** (required, and it has to cover roster data about people who
-are not app users, who can read a roster, and how to get a name removed - see `site/privacy/`),
+are not app users, who can read a roster, and how to get a name removed - `site/privacy/` does,
+and is filled in and ready to publish; deploy it per `site/README.md` and paste the resulting
+`https://<project>.pages.dev/privacy/` URL here **and** in the Play listing),
 age rating, and category (**Sports**). Attach the
 build, then **Submit for Review**.
 Apple review typically takes 1–3 days.

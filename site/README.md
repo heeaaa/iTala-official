@@ -21,12 +21,19 @@ site/
 5. Paste that URL into both store listings. A custom domain can be attached later without changing
    the path.
 
-## Before it goes live
+## Operator and contact details
 
-The policy contains `[OPERATOR]` and `[CONTACT EMAIL]` placeholders and a visible orange notice
-saying so. Replace them and delete the notice. The app stores names and statistics of people who
-never installed it, so a working contact address is the mechanism by which they can have that
-removed. It is not optional.
+Filled in 29/08/2026. The policy names **Hanna Abejo Santos and Harold Abejo** as the joint agency
+responsible, and gives **abejohanna@gmail.com** and **abejoharold@gmail.com** as the contact
+addresses. The pre-publication notice has been removed.
+
+Those addresses are load-bearing, not decorative: the app stores names and statistics of people who
+never installed it, and this is the mechanism by which they can have that removed. They must stay
+monitored. They are the same two addresses already on the `admin_emails` allowlist in
+`supabase/schema.sql`.
+
+CHECK 15 now fails the build if a `[OPERATOR]`/`[CONTACT EMAIL]` placeholder or the draft notice
+reappears, so the policy cannot be published half-finished.
 
 ## Keeping it honest
 
