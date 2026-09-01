@@ -5,6 +5,12 @@ import * as Linking from 'expo-linking';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
 import { devLog, warn } from '../lib/log';
+import {
+  AuthErrors, AuthScope, clearScopedError, describeAuthFailure, errorForScope,
+  sessionRecoveryPlan, setScopedError,
+} from './authErrors';
+
+export type { AuthScope } from './authErrors';
 
 // ---------------------------------------------------------------------------
 // Auth + roles module.
@@ -100,14 +106,67 @@ function deriveRole(opts: { synced: boolean; user: AuthUser | null; serverAdmin:
   return opts.serverAdmin ? 'admin' : 'guest';
 }
 
+/**
+ * Race a promise against a deadline, reporting WHICH happened.
+ *
+ * `withTimeout` below keeps the old convenience shape (resolve to a fallback),
+ * but a fallback alone is not enough information for every caller. A
+ * `getSession` that times out and a `getSession` that genuinely finds no
+ * session both produce `{ session: null }`, and ensureSession used to treat the
+ * two identically - purging the stored tokens and minting a fresh anonymous
+ * user. On a device that cannot reach the server that quietly signs the person
+ * out and reassigns everything they own. Callers that must not confuse "no" with
+ * "no answer" use this instead.
+ */
+type Raced<T> = { ok: true; value: T } | { ok: false; timedOut: true };
+
+function raceTimeout<T>(p: PromiseLike<T>, ms: number, label: string): Promise<Raced<T>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    Promise.resolve(p).then((value): Raced<T> => ({ ok: true, value })),
+    new Promise<Raced<T>>((resolve) => {
+      timer = setTimeout(() => {
+        warn(`[auth] ${label} timed out after ${ms}ms`);
+        resolve({ ok: false, timedOut: true });
+      }, ms);
+    }),
+  ]).finally(() => { if (timer) clearTimeout(timer); });
+}
+
 // Wrap any promise so it can never hang the UI. Returns `fallback` on timeout.
 function withTimeout<T>(p: PromiseLike<T>, ms: number, fallback: T, label: string): Promise<T> {
-  return Promise.race([
-    Promise.resolve(p),
-    new Promise<T>((resolve) =>
-      setTimeout(() => { warn(`[auth] ${label} timed out after ${ms}ms`); resolve(fallback); }, ms)
-    ),
-  ]);
+  return raceTimeout(p, ms, label).then(r => (r.ok ? r.value : fallback));
+}
+
+/**
+ * Where the provider is told to send the browser back, and whether this build
+ * can actually receive it.
+ *
+ * THIS IS THE GOOGLE SIGN-IN BUG. Expo Go serves the app over `exp://<lan-ip>:8081`,
+ * so `Linking.createURL` produces an exp:// deep link. Supabase only honours a
+ * `redirect_to` that is on its allowlist; anything else silently falls back to
+ * the project's Site URL. With the Expo Go URL missing from the allowlist, the
+ * flow finished by sending Safari to the Site URL — `itala://auth-callback` —
+ * a scheme that only the standalone build registers. Safari, handed a URL no
+ * installed app claims, says:
+ *
+ *     "Safari cannot open the page because the address is invalid."
+ *
+ * which is the reported symptom exactly, and reads like a broken app rather
+ * than a missing line in a dashboard. Nothing about it is fixable from here:
+ * the allowlist entry has to exist. What IS fixable is saying so.
+ */
+function oauthRedirect(): { redirectTo: string; inExpoGo: boolean } {
+  const redirectTo = Linking.createURL('auth-callback');
+  // A dev/release build deep-links through the app's own scheme (app.json
+  // `scheme`); only Expo Go hands out exp://.
+  const inExpoGo = /^exps?:\/\//i.test(redirectTo);
+  return { redirectTo, inExpoGo };
+}
+
+/** The instruction that actually resolves an unregistered redirect. */
+function allowlistHint(redirectTo: string): string {
+  return `Add this exact URL to Supabase → Authentication → URL Configuration → Redirect URLs, then try again:\n\n${redirectTo}`;
 }
 
 interface AdminCtx {
@@ -121,8 +180,18 @@ interface AdminCtx {
   userId: string | null;
   /** True while a Google sign-in round trip is in flight. */
   authBusy: boolean;
-  /** Most recent human-readable status (surfaced in modals). */
-  lastError: string | null;
+  /** The most recent failure IN THIS FLOW, or null.
+   *
+   *  Scoped rather than global. There used to be one `lastError` string shared
+   *  by the sign-in sheet, the backup-admin password modal, the account screen
+   *  and the drop-in setup screen, and nothing cleared it. So a failed Apple
+   *  sign-in was still on screen inside the "Admin access" modal opened
+   *  afterwards - an error about one thing presented as an error about
+   *  another. A message belongs to the flow that produced it. */
+  errorFor: (scope: AuthScope) => string | null;
+  /** Drop the message for one flow (or all of them). Screens call this when
+   *  they open a sheet, so a stale failure never greets the next attempt. */
+  clearError: (scope?: AuthScope) => void;
   /** Launches the Google OAuth flow. Resolves to the resulting role, or null
    *  if the user cancelled / sign-in failed. Never hangs. */
   signInWithGoogle: () => Promise<Role | null>;
@@ -172,7 +241,12 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   const [serverAdmin, setServerAdmin] = useState(false);   // profiles.is_admin (synced mode)
   const [localUnlocked, setLocalUnlocked] = useState(false); // password unlock (local-only mode)
   const [authBusy, setAuthBusy] = useState(false);
-  const [lastError, setLastError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<AuthErrors>({});
+
+  const setError = (scope: AuthScope, message: string | null) =>
+    setErrors(prev => setScopedError(prev, scope, message));
+  const errorFor = (scope: AuthScope): string | null => errorForScope(errors, scope);
+  const clearError = (scope?: AuthScope) => setErrors(prev => clearScopedError(prev, scope));
   const [appleAvailable, setAppleAvailable] = useState(false);
   const [memberships, setMemberships] = useState<Record<string, 'owner' | 'scorekeeper'>>({});
 
@@ -239,7 +313,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   ): Promise<Role | null> => {
     const got = await withTimeout(sb.auth.getUser(), 6000, { data: { user: null }, error: null } as any, 'getUser');
     const u = got?.data?.user;
-    if (!u) { setLastError('Signed in, but the session could not be read. Try again.'); return null; }
+    if (!u) { setError('signin', 'Signed in, but the session could not be read. Try again.'); return null; }
 
     let authUser = toAuthUser(u);
     if (authUser && nameHint && authUser.name === authUser.email) {
@@ -260,21 +334,27 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
 
   // ---- Google Sign-In (Supabase OAuth + PKCE via the system browser) -------
   const signInWithGoogle = async (): Promise<Role | null> => {
-    setLastError(null);
+    setError('signin', null);
 
     if (!SYNC_ENABLED) {
-      setLastError('Google sign-in needs the Supabase sync configuration. This build is running local-only.');
+      setError('signin', 'Google sign-in needs the Supabase sync configuration. This build is running local-only.');
       return null;
     }
     const sb = getSupabase();
-    if (!sb) { setLastError('Sync not configured.'); return null; }
+    if (!sb) { setError('signin', 'Sync not configured.'); return null; }
 
     setAuthBusy(true);
     try {
       // Deep link back into the app. Expo Go → exp://.../--/auth-callback,
       // dev/prod builds → itala://auth-callback (scheme from app.json).
-      const redirectTo = Linking.createURL('auth-callback');
+      const { redirectTo, inExpoGo } = oauthRedirect();
       devLog('[auth] OAuth redirect URL (add to Supabase → Auth → URL Configuration):', redirectTo);
+      if (inExpoGo) {
+        devLog('[auth] Running in Expo Go. Unless the URL above is on the Supabase',
+               'redirect allowlist, the provider will send the browser to the project',
+               'Site URL instead — a scheme Expo Go cannot open, which Safari reports',
+               'as "the address is invalid".');
+      }
 
       const start = await withTimeout(
         sb.auth.signInWithOAuth({
@@ -286,29 +366,50 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         'signInWithOAuth'
       );
       if (start?.error || !start?.data?.url) {
-        setLastError(start?.error?.message === 'timeout'
-          ? 'Server did not respond. Check your connection.'
-          : `Could not start sign-in: ${start?.error?.message ?? 'unknown error'}. Is the Google provider enabled in Supabase?`);
+        setError('signin', describeAuthFailure(start?.error?.message, 'Google'));
+        return null;
+      }
+
+      // Never hand the browser something that is not an absolute https URL.
+      // "Safari cannot open the page because the address is invalid" is what
+      // iOS shows when it is, and it reads to the user like a broken app rather
+      // than a failed request.
+      if (!/^https?:\/\//i.test(start.data.url)) {
+        warn('[auth] provider returned a URL the browser cannot open');
+        setError('signin', 'The sign-in link the server returned was not usable. Check the Supabase URL configuration.');
         return null;
       }
 
       // Opens the system browser; resolves when the browser redirects back.
       const result = await WebBrowser.openAuthSessionAsync(start.data.url, redirectTo);
       if (result.type !== 'success' || !('url' in result) || !result.url) {
-        // User closed the sheet — not an error worth showing.
+        // The sheet closed without ever reaching our redirect. Two causes, and
+        // they used to be treated the same — silently, as "user cancelled":
+        //
+        //   * the person tapped Cancel, which is not an error, or
+        //   * the provider sent the browser somewhere this build cannot
+        //     receive, so the sheet had nothing to intercept and the person
+        //     tapped Cancel on an error page.
+        //
+        // iOS gives no way to tell them apart after the fact, so say nothing
+        // in a build whose scheme is registered (where only the first is
+        // plausible) and name the second where it is the likely one.
+        if (inExpoGo) {
+          setError('signin', `Sign-in didn't come back to the app.\n\n${allowlistHint(redirectTo)}\n\nIf you cancelled, ignore this.`);
+        }
         return null;
       }
 
       const ok = await createSessionFromUrl(sb, result.url);
       if (!ok) {
-        setLastError('Sign-in did not complete. Make sure the redirect URL above is added to your Supabase Redirect URLs.');
+        setError('signin', `Sign-in didn't complete.\n\n${allowlistHint(redirectTo)}`);
         return null;
       }
 
       return await completeSignIn(sb);
     } catch (e) {
       warn('[auth] signInWithGoogle threw:', (e as Error).message);
-      setLastError('Sign-in failed. Check your connection and try again.');
+      setError('signin', describeAuthFailure((e as Error).message, 'Google'));
       return null;
     } finally {
       setAuthBusy(false);
@@ -317,13 +418,25 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
 
   // ---- Sign in with Apple (native sheet → Supabase ID-token exchange) ------
   const signInWithApple = async (): Promise<Role | null> => {
-    setLastError(null);
+    setError('signin', null);
     if (!SYNC_ENABLED) {
-      setLastError('Apple sign-in needs the Supabase sync configuration. This build is running local-only.');
+      setError('signin', 'Apple sign-in needs the Supabase sync configuration. This build is running local-only.');
       return null;
     }
     const sb = getSupabase();
-    if (!sb) { setLastError('Sync not configured.'); return null; }
+    if (!sb) { setError('signin', 'Sync not configured.'); return null; }
+
+    // Apple signs the identity token for the bundle id of the app that asked,
+    // so inside Expo Go the audience is host.exp.Exponent rather than
+    // com.bpbl.itala and Supabase rejects it — unless the provider's Client IDs
+    // list includes host.exp.Exponent, which AUTH_SETUP.md tells you to do for
+    // development. So this is a hint, not a block: the flow is allowed to run
+    // and describeAuthFailure explains an audience rejection if one comes back.
+    if (oauthRedirect().inExpoGo) {
+      devLog('[auth] Apple sign-in from Expo Go: the token audience will be',
+             'host.exp.Exponent, not com.bpbl.itala. Supabase → Providers → Apple →',
+             'Client IDs must list it for development (remove before shipping).');
+    }
 
     setAuthBusy(true);
     try {
@@ -334,7 +447,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         ],
       });
       if (!credential.identityToken) {
-        setLastError('Apple did not return a sign-in token. Try again.');
+        setError('signin', 'Apple did not return a sign-in token. Try again.');
         return null;
       }
 
@@ -345,9 +458,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         'signInWithIdToken(apple)'
       );
       if (res?.error) {
-        setLastError(res.error.message === 'timeout'
-          ? 'Server did not respond. Check your connection.'
-          : `Apple sign-in failed: ${res.error.message}. Is the Apple provider enabled in Supabase with this app's bundle ID?`);
+        setError('signin', describeAuthFailure(res.error.message, 'Apple'));
         return null;
       }
 
@@ -359,7 +470,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
       const code = (e as { code?: string })?.code;
       if (code === 'ERR_REQUEST_CANCELED') return null; // user closed the sheet
       warn('[auth] signInWithApple threw:', (e as Error).message);
-      setLastError('Apple sign-in failed. Try again.');
+      setError('signin', describeAuthFailure((e as Error).message, 'Apple'));
       return null;
     } finally {
       setAuthBusy(false);
@@ -368,10 +479,10 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
 
   // ---- Account deletion (store-policy requirement) --------------------------
   const deleteAccount = async (): Promise<boolean> => {
-    setLastError(null);
-    if (!SYNC_ENABLED) { setLastError('There is no account to delete in local-only mode.'); return false; }
+    setError('account', null);
+    if (!SYNC_ENABLED) { setError('account', 'There is no account to delete in local-only mode.'); return false; }
     const sb = getSupabase();
-    if (!sb) { setLastError('Sync not configured.'); return false; }
+    if (!sb) { setError('account', 'Sync not configured.'); return false; }
 
     setAuthBusy(true);
     try {
@@ -382,9 +493,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         'delete_own_account'
       );
       if (res?.error) {
-        setLastError(res.error.message === 'timeout'
-          ? 'Server did not respond. Check your connection and try again.'
-          : `Could not delete the account: ${res.error.message}`);
+        setError('account', describeAuthFailure(res.error.message));
         return false;
       }
 
@@ -404,7 +513,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async (): Promise<void> => {
-    setLastError(null);
+    clearError();
     if (!SYNC_ENABLED) { setLocalUnlocked(false); return; }
     const sb = getSupabase();
     if (!sb) return;
@@ -451,7 +560,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   };
 
   const redeemCode: AdminCtx['redeemCode'] = async (code) => {
-    setLastError(null);
+    setError('code', null);
     const sb = getSupabase();
     if (!SYNC_ENABLED || !sb) return { type: 'error', message: 'Invite codes need the synced (Supabase) setup.' };
     if (!user) return { type: 'error', message: 'Sign in first to use an invite code.' };
@@ -478,7 +587,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     const sb = getSupabase();
     if (!sb) return null;
     const res = await withTimeout(sb.rpc('create_creation_code'), 8000, { data: null, error: { message: 'timeout' } } as any, 'create_creation_code');
-    if (res?.error) { setLastError(res.error.message); return null; }
+    if (res?.error) { setError('admin', describeAuthFailure(res.error.message)); return null; }
     return typeof res?.data === 'string' ? res.data : null;
   };
 
@@ -508,33 +617,33 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     const sb = getSupabase();
     if (!sb) return false;
     const res = await withTimeout(sb.rpc('remove_member', { p_league_id: leagueId, p_user_id: userId }), 8000, { data: null, error: { message: 'timeout' } } as any, 'remove_member');
-    if (res?.error) { setLastError(res.error.message); return false; }
+    if (res?.error) { setError('admin', describeAuthFailure(res.error.message)); return false; }
     return true;
   };
 
   // ---- Password backup (hidden lock) ---------------------------------------
   const unlock = async (password: string): Promise<boolean> => {
-    setLastError(null);
+    setError('admin', null);
 
     // Local-only mode: no server, so this is a device-local check. Fails closed
     // when no fallback password is configured.
     if (!SYNC_ENABLED) {
       if (!LOCAL_FALLBACK_PASSWORD) {
-        setLastError('No local admin password is configured for this build.');
+        setError('admin', 'No local admin password is configured for this build.');
         return false;
       }
       const ok = slowEquals(password, LOCAL_FALLBACK_PASSWORD);
       if (ok) setLocalUnlocked(true);
-      else setLastError('Incorrect password.');
+      else setError('admin', 'Incorrect password.');
       return ok;
     }
 
     const sb = getSupabase();
-    if (!sb) { setLastError('Sync not configured.'); return false; }
+    if (!sb) { setError('admin', 'Sync not configured.'); return false; }
 
     const restored = await ensureSession(sb);
     if (!restored?.uid) {
-      setLastError('Could not reach the server. Check your connection and that Anonymous sign-in is enabled in Supabase.');
+      setError('admin', "Couldn't reach the iTala server, so the password could not be checked. Check this device's connection and try again.");
       return false;
     }
     setUserId(restored.uid);
@@ -549,27 +658,25 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     if (res.error) {
       const msg = res.error.message ?? '';
       warn('[auth] elevate_to_admin error:', msg);
-      if (msg === 'timeout') {
-        setLastError('Server did not respond. Check your Supabase config / network.');
-      } else if (/too many attempts/i.test(msg)) {
+      if (/too many attempts/i.test(msg)) {
         // The server locks a session out after a handful of wrong guesses and
         // raises rather than returning false. Show its message verbatim — it
         // carries the remaining wait.
-        setLastError(msg);
+        setError('admin', msg);
       } else {
-        setLastError(`Server error: ${msg}`);
+        setError('admin', describeAuthFailure(msg));
       }
       return false;
     }
 
     const ok = !!res.data;
     if (ok) setServerAdmin(true);
-    else setLastError('Incorrect password.');
+    else setError('admin', 'Incorrect password.');
     return ok;
   };
 
   const lock = async (): Promise<void> => {
-    setLastError(null);
+    setError('admin', null);
     if (!SYNC_ENABLED) { setLocalUnlocked(false); return; }
     const sb = getSupabase();
     if (sb) {
@@ -580,7 +687,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <Ctx.Provider value={{
-      role, isAdmin: role === 'admin', user, userId, authBusy, lastError,
+      role, isAdmin: role === 'admin', user, userId, authBusy, errorFor, clearError,
       memberships, canScore, canScoreGame, isOwner, reloadMemberships, redeemCode, createCreationCode,
       getLeagueCodes, regenerateLeagueCode, listMembers, removeMember,
       signInWithGoogle, appleAvailable, signInWithApple, deleteAccount, signOut, unlock, lock,
@@ -652,20 +759,39 @@ function str(v: string | string[] | undefined): string | null {
 async function ensureSession(sb: ReturnType<typeof getSupabase>): Promise<{ uid: string; user: AuthUser | null } | null> {
   if (!sb) return null;
   try {
-    const sess = await withTimeout(sb.auth.getSession(), 5000, { data: { session: null }, error: null } as any, 'getSession');
-    const existing = sess?.data?.session?.user;
-    if (existing?.id) {
+    // raceTimeout, not withTimeout, because the two outcomes must be told
+    // apart. supabase-js resolves getSession() only after its own
+    // initialisation promise, and that initialisation REFRESHES an expired
+    // access token — a network call. On a device that cannot reach the server
+    // (the reported logs: "getSession timed out after 5000ms" on every launch,
+    // then TypeError: Network request failed for everything after it) the call
+    // does not answer. A fallback of `{ session: null }` makes that
+    // indistinguishable from "this device is signed out", and the recovery path
+    // below then DELETES the stored tokens and mints a brand new anonymous
+    // user. So a bad connection silently signed people out and handed their
+    // drop-in games to a different uid. A timeout is not an answer, and must
+    // never be treated as one.
+    const sess = await raceTimeout(sb.auth.getSession(), 5000, 'getSession');
+    const existing = sess.ok ? sess.value?.data?.session?.user : undefined;
+    const plan = sessionRecoveryPlan(
+      sess.ok ? { answered: true, hasSession: !!existing?.id } : { answered: false },
+    );
+
+    if (plan === 'leave-alone') {
+      warn('[auth] getSession did not answer — leaving the stored session untouched');
+      return null;
+    }
+    if (plan === 'use-existing' && existing?.id) {
       return { uid: existing.id, user: toAuthUser(existing) };
     }
 
-    // No usable session. If a STALE session is still sitting in storage (its
-    // refresh token was rotated, revoked, or belongs to another project), it
-    // keeps poisoning every auth call and the failure repeats on EVERY launch
-    // — surfacing as "Invalid Refresh Token: Refresh Token Not Found" plus
-    // cascading getSession/readAdminFlag timeouts. Clear the stored tokens
-    // locally (no network round trip) so the app self-heals, then fall back to
-    // an anonymous session. On a genuinely fresh install this is a harmless
-    // no-op.
+    // getSession ANSWERED, and the answer is "no session". Two ways to get
+    // here: a genuinely fresh install, or a stale session whose refresh token
+    // was rotated, revoked, or belongs to another project — which keeps
+    // poisoning every auth call and repeats on EVERY launch ("Invalid Refresh
+    // Token: Refresh Token Not Found"). Clearing the stored tokens locally (no
+    // network round trip) heals the second and is a no-op for the first. It is
+    // only safe because the answer was real: there is nothing here to lose.
     await withTimeout(
       sb.auth.signOut({ scope: 'local' }),
       3000,
@@ -673,12 +799,13 @@ async function ensureSession(sb: ReturnType<typeof getSupabase>): Promise<{ uid:
       'signOut(purge-stale)',
     );
 
-    const signin = await withTimeout(sb.auth.signInAnonymously(), 6000, { data: { user: null, session: null }, error: { message: 'timeout' } } as any, 'signInAnonymously');
-    if (signin?.error) {
-      warn('[auth] anonymous sign-in failed:', signin.error.message, '— is Anonymous sign-in enabled in Supabase → Authentication → Providers?');
+    const signin = await raceTimeout(sb.auth.signInAnonymously(), 6000, 'signInAnonymously');
+    if (!signin.ok) return null;
+    if (signin.value?.error) {
+      warn('[auth] anonymous sign-in failed:', signin.value.error.message, '— is Anonymous sign-in enabled in Supabase → Authentication → Providers?');
       return null;
     }
-    const uid = signin?.data?.user?.id ?? signin?.data?.session?.user?.id ?? null;
+    const uid = signin.value?.data?.user?.id ?? signin.value?.data?.session?.user?.id ?? null;
     return uid ? { uid, user: null } : null;
   } catch (e) {
     warn('[auth] ensureSession threw:', (e as Error).message);

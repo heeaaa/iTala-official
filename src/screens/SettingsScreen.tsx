@@ -8,7 +8,7 @@ import { ScreenProps } from '../navigation';
 
 export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) {
   const { synced, prefs, setHaptics, setNotifs } = useStore();
-  const { role, isAdmin, user, userId, signInWithGoogle, appleAvailable, signInWithApple, deleteAccount, signOut, authBusy, lastError } = useAdmin();
+  const { role, isAdmin, user, userId, signInWithGoogle, appleAvailable, signInWithApple, deleteAccount, signOut, authBusy, errorFor } = useAdmin();
   const [busy, setBusy] = useState(false);
 
   // Guests are prompted to sign in — Settings requires an account.
@@ -28,7 +28,7 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
           </Txt>
           <GoogleButton onPress={() => { void onSignIn(signInWithGoogle); }} busy={busy || authBusy} style={{ alignSelf: 'stretch' }} />
           {appleAvailable ? <AppleButton onPress={() => { void onSignIn(signInWithApple); }} busy={busy || authBusy} style={{ alignSelf: 'stretch', marginTop: 10 }} /> : null}
-          {lastError ? <Txt k="body" color={colors.red} style={{ marginTop: 10, fontSize: 13 }}>{lastError}</Txt> : null}
+          {errorFor('signin') ? <Txt k="body" color={colors.red} style={{ marginTop: 10, fontSize: 13 }}>{errorFor('signin')}</Txt> : null}
           <Button title="Cancel" kind="ghost" onPress={() => navigation.goBack()} style={{ alignSelf: 'stretch', marginTop: 10 }} />
         </View>
       </Screen>
@@ -55,7 +55,7 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     } else {
-      Alert.alert('Could not delete account', lastError ?? 'Something went wrong. Please try again.');
+      Alert.alert('Could not delete account', errorFor('account') ?? 'Something went wrong. Please try again.');
     }
   };
 

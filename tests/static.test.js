@@ -43,6 +43,18 @@ for (const r of registered) {
      'registered in App.tsx but missing from RootStackParams');
 }
 
+// Every screen needs a human `title`, whatever its header renders.
+//
+// On iOS the native stack labels the back button with the PREVIOUS screen's
+// `title` and falls back to the ROUTE NAME when there isn't one. Route names
+// are PascalCase code identifiers, so the top-left of the screen read
+// "LeagueDetail". `headerTitle` (the brand wordmark on most screens) overrides
+// what the header draws but is not a label, so it never covered this.
+for (const m of app.matchAll(/<Stack\.Screen\s+name="(\w+)"[^>]*?options=\{([\s\S]*?)\}\s*\/>/g)) {
+  ok(`screen "${m[1]}" has a human title`, /title:\s*'[^']+'/.test(m[2]),
+     'without one iOS labels the back button with the route name');
+}
+
 // ---------------------------------------------------------------------------
 // CHECK 2 — every navigate()/replace()/push() target is a real route.
 // A typo here is a runtime crash, invisible to the type checker when the
@@ -192,21 +204,97 @@ ok('DEPLOYMENT.md keeps the zip-apply commands', read('DEPLOYMENT.md').includes(
   ok('dispatch serializes server writes through enqueuePush',
      /enqueuePush\(\s*\(\)\s*=>\s*pushAction\(/.test(store),
      'pushes fired independently let a DELETE overtake the INSERT it undoes');
-  ok('dispatch resolves the undo target before pushing',
-     /resolveUndoTarget\(\s*stateRef\.current/.test(store),
-     'without the id the sync layer cannot delete the undone row');
-  ok('dispatch tombstones the undone event',
-     /guardUndoneEvent\(action\.eventId\)/.test(store),
-     'an in-flight refetch would resurrect the undone stat');
-  ok('redo lifts the tombstone', /releaseUndoGuard\(/.test(store));
-  ok('HYDRATE drops tombstoned events',
-     /undoneEventIds\(\)/.test(store) && /filter\(e => !undone\.has\(e\.id\)\)/.test(store));
+  const pend = read('src/sync/pendingEvents.ts');
+
+  ok('dispatch stamps event ids before reducing',
+     /stampActionIds\(\s*stateRef\.current/.test(store),
+     'the reducer, the push and the ledger must all name the same row');
+  ok('dispatch records the write in the pending ledger',
+     /recordPending\(action, next\)/.test(store),
+     'without a ledger entry a snapshot older than the tap overwrites it');
+  ok('a settled push tells the ledger which way it went',
+     /confirmPending\(touchedEventIds\)/.test(store) && /failPending\(touchedEventIds\)/.test(store),
+     'an entry that is never confirmed pins forever; one confirmed on failure loses the stat');
+  ok('every server hydrate carries the tick its fetch started at',
+     !/baseDispatch\(\{ t: 'HYDRATE', state: \{ leagues: remote\.leagues \} \}\)/.test(store),
+     "a HYDRATE without snapshotAt skips reconciliation and clobbers pending writes");
+  ok('the snapshot tick is taken before the fetch, not after',
+     /const at = beginSnapshot\(\);\s*\n\s*const remote = await fetchAllState/.test(store),
+     'a tick taken after the read would make a stale snapshot look current');
+  ok('HYDRATE reconciles events against the ledger',
+     /reconcileLeagueEvents\(l\.id, l\.events, a\.snapshotAt\)/.test(store));
+  ok('the ledger retires an entry by ordering, not by a timeout',
+     /confirmedAt !== null && e\.confirmedAt < snapshotStarted/.test(pend) &&
+     !/GUARD_MS|Date\.now\(\) \+/.test(pend),
+     'a time window is both too short for a slow push and too long for a failed one');
+  ok('events are ordered by (ts, id) on the wire',
+     /\.order\('ts'\)\.order\('id'\)/.test(sync),
+     'ts alone ties, and Undo means "the last event" - the two sides must agree');
+  ok('the client sorts by the same key',
+     /a\.ts !== b\.ts/.test(pend) && /a\.id < b\.id/.test(pend));
   ok('the undo delete asks for the deleted rows back',
      /delete\(\)\.eq\('id', action\.eventId\)\.select\(/.test(sync),
      'PostgREST reports success for a delete that RLS filtered to nothing');
-  ok('a refused undo delete is surfaced, not logged',
-     /UNDO_EVENT/.test(sync) && /BULK_IMPORT_ROSTER\|UNDO_EVENT/.test(sync),
-     'pushAction must rethrow so the sync badge shows an error');
+  ok('a failed event write is surfaced, not logged',
+     /MUST_NOT_FAIL_SILENTLY/.test(sync) &&
+     /'ADD_EVENT', 'REDO_EVENT', 'UNDO_EVENT', 'DELETE_EVENT'/.test(sync),
+     'a swallowed INSERT tells the ledger the server has a stat it does not');
+  ok('the rethrow is keyed off the action, not the message text',
+     /MUST_NOT_FAIL_SILENTLY\.has\(action\.t\)/.test(sync),
+     'a network TypeError carries no label for a message test to match');
+  ok('a failed all-or-nothing bundle is rolled back locally',
+     /t: 'ROLLBACK_BUNDLE'/.test(store) && /reducer\(stateRef\.current, rollback\)/.test(store),
+     'a half-created drop-in game that only exists locally refuses every later write');
+  ok('the rollback only drops the league when this action created it',
+     /removeLeague: isGame && !!action\.ensureLeague/.test(store),
+     'otherwise a failed game takes an existing space and its history with it');
+  ok('event pushes look their row up by id, never by position',
+     !/events\[l\.events\.length - 1\]/.test(sync),
+     'canonical ordering means the row an action created is not always last');
+}
+
+// ---------------------------------------------------------------------------
+// CHECK 9b — the play-by-play sheet.
+//
+// No render harness exists for this screen, so these are structural: they check
+// the two properties the sheet is required to have, and would fail if either
+// were removed. Behaviour beyond this is on the manual regression list.
+// ---------------------------------------------------------------------------
+{
+  const row = read('src/components/PlayLog.tsx');
+  const live = read('src/screens/LiveGameScreen.tsx');
+  const box = read('src/screens/BoxScoreScreen.tsx');
+
+  ok('deleting a play asks first',
+     /Alert\.alert\(\s*'Delete this play\?'/.test(row) &&
+     /onPress: \(\) => onDelete\(event\.id\)/.test(row),
+     'the row X sits millimetres from the row and rewrites the score on the first tap');
+  ok('the X is wired to the confirmation, not straight to the delete',
+     /onPress=\{confirmDelete\}/.test(row) &&
+     !/onPress=\{\(\) => onDelete\(/.test(row));
+  ok('the confirmation names the play it is about',
+     /\$\{full\}/.test(row),
+     '"Delete this play?" alone does not tell the user which one');
+  ok('every play-by-play row shows which team it belongs to',
+     /<TeamBadge logo=\{team\.logo\} color=\{team\.color\} size=\{14\} \/>/.test(row),
+     'the side was previously inferable only from the player name');
+  ok('the team is named, not only coloured',
+     /\{team\.name\}/.test(row),
+     'colour alone fails a colour-blind scorekeeper and two same-palette drop-in teams');
+  ok('the delete label reads out the team too',
+     /accessibilityLabel=\{`Delete \$\{full\}`\}/.test(row));
+
+  // BOTH lists must go through it. They previously held byte-identical copies of
+  // the label map and the row, so a change to one silently left the other behind
+  // - which is how the live sheet and the box score could disagree about what a
+  // play says or whether deleting it asks first.
+  for (const [name, src] of [['LiveGameScreen', live], ['BoxScoreScreen', box]]) {
+    ok(`${name} renders the play log through PlayLogRow`, /<PlayLogRow\b/.test(src),
+       'a second copy of the row drifts from this one');
+    ok(`${name} has no private play-by-play label map`,
+       !/_LABEL: Record<EventType, string>/.test(src),
+       'PLAY_LABEL in components/PlayLog.tsx is the only vocabulary');
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ import {
   lineScore, perfRating, teamPeriodTimeouts,
 } from '../lib/stats';
 import { claimOnce, reconcileLineup, courtKeyOf } from '../lib/liveInput';
+import { PlayLogRow, PlayLogTeam } from '../components/PlayLog';
 import { tapFeedback, undoFeedback, successFeedback } from '../lib/haptics';
 import { usePromos, onPromoTap } from '../lib/usePromos';
 
@@ -54,12 +55,6 @@ const SPOKEN: Record<EventType, string> = {
 // announceForAccessibility rather than accessibilityLiveRegion="polite": the
 // live region is Android-only, and setting both makes Android speak twice.
 const announce = (message: string) => AccessibilityInfo.announceForAccessibility(message);
-
-const PBP_LABEL: Record<EventType, string> = {
-  fg2_make: 'made 2', fg2_miss: 'missed 2', fg3_make: 'made 3', fg3_miss: 'missed 3',
-  ft_make: 'made FT', ft_miss: 'missed FT', reb: 'rebound', oreb: 'off. reb', dreb: 'def. reb',
-  ast: 'assist', stl: 'steal', blk: 'block', tov: 'turnover', pf: 'foul', timeout: 'Timeout',
-};
 
 export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveGame'>) {
   const { leagueId, gameId, spectator } = route.params;
@@ -635,7 +630,10 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
         <PlayByPlayModal
           events={events.slice().reverse()}
           nameOf={(id) => id ? (league.players.find(p => p.id === id)?.name ?? 'Player') : 'Team'}
-          teamNameOf={(teamId) => league.teams.find(t => t.id === teamId)?.name ?? 'Team'}
+          teamOf={(teamId) => {
+            const t = league.teams.find(x => x.id === teamId);
+            return { name: t?.name ?? 'Team', color: t?.color ?? colors.muted, logo: t?.logo };
+          }}
           canDelete={!readOnly}
           onDelete={(eid) => dispatch({ t: 'DELETE_EVENT', leagueId, gameId, eventId: eid })}
           onClose={() => setLogOpen(false)}
@@ -992,15 +990,8 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
   );
 }
 
-function PlayByPlayModal({ events, nameOf, teamNameOf, canDelete, onDelete, onClose }:
-  { events: { id: string; period: number; type: EventType; playerId: string | null; teamId: string; note?: string }[]; nameOf: (id: string | null) => string; teamNameOf: (teamId: string) => string; canDelete: boolean; onDelete: (id: string) => void; onClose: () => void }) {
-  const lineFor = (e: { type: EventType; playerId: string | null; teamId: string; note?: string }) => {
-    if (e.type === 'timeout') {
-      const team = teamNameOf(e.teamId);
-      return e.note ? `${team} Timeout — ${e.note} remaining` : `${team} Timeout`;
-    }
-    return `${nameOf(e.playerId)} — ${PBP_LABEL[e.type]}`;
-  };
+function PlayByPlayModal({ events, nameOf, teamOf, canDelete, onDelete, onClose }:
+  { events: { id: string; period: number; type: EventType; playerId: string | null; teamId: string; note?: string }[]; nameOf: (id: string | null) => string; teamOf: (teamId: string) => PlayLogTeam; canDelete: boolean; onDelete: (id: string) => void; onClose: () => void }) {
   return (
     <Modal transparent animationType="slide" onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: '#000B', justifyContent: 'flex-end' }}>
@@ -1028,20 +1019,13 @@ function PlayByPlayModal({ events, nameOf, teamNameOf, canDelete, onDelete, onCl
               windowSize={11}
               removeClippedSubviews
               renderItem={({ item: e, index: i }) => (
-                <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: i === 0 ? 0 : 1, borderTopColor: colors.line }}>
-                  <Txt k="stat" color={colors.muted} style={{ width: 28 }}>{e.period}</Txt>
-                  <Txt k="body" style={{ flex: 1 }} color={e.type === 'timeout' ? colors.yellow : colors.text}>{lineFor(e)}</Txt>
-                  {canDelete && (
-                    <Pressable
-                      onPress={() => onDelete(e.id)}
-                      hitSlop={8}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Delete ${lineFor(e)}`}
-                    >
-                      <Txt k="body" color={colors.red}>✕</Txt>
-                    </Pressable>
-                  )}
-                </View>
+                <PlayLogRow
+                  event={e}
+                  team={teamOf(e.teamId)}
+                  nameOf={nameOf}
+                  first={i === 0}
+                  onDelete={canDelete ? onDelete : undefined}
+                />
               )}
             />
           )}

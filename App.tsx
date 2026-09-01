@@ -40,6 +40,18 @@ import PlayerProfileScreen from './src/screens/PlayerProfileScreen';
 const Stack = createNativeStackNavigator<RootStackParams>();
 
 // Screens with no natural title show the brand mark instead of dead space.
+//
+// `title` is still set on every screen below, including these. On iOS the
+// native stack labels the back button with the PREVIOUS screen's `title`, and
+// falls back to the ROUTE NAME when there isn't one - which is how "LeagueDetail"
+// came to be shown to users, unspaced, in the top left. `headerTitle` overrides
+// what the header renders but is not a label, so it never filled that gap.
+//
+// So: `headerTitle` decides what this screen's header shows; `title` is the
+// human name other screens refer to it by. Route names stay PascalCase because
+// they are code identifiers keyed to RootStackParams - they are not, and should
+// never be, user-visible strings. tests/static.test.js CHECK 21 fails the build
+// if a screen is registered without a title.
 const brandHeader = { headerTitle: () => <MiniWordmark size={20} /> };
 
 const navTheme = {
@@ -96,25 +108,25 @@ export default function App() {
                   headerShadowVisible: false,
                   contentStyle: { backgroundColor: colors.bg },
                 }}>
-                <Stack.Screen name="Leagues" component={LeaguesScreen} options={{ headerShown: false }} />
-              <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
-                <Stack.Screen name="CreateLeague" component={CreateLeagueScreen} options={brandHeader} />
-                <Stack.Screen name="RecGame" component={RecGameScreen} options={brandHeader} />
-                <Stack.Screen name="LeagueDetail" component={LeagueDetailScreen} options={brandHeader} />
-                <Stack.Screen name="GamesOnDate" component={GamesOnDateScreen} options={brandHeader} />
+                <Stack.Screen name="Leagues" component={LeaguesScreen} options={{ headerShown: false, title: 'Home' }} />
+                <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
+                <Stack.Screen name="CreateLeague" component={CreateLeagueScreen} options={{ ...brandHeader, title: 'New League' }} />
+                <Stack.Screen name="RecGame" component={RecGameScreen} options={{ ...brandHeader, title: 'Drop-In Game' }} />
+                <Stack.Screen name="LeagueDetail" component={LeagueDetailScreen} options={{ ...brandHeader, title: 'League' }} />
+                <Stack.Screen name="GamesOnDate" component={GamesOnDateScreen} options={{ ...brandHeader, title: 'Games' }} />
                 <Stack.Screen name="ManageRoster" component={ManageRosterScreen} options={{ title: 'Roster' }} />
-                <Stack.Screen name="TeamProfile" component={TeamProfileScreen} options={brandHeader} />
-          <Stack.Screen name="EditTeam" component={EditTeamScreen} options={{ title: 'Edit Team' }} />
-                <Stack.Screen name="NewGame" component={NewGameScreen} options={brandHeader} />
-                <Stack.Screen name="SelectLineup" component={SelectLineupScreen} options={brandHeader} />
-                <Stack.Screen name="LiveGame" component={LiveGameScreen} options={{ ...brandHeader, headerBackVisible: false, gestureEnabled: false }} />
+                <Stack.Screen name="TeamProfile" component={TeamProfileScreen} options={{ ...brandHeader, title: 'Team' }} />
+                <Stack.Screen name="EditTeam" component={EditTeamScreen} options={{ title: 'Edit Team' }} />
+                <Stack.Screen name="NewGame" component={NewGameScreen} options={{ ...brandHeader, title: 'New Game' }} />
+                <Stack.Screen name="SelectLineup" component={SelectLineupScreen} options={{ ...brandHeader, title: 'Starting Five' }} />
+                <Stack.Screen name="LiveGame" component={LiveGameScreen} options={{ ...brandHeader, title: 'Live Game', headerBackVisible: false, gestureEnabled: false }} />
                 <Stack.Screen name="BoxScore" component={BoxScoreScreen} options={{ title: 'Box Score' }} />
-                <Stack.Screen name="FinalScore" component={FinalScoreScreen} options={{ ...brandHeader, headerBackVisible: false, gestureEnabled: false }} />
-                <Stack.Screen name="SeasonRecap" component={SeasonRecapScreen} options={brandHeader} />
+                <Stack.Screen name="FinalScore" component={FinalScoreScreen} options={{ ...brandHeader, title: 'Final Score', headerBackVisible: false, gestureEnabled: false }} />
+                <Stack.Screen name="SeasonRecap" component={SeasonRecapScreen} options={{ ...brandHeader, title: 'Season Recap' }} />
                 <Stack.Screen name="ShareCard" component={ShareCardScreen} options={{ ...brandHeader, title: 'Share Card' }} />
                 <Stack.Screen name="ManagePromos" component={ManagePromosScreen} options={{ ...brandHeader, title: 'Sponsor Promos' }} />
                 <Stack.Screen name="BulkImport" component={BulkImportScreen} options={{ ...brandHeader, title: 'Bulk Import' }} />
-                <Stack.Screen name="PlayerProfile" component={PlayerProfileScreen} options={brandHeader} />
+                <Stack.Screen name="PlayerProfile" component={PlayerProfileScreen} options={{ ...brandHeader, title: 'Player' }} />
               </Stack.Navigator>
             </NavigationContainer>
           </AdminProvider>

@@ -568,7 +568,22 @@ create or replace function public.rec_setup_game(
 ) returns void language plpgsql security definer set search_path = public as $$
 declare team jsonb; ply jsonb; home_id text; away_id text; i int := 0;
 begin
-  if not public.is_authed_user() then raise exception 'Sign in to start a drop-in game.'; end if;
+  -- A Super Admin may start a drop-in game without a provider account.
+  --
+  -- is_authed_user() excludes anonymous sessions, and the backup admin path
+  -- (elevate_to_admin, password checked server-side against a bcrypt hash with
+  -- attempt throttling) elevates whatever session the device already has -
+  -- which is an anonymous one. So a verified Super Admin was refused here while
+  -- being granted everything else in this schema, including the blanket
+  -- is_admin() write policies. The client agreed with the grant and not with
+  -- this line, so the app let them fill in two rosters and then failed on save.
+  --
+  -- This closes that gap in the direction the rest of the file already points.
+  -- It is not a widening of trust: is_admin() reads profiles.is_admin, which
+  -- only elevate_to_admin can set, and only on a correct password.
+  if not (public.is_authed_user() or public.is_admin()) then
+    raise exception 'Sign in to start a drop-in game.';
+  end if;
 
   -- League row first (idempotent). Shared community space is owned by nobody;
   -- a private drop-in space is owned by its creator.

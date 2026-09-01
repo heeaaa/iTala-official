@@ -48,7 +48,19 @@ npx expo install expo-web-browser expo-linking
 ```
 
 Both are part of the Expo Go runtime, so **Google Sign-In works inside Expo Go**
-— it opens the system browser and deep-links back into the app.
+— it opens the system browser and deep-links back into the app — but **only once
+the Expo Go redirect URL is on the Supabase allowlist**. See step 4; this is the
+single most common reason sign-in appears broken during development, and the
+symptom does not look like a configuration problem:
+
+> Supabase honours `redirect_to` only if it is allowlisted, and silently falls
+> back to the project **Site URL** otherwise. The Site URL is `itala://auth-callback`,
+> a scheme only a real build registers — so in Expo Go the browser is handed a
+> URL no installed app claims and Safari reports
+> **"Safari cannot open the page because the address is invalid."**
+>
+> A **development, preview or production build** is unaffected: its redirect IS
+> `itala://auth-callback`, which is the Site URL and therefore always accepted.
 
 ## 3. Create the Google OAuth client (one time, free)
 
@@ -124,9 +136,12 @@ Notes:
 - Apple provides the person's name **only on the very first** authorization;
   the app captures it then. If it's ever missed, the display name falls back
   to the email.
-- Apple sign-in requires a real build (or Expo Go on iOS where available) —
-  there is no Apple sign-in on Android, and the button simply doesn't render
-  there.
+- Apple sign-in needs an iOS device. There is no Apple sign-in on Android and
+  the button simply doesn't render there. In **Expo Go** it runs, but the token
+  it produces carries Expo Go's bundle id, so it only succeeds while
+  `host.exp.Exponent` is in the provider's Client IDs (see step 1 above). In a
+  development, preview or production build it carries `com.bpbl.itala` and needs
+  no workaround.
 
 ## Deleting an account (store-policy requirement)
 
@@ -212,9 +227,16 @@ update public.profiles set is_admin = false where id = '<their auth uid>';
 
 ## Troubleshooting
 
-- **Browser opens, but after choosing the account nothing happens** → the
-  redirect URL isn't allowlisted. Check the Metro log line for the exact URL
-  and add it under Supabase → Auth → URL Configuration.
+- **"Safari cannot open the page because the address is invalid"**, or the
+  browser opens and after choosing the account nothing comes back → the redirect
+  URL isn't allowlisted, so Supabase fell back to the Site URL. Check the Metro
+  log line for the exact URL and add it under Supabase → Authentication → URL
+  Configuration → Redirect URLs. In Expo Go that URL contains your machine's LAN
+  IP and changes when the network does, so `exp://*` is the practical entry.
+  Building the app makes the problem go away entirely.
+- **"Apple sign-in ... signed the token for a different app id"** → you are in
+  Expo Go and `host.exp.Exponent` is not in Supabase → Providers → Apple →
+  Client IDs. Add it for development, or test in a build.
 - **"Could not start sign-in"** → the Google provider isn't enabled in
   Supabase, or the client ID/secret are wrong.
 - **Google shows "access blocked / app not verified"** → your consent screen is

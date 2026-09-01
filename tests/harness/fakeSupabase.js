@@ -29,6 +29,12 @@ class FakeServer {
     this.log = [];
     // op -> ms. op looks like 'insert:events' or 'delete:events'.
     this.latency = {};
+    // op -> 'network' | { message }. 'network' throws the TypeError React
+    // Native's fetch throws when it cannot reach the host, which is what a
+    // scorekeeper on a dropped gym connection actually gets; an object comes
+    // back as a PostgREST error instead. Needed because a push that REJECTS and
+    // a push that succeeds must leave the ledger in different states.
+    this.failures = {};
     // table -> predicate(row, op). Return false to hide the row from writes,
     // emulating RLS. Hidden rows are silently skipped, never an error.
     this.rls = {};
@@ -54,7 +60,7 @@ function makeBuilder(server, table, op, payload) {
   const filters = [];
   let wantSingle = false;
   let wantReturning = false;
-  let order = null;
+  const orderBy = [];
 
   const apply = () => {
     server.log.push({ op, table, payload: clone(payload), filters: clone(filters) });
@@ -62,15 +68,21 @@ function makeBuilder(server, table, op, payload) {
 
     if (op === 'select') {
       let data = server.rows[table].filter(matches).map(clone);
-      if (order) {
-        const { col, ascending } = order;
+      // PostgREST applies .order() calls left to right, so a second one breaks
+      // ties left by the first. The events query relies on that: .order('ts')
+      // .order('id') is what makes row order total rather than arbitrary within
+      // a millisecond. Modelling only the first key would let this suite pass
+      // while the real server still shuffled tied rows.
+      if (orderBy.length) {
         data.sort((a, b) => {
-          const av = a[col], bv = b[col];
-          if (av === bv) return 0;
-          if (av === null || av === undefined) return 1;
-          if (bv === null || bv === undefined) return -1;
-          const c = av < bv ? -1 : 1;
-          return ascending ? c : -c;
+          for (const { col, ascending } of orderBy) {
+            const av = a[col], bv = b[col];
+            if (av === bv) continue;
+            if (av === null || av === undefined) return 1;
+            if (bv === null || bv === undefined) return -1;
+            return (av < bv ? -1 : 1) * (ascending ? 1 : -1);
+          }
+          return 0;
         });
       }
       if (wantSingle) return { data: data[0] ?? null, error: null };
@@ -110,11 +122,17 @@ function makeBuilder(server, table, op, payload) {
     throw new Error(`fakeSupabase: unsupported op ${op}`);
   };
 
-  const settle = async () => { await wait(server.delayFor(`${op}:${table}`)); return apply(); };
+  const settle = async () => {
+    await wait(server.delayFor(`${op}:${table}`));
+    const f = server.failures[`${op}:${table}`];
+    if (f === 'network') throw new TypeError('Network request failed');
+    if (f) return { data: null, error: { message: f.message || String(f) } };
+    return apply();
+  };
 
   const builder = {
     eq(col, val) { filters.push({ col, val }); return builder; },
-    order(col, opts) { order = { col, ascending: opts?.ascending !== false }; return builder; },
+    order(col, opts) { orderBy.push({ col, ascending: opts?.ascending !== false }); return builder; },
     select() { wantReturning = true; return builder; },
     maybeSingle() { wantSingle = true; return builder; },
     single() { wantSingle = true; return builder; },
@@ -139,6 +157,9 @@ function makeClient(server) {
     async rpc(name, args) {
       await wait(server.delayFor(`rpc:${name}`));
       server.log.push({ op: 'rpc', name, payload: clone(args) });
+      const f = server.failures[`rpc:${name}`];
+      if (f === 'network') throw new TypeError('Network request failed');
+      if (f) return { data: null, error: { message: f.message || String(f) } };
       switch (name) {
         case 'create_league':
           if (!server.has('leagues', args.p_id)) {

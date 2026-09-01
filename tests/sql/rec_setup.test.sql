@@ -131,6 +131,79 @@ begin
                    'got ' || coalesce(array_to_string(v, ','), 'null'));
 end $$;
 
+-- ---------------------------------------------------------------------------
+-- The backup admin path.
+--
+-- elevate_to_admin raises whatever session the device already has, and on a
+-- device with no Google/Apple account that session is ANONYMOUS. is_authed_user()
+-- excludes anonymous sessions, so a Super Admin who unlocked with the password
+-- was refused here while the rest of this schema granted them everything
+-- (see the blanket is_admin() policies). The app agreed with the grant, so it
+-- let them fill in two rosters and only then failed on save.
+-- ---------------------------------------------------------------------------
+
+-- An anonymous session that is NOT an admin must still be refused.
+update auth_state set uid = '22222222-2222-2222-2222-222222222222', anon = true;
+delete from public.profiles where id = '22222222-2222-2222-2222-222222222222';
+
+do $$
+declare msg text; wrote int;
+begin
+  begin
+    perform public.rec_setup_game(
+      'rec-anon','Private Drop-In Games', false, 1720000001000,
+      'game_anon','Gym', true, true,
+      '[{"id":"tX","name":"X","color":"#111111","players":[{"id":"px","name":"P","number":"1"}]},
+        {"id":"tY","name":"Y","color":"#222222","players":[{"id":"py","name":"Q","number":"2"}]}]'::jsonb);
+    msg := '(no error raised)';
+  exception when others then msg := SQLERRM;
+  end;
+  perform t_report('R10 a plain anonymous session is still refused',
+                   msg = 'Sign in to start a drop-in game.', 'got ' || quote_literal(msg));
+
+  select count(*) into wrote from public.games where id = 'game_anon';
+  perform t_report('R11 the refused call wrote nothing', wrote = 0, 'found ' || wrote || ' game(s)');
+end $$;
+
+-- Same anonymous session, now password-elevated to Super Admin.
+insert into public.profiles (id, is_admin) values ('22222222-2222-2222-2222-222222222222', true)
+on conflict (id) do update set is_admin = true;
+
+do $$
+declare msg text;
+begin
+  begin
+    perform public.rec_setup_game(
+      'rec-anon','Private Drop-In Games', false, 1720000001000,
+      'game_anon','Gym', true, true,
+      '[{"id":"tX","name":"X","color":"#111111","players":[{"id":"px","name":"P","number":"1"}]},
+        {"id":"tY","name":"Y","color":"#222222","players":[{"id":"py","name":"Q","number":"2"}]}]'::jsonb);
+    msg := null;
+  exception when others then msg := SQLERRM;
+  end;
+  perform t_report('R12 a password-elevated Super Admin CAN start a drop-in game',
+                   msg is null, 'raised ' || coalesce(quote_literal(msg), ''));
+end $$;
+
+do $$
+declare r record;
+begin
+  select status, created_by into r from public.games where id = 'game_anon';
+  perform t_report('R13 the game exists, stamped with the admin''s session uid',
+                   r.status = 'live' and r.created_by = '22222222-2222-2222-2222-222222222222',
+                   'got status=' || coalesce(r.status,'null') || ' created_by=' || coalesce(r.created_by::text,'null'));
+end $$;
+
+do $$
+declare c int;
+begin
+  select count(*) into c from public.teams where league_id = 'rec-anon';
+  perform t_report('R14 both teams landed with it', c = 2, 'found ' || c);
+end $$;
+
+-- Put the harness back the way the rest of the tree expects it.
+update auth_state set uid = '11111111-1111-1111-1111-111111111111', anon = false;
+
 -- report
 select case when ok then '  PASS  ' else '  FAIL  ' end || label
        || coalesce(' :: ' || detail, '')

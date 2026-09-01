@@ -532,6 +532,61 @@ this is reachable without anyone mis-tapping.
       section consistent with each other.
 
 
+## P10 - live-score consistency, sign-in, and the drop-in flow (NEW, never run)
+
+Automation covers the logic (`tests/sync.test.js` S9-S17, `tests/reducer.test.js`
+R1-R26) against a latency-modelling server emulator. What it cannot cover is a
+real network, a real Supabase project, and a real thumb. These are the cases
+those fixes were written for, so they are the ones worth a device.
+
+### Score consistency
+- [ ] **T1** Log a 3PT. The score goes up by 3 **and stays there** - no revert a
+      few seconds later, no jump to 6 afterwards.
+- [ ] **T2** With a second device watching the same game, log stats quickly on
+      the first. Both settle on the same score, and neither flickers backwards.
+- [ ] **T3** Turn wifi **off**. Log three stats. Each appears and stays; the sync
+      badge goes red. Turn wifi back on and pull to refresh - the three stats are
+      still there and the score is unchanged.
+- [ ] **T4** Undo three times quickly, then Redo three times quickly. The score
+      lands where it started, and no in-between value survives.
+- [ ] **T5** Undo a stat, then immediately log a different one. The undone stat
+      does not come back.
+
+### Sign-in
+- [ ] **T6** In **Expo Go** with the `exp://...` URL from the Metro log added to
+      Supabase → Authentication → URL Configuration → Redirect URLs: Google
+      sign-in completes and returns to the app.
+- [ ] **T7** Without that entry: the browser fails to come back, and the app says
+      so and prints the URL to add - it no longer looks like a Safari error with
+      no explanation. (Worth doing once, to confirm the message.)
+- [ ] **T8** In a **development or preview build**: Google sign-in completes with
+      no allowlist entry at all (its redirect is `itala://auth-callback`, which is
+      the Site URL).
+- [ ] **T9** Apple sign-in in a build. In Expo Go it only works while
+      `host.exp.Exponent` is in the provider's Client IDs; without it the app
+      explains the bundle-id mismatch rather than reporting a network error.
+- [ ] **T10** Fail a sign-in (aeroplane mode). Close the sheet. Tap the wordmark
+      ten times and open Admin access. **The sign-in error must not be in that
+      modal.**
+- [ ] **T11** Put the device in aeroplane mode and relaunch the app while signed
+      in. When the network returns you are **still signed in** - the app must not
+      have quietly dropped you to a guest session.
+
+### Drop-in games
+- [ ] **T12** As the backup admin (wordmark x10, password), create a drop-in
+      game. It saves.
+- [ ] **T13** In aeroplane mode, create a drop-in game. The alert says nothing
+      was saved, and the game is **not** in the list afterwards.
+- [ ] **T14** Same, but into a drop-in space that already has games in it: only
+      the failed game disappears, the space and its earlier games survive.
+
+### Play-by-play and titles
+- [ ] **T15** Open the play-by-play. Every line shows the team badge and name.
+- [ ] **T16** Tap the ✕ on a line. A confirmation names the play. Cancel changes
+      nothing; confirm applies the change to the score.
+- [ ] **T17** Walk the whole app. No screen shows a route name (for example
+      "LeagueDetail") in the header or the iOS back button.
+
 ## Known limitations (not bugs)
 
 - Push notifications are limited in Expo Go. Use a build.
