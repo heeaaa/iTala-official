@@ -192,21 +192,47 @@ ok('DEPLOYMENT.md keeps the zip-apply commands', read('DEPLOYMENT.md').includes(
   ok('dispatch serializes server writes through enqueuePush',
      /enqueuePush\(\s*\(\)\s*=>\s*pushAction\(/.test(store),
      'pushes fired independently let a DELETE overtake the INSERT it undoes');
-  ok('dispatch resolves the undo target before pushing',
-     /resolveUndoTarget\(\s*stateRef\.current/.test(store),
-     'without the id the sync layer cannot delete the undone row');
-  ok('dispatch tombstones the undone event',
-     /guardUndoneEvent\(action\.eventId\)/.test(store),
-     'an in-flight refetch would resurrect the undone stat');
-  ok('redo lifts the tombstone', /releaseUndoGuard\(/.test(store));
-  ok('HYDRATE drops tombstoned events',
-     /undoneEventIds\(\)/.test(store) && /filter\(e => !undone\.has\(e\.id\)\)/.test(store));
+  const pend = read('src/sync/pendingEvents.ts');
+
+  ok('dispatch stamps event ids before reducing',
+     /stampActionIds\(\s*stateRef\.current/.test(store),
+     'the reducer, the push and the ledger must all name the same row');
+  ok('dispatch records the write in the pending ledger',
+     /recordPending\(action, next\)/.test(store),
+     'without a ledger entry a snapshot older than the tap overwrites it');
+  ok('a settled push tells the ledger which way it went',
+     /confirmPending\(touchedEventIds\)/.test(store) && /failPending\(touchedEventIds\)/.test(store),
+     'an entry that is never confirmed pins forever; one confirmed on failure loses the stat');
+  ok('every server hydrate carries the tick its fetch started at',
+     !/baseDispatch\(\{ t: 'HYDRATE', state: \{ leagues: remote\.leagues \} \}\)/.test(store),
+     "a HYDRATE without snapshotAt skips reconciliation and clobbers pending writes");
+  ok('the snapshot tick is taken before the fetch, not after',
+     /const at = beginSnapshot\(\);\s*\n\s*const remote = await fetchAllState/.test(store),
+     'a tick taken after the read would make a stale snapshot look current');
+  ok('HYDRATE reconciles events against the ledger',
+     /reconcileLeagueEvents\(l\.id, l\.events, a\.snapshotAt\)/.test(store));
+  ok('the ledger retires an entry by ordering, not by a timeout',
+     /confirmedAt !== null && e\.confirmedAt < snapshotStarted/.test(pend) &&
+     !/GUARD_MS|Date\.now\(\) \+/.test(pend),
+     'a time window is both too short for a slow push and too long for a failed one');
+  ok('events are ordered by (ts, id) on the wire',
+     /\.order\('ts'\)\.order\('id'\)/.test(sync),
+     'ts alone ties, and Undo means "the last event" - the two sides must agree');
+  ok('the client sorts by the same key',
+     /a\.ts !== b\.ts/.test(pend) && /a\.id < b\.id/.test(pend));
   ok('the undo delete asks for the deleted rows back',
      /delete\(\)\.eq\('id', action\.eventId\)\.select\(/.test(sync),
      'PostgREST reports success for a delete that RLS filtered to nothing');
-  ok('a refused undo delete is surfaced, not logged',
-     /UNDO_EVENT/.test(sync) && /BULK_IMPORT_ROSTER\|UNDO_EVENT/.test(sync),
-     'pushAction must rethrow so the sync badge shows an error');
+  ok('a failed event write is surfaced, not logged',
+     /MUST_NOT_FAIL_SILENTLY/.test(sync) &&
+     /'ADD_EVENT', 'REDO_EVENT', 'UNDO_EVENT', 'DELETE_EVENT'/.test(sync),
+     'a swallowed INSERT tells the ledger the server has a stat it does not');
+  ok('the rethrow is keyed off the action, not the message text',
+     /MUST_NOT_FAIL_SILENTLY\.has\(action\.t\)/.test(sync),
+     'a network TypeError carries no label for a message test to match');
+  ok('event pushes look their row up by id, never by position',
+     !/events\[l\.events\.length - 1\]/.test(sync),
+     'canonical ordering means the row an action created is not always last');
 }
 
 // ---------------------------------------------------------------------------

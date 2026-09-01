@@ -9,6 +9,10 @@ import { loadState, saveState, loadPrefs, savePrefs } from './storage';
 import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
 import { fetchAllState, pushAction, subscribeRealtime } from '../sync/sync';
 import { enqueuePush, __resetPushQueue } from '../sync/pushQueue';
+import {
+  beginSnapshot, confirmPending, failPending, insertEvent, lastEventOf,
+  recordPending, reconcileLeagueEvents, sortEvents, __resetPending,
+} from '../sync/pendingEvents';
 import { warn } from '../lib/log';
 
 // gameId -> expiry timestamp. Lineups written locally are protected from being
@@ -44,28 +48,12 @@ function activeBundles(): PendingBundle[] {
   return bundleGuard;
 }
 
-// Undone-event tombstones. eventId -> expiry timestamp.
-//
-// Deleting the row server-side is necessary but not sufficient. Realtime fires
-// on the INSERT, so a refetch is very often already on the wire when the user
-// taps Undo a moment later. That snapshot was taken while the row still existed,
-// and a naive HYDRATE applies it after the undo — putting the stat back even
-// though the delete succeeded. Same shape as lineupGuard/bundleGuard: hold a
-// short-lived local truth that a lagging snapshot is not allowed to overwrite.
-//
-// The window is deliberately generous (a slow pull on gym wifi) and one-sided:
-// once it expires the server is authoritative again, so a delete that genuinely
-// failed is not papered over forever — pushAction surfaces that as a sync error.
-const undoGuard = new Map<string, number>();
-const UNDO_GUARD_MS = 12000;
-function guardUndoneEvent(eventId: string) { undoGuard.set(eventId, Date.now() + UNDO_GUARD_MS); }
-// Redo re-adds the event on purpose, so it must clear its own tombstone.
-function releaseUndoGuard(eventId: string) { undoGuard.delete(eventId); }
-function undoneEventIds(): Set<string> {
-  const now = Date.now();
-  for (const [id, exp] of undoGuard) if (now > exp) undoGuard.delete(id);
-  return new Set(undoGuard.keys());
-}
+// Event reconciliation is NOT a timed guard — see sync/pendingEvents.ts. Local
+// event writes go into a ledger keyed by event id and are retired only once a
+// snapshot is known to have been read AFTER the server confirmed them. The
+// 12-second undo tombstone this replaced covered undone events only, left a
+// pending INSERT (i.e. the scoreboard) completely unprotected, and flipped its
+// answer the moment its clock ran out.
 
 interface RecTeamInput { id: string; name: string; color?: string; players: { id: string; name: string; number?: string }[] }
 
@@ -73,7 +61,14 @@ export type Action =
   // `settings` is the legacy app-wide toggle. It is no longer part of AppState,
   // but a saved state loaded off an older build still carries it, so the shape
   // is declared here and read once by the HYDRATE case below.
-  | { t: 'HYDRATE'; state: AppState & { settings?: LegacyPersistedSettings } }
+  | {
+      t: 'HYDRATE';
+      state: AppState & { settings?: LegacyPersistedSettings };
+      /** Tick from `beginSnapshot()`, taken BEFORE the fetch that produced this
+       *  state. Present only for server snapshots; a hydrate from local storage
+       *  has no server rows to reconcile against and omits it. */
+      snapshotAt?: number;
+    }
   | { t: 'ADD_LEAGUE'; id: string; name: string; season: string; foulOutLimit?: number; kind?: 'league' | 'recreational'; trackMisses?: boolean; trackTurnovers?: boolean; isShared?: boolean; creationCode?: string }
   | { t: 'DELETE_LEAGUE'; leagueId: string }
   | { t: 'ADD_TEAM'; leagueId: string; name: string; teamOnly?: boolean; id?: string }
@@ -87,9 +82,12 @@ export type Action =
   | { t: 'SET_LINEUP'; leagueId: string; gameId: string; side: 'home' | 'away'; playerIds: string[] }
   | { t: 'SET_LINEUPS'; leagueId: string; gameId: string; home: string[]; away: string[] }
   | { t: 'SUBSTITUTE'; leagueId: string; gameId: string; side: 'home' | 'away'; outId: string; inId: string }
-  | { t: 'ADD_EVENT'; leagueId: string; gameId: string; teamId: string; playerId: string | null; type: EventType; period: number; note?: string }
+  // `id` on ADD_EVENT and `eventId` on UNDO/REDO are filled in by stampActionIds
+  // at dispatch time. Callers leave them out; the reducer, the sync push and the
+  // pending ledger then all name the same row.
+  | { t: 'ADD_EVENT'; leagueId: string; gameId: string; teamId: string; playerId: string | null; type: EventType; period: number; note?: string; id?: string }
   | { t: 'UNDO_EVENT'; leagueId: string; gameId: string; eventId?: string }
-  | { t: 'REDO_EVENT'; leagueId: string; gameId: string }
+  | { t: 'REDO_EVENT'; leagueId: string; gameId: string; eventId?: string }
   | { t: 'DELETE_EVENT'; leagueId: string; gameId: string; eventId: string }
   | { t: 'DELETE_GAME'; leagueId: string; gameId: string }
   | { t: 'CLEANUP_REC_GAMES'; leagueId: string; gameIds: string[] }
@@ -114,31 +112,52 @@ function foulLimitOf(l: League): number {
 }
 
 /**
- * Stamp an UNDO_EVENT with the id of the event it is about to remove.
+ * Give every event-mutating action a concrete event id BEFORE it is reduced.
  *
- * UNDO_EVENT means "drop the last event of this game", which only the
- * PRE-dispatch state can resolve. The sync layer needs the concrete id so it can
- * delete that exact row; without it the row survives server-side and the next
- * pull hands the stat back. Exported so the sync tests exercise the same
- * resolution the app uses rather than a copy of it.
+ * Three consumers need to agree on which row an action is about: the reducer,
+ * the sync push, and the pending ledger. Two of them used to work it out by
+ * looking at the resulting array — "the last event of this game" for undo, and
+ * `events[events.length - 1]` for the push — which only held while events were
+ * appended in arrival order. They are now kept in canonical (ts, id) order so
+ * the local list matches the server's, and a redone event lands back in its own
+ * place rather than at the end. Position-based lookups do not survive that, and
+ * they were fragile anyway: an id resolved here, once, from the PRE-dispatch
+ * state is unambiguous for all three.
+ *
+ *   ADD_EVENT   → mint the new id
+ *   UNDO_EVENT  → the canonical last event of the game
+ *   REDO_EVENT  → the event on top of the redo stack
+ *
+ * Exported so the sync tests exercise the same resolution the app uses rather
+ * than a copy of it.
  */
-export function resolveUndoTarget(state: AppState, action: Action): Action {
-  if (action.t !== 'UNDO_EVENT' || action.eventId) return action;
-  const lg = state.leagues.find(l => l.id === action.leagueId);
-  const ofGame = (lg?.events ?? []).filter(e => e.gameId === action.gameId);
-  const last = ofGame[ofGame.length - 1];
-  return last ? { ...action, eventId: last.id } : action;
+export function stampActionIds(state: AppState, action: Action): Action {
+  if (action.t === 'ADD_EVENT') {
+    return action.id ? action : { ...action, id: uid() };
+  }
+  if (action.t === 'UNDO_EVENT') {
+    if (action.eventId) return action;
+    const lg = state.leagues.find(l => l.id === action.leagueId);
+    const last = lastEventOf(lg?.events ?? [], action.gameId);
+    return last ? { ...action, eventId: last.id } : action;
+  }
+  if (action.t === 'REDO_EVENT') {
+    if (action.eventId) return action;
+    const lg = state.leagues.find(l => l.id === action.leagueId);
+    const stack = lg?._redo?.[action.gameId] ?? [];
+    const top = stack[stack.length - 1];
+    return top ? { ...action, eventId: top.id } : action;
+  }
+  return action;
 }
 
 /** Test hook: clear module-level guards and the push chain between suites. */
 export function __resetSyncPrimitives(): void {
-  undoGuard.clear();
+  __resetPending();
   lineupGuard.clear();
   bundleGuard.length = 0;
   __resetPushQueue();
 }
-
-export { guardUndoneEvent, releaseUndoGuard };
 
 export function reducer(state: AppState, a: Action): AppState {
   switch (a.t) {
@@ -158,18 +177,21 @@ export function reducer(state: AppState, a: Action): AppState {
 
       const bundles = activeBundles();
       const localLeagues = new Map(state.leagues.map(l => [l.id, l]));
-      // Events undone in the last few seconds are dropped from the incoming
-      // snapshot. See undoGuard: without this a refetch that was already in
-      // flight when the user tapped Undo hands the stat straight back.
-      const undone = undoneEventIds();
 
       const leagues = a.state.leagues.map(l => {
-        const withoutUndone = undone.size && l.events.some(e => undone.has(e.id))
-          ? { ...l, events: l.events.filter(e => !undone.has(e.id)) }
-          : l;
-        const migrated = withoutUndone.trackMisses === undefined
-          ? { ...withoutUndone, trackMisses: legacyTrackMisses }
-          : withoutUndone;
+        // Reconcile the snapshot's events against local writes the server has
+        // not demonstrably applied yet. `snapshotAt` is the tick taken before
+        // the fetch; without one this is a hydrate from local storage, which
+        // has no server rows to reconcile and is simply put in canonical order.
+        // See sync/pendingEvents.ts — this is what stops a stale snapshot from
+        // reverting a just-tapped basket (and then double-counting it).
+        const events = a.snapshotAt === undefined
+          ? sortEvents(l.events)
+          : reconcileLeagueEvents(l.id, l.events, a.snapshotAt);
+        const reconciled = { ...l, events };
+        const migrated = reconciled.trackMisses === undefined
+          ? { ...reconciled, trackMisses: legacyTrackMisses }
+          : reconciled;
         const games = migrated.games.map(g => {
           if (isLineupGuarded(g.id)) {
             const local = currentGames.get(g.id);
@@ -351,11 +373,11 @@ export function reducer(state: AppState, a: Action): AppState {
     case 'ADD_EVENT':
       return mapLeague(state, a.leagueId, l => {
         const ev: GameEvent = {
-          id: uid(), gameId: a.gameId, teamId: a.teamId,
+          id: a.id ?? uid(), gameId: a.gameId, teamId: a.teamId,
           playerId: a.playerId, type: a.type, period: a.period, ts: Date.now(),
           note: a.note,
         };
-        const events = [...l.events, ev];
+        const events = insertEvent(l.events, ev);
         const clearedRedo = l._redo ? { ...l._redo, [a.gameId]: [] } : undefined;
 
         // Foul-out: if this foul reaches the limit, pull the player off the court automatically.
@@ -382,8 +404,11 @@ export function reducer(state: AppState, a: Action): AppState {
     case 'UNDO_EVENT':
       return mapLeague(state, a.leagueId, l => {
         const ofGame = l.events.filter(e => e.gameId === a.gameId);
-        if (ofGame.length === 0) return l;
-        const last = ofGame[ofGame.length - 1];
+        // Canonical (ts, id) order, matching the server's row order and
+        // resolveUndoTarget's choice — all three must agree on "the last
+        // event" or an undo removes a different row on each side.
+        const last = lastEventOf(l.events, a.gameId);
+        if (!last) return l;
         const redo = { ...(l._redo ?? {}) };
         redo[a.gameId] = [...(redo[a.gameId] ?? []), last]; // push onto the redo stack
         const events = l.events.filter(e => e.id !== last.id);
@@ -424,7 +449,11 @@ export function reducer(state: AppState, a: Action): AppState {
         const ev = stack[stack.length - 1];
         const redo = { ...(l._redo ?? {}) };
         redo[a.gameId] = stack.slice(0, -1);
-        return { ...l, events: [...l.events, ev], _redo: redo };
+        // Reinsert where its `ts` puts it, not at the end. Appending made a
+        // redone event look like the newest one locally while the server — which
+        // orders by ts — put it back where it belonged, so a following Undo
+        // removed different rows on the two sides.
+        return { ...l, events: insertEvent(l.events, ev), _redo: redo };
       });
 
     case 'DELETE_EVENT':
@@ -693,9 +722,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           // the retry would have filled it in regardless.
           const tryPull = async (): Promise<boolean> => {
             try {
+              // Tick BEFORE the fetch: rows read after this point may predate
+              // any local write confirmed after it. See sync/pendingEvents.ts.
+              const at = beginSnapshot();
               const remote = await fetchAllState(sb);
               if (!cancelled && remote && remote.leagues && remote.leagues.length > 0) {
-                baseDispatch({ t: 'HYDRATE', state: { leagues: remote.leagues } });
+                baseDispatch({ t: 'HYDRATE', state: { leagues: remote.leagues }, snapshotAt: at });
                 return true;
               }
             } catch (e) {
@@ -728,11 +760,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           const { data: sub } = sb.auth.onAuthStateChange(async (_event, s) => {
             if (!s || cancelled) return;
             try {
+              const at = beginSnapshot();
               const remote = await fetchAllState(sb);
               if (!cancelled && remote && remote.leagues) {
-                baseDispatch({ t: 'HYDRATE', state: { leagues: remote.leagues } });
+                baseDispatch({ t: 'HYDRATE', state: { leagues: remote.leagues }, snapshotAt: at });
               }
-            } catch {}
+            } catch (e) {
+              // Never silent: a failed re-pull after sign-in is exactly how a
+              // device ends up looking empty for no visible reason.
+              warn('[sync] post-auth re-pull failed:', (e as Error)?.message ?? String(e));
+            }
           });
           // Stash so cleanup works
           authSubRef.current = sub.subscription;
@@ -758,9 +795,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (refetching) return; // coalesce bursts
       refetching = true;
       try {
+        const at = beginSnapshot();
         const remote = await fetchAllState(sb);
         if (remote && remote.leagues) {
-          baseDispatch({ t: 'HYDRATE', state: { leagues: remote.leagues } });
+          baseDispatch({ t: 'HYDRATE', state: { leagues: remote.leagues }, snapshotAt: at });
         }
       } finally {
         refetching = false;
@@ -775,9 +813,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (!SYNC_ENABLED) return;
     const sb = getSupabase();
     if (!sb) return;
+    const at = beginSnapshot();
     const remote = await fetchAllState(sb);
     if (remote && remote.leagues) {
-      baseDispatch({ t: 'HYDRATE', state: { leagues: remote.leagues } });
+      baseDispatch({ t: 'HYDRATE', state: { leagues: remote.leagues }, snapshotAt: at });
     }
   }, []);
 
@@ -788,25 +827,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // HYDRATE is server→local; don't echo it back.
     if (incoming.t === 'HYDRATE') { baseDispatch(incoming); return; }
 
-    // UNDO removes "the last event of this game", an id only the PRE-dispatch
-    // state knows. Resolve it now so the sync layer can delete that exact row
-    // on the server; without this the undone event survives server-side and
-    // comes back on the next pull.
-    const action: Action = resolveUndoTarget(stateRef.current, incoming);
+    // Name the exact event row this action is about, from the PRE-dispatch
+    // state, before anything else looks at it. The reducer, the server push and
+    // the pending ledger then all agree on which row moved.
+    const action: Action = stampActionIds(stateRef.current, incoming);
 
     const next = reducer(stateRef.current, action);
     stateRef.current = next;
     baseDispatch(action);
 
-    // Tombstone the undone row so a refetch that was already in flight when the
-    // user tapped Undo cannot resurrect it. See undoGuard / HYDRATE.
-    if (action.t === 'UNDO_EVENT' && action.eventId) guardUndoneEvent(action.eventId);
-    // Redo puts the event back deliberately, so it must lift its own tombstone.
-    if (action.t === 'REDO_EVENT') {
-      const lg = next.leagues.find(l => l.id === action.leagueId);
-      const restored = lg?.events[lg.events.length - 1];
-      if (restored) releaseUndoGuard(restored.id);
-    }
+    // Record this write in the pending ledger BEFORE the push starts, so a
+    // snapshot that lands mid-flight is reconciled against it rather than
+    // silently overwriting it. See sync/pendingEvents.ts.
+    const touchedEventIds = recordPending(action, next);
 
     // Protect freshly-written lineups from a lagging realtime echo.
     if (action.t === 'SET_LINEUPS' || action.t === 'SET_LINEUP' || action.t === 'REC_SETUP_GAME') {
@@ -867,11 +900,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         setSyncState('saving');
         void enqueuePush(() => pushAction(sb, action, next))
           .then(() => {
+            // The server has it. The ledger entry stays until a snapshot read
+            // after this moment confirms it — an older one is still in flight.
+            confirmPending(touchedEventIds);
             setSyncState('saved');
             if (savedTimer.current) clearTimeout(savedTimer.current);
             savedTimer.current = setTimeout(() => setSyncState('idle'), 2000);
           })
           .catch((e) => {
+            // Pin the entry: the scorekeeper's stat stays on the board and the
+            // badge stays red, rather than the board quietly reverting later.
+            failPending(touchedEventIds);
             setSyncState('error');
             // Setting up a drop-in game or importing a roster is all-or-nothing.
             // If it didn't save, say so now rather than letting the user walk

@@ -77,7 +77,12 @@ export async function fetchAllState(sb: SupabaseClient): Promise<Partial<AppStat
     sb.from('teams').select('*').order('name'),                               // alphabetical, matches render order
     sb.from('players').select('*').order('name'),
     sb.from('games').select('*').order('scheduled_at', { ascending: false }),
-    sb.from('events').select('*').order('ts'),                                // chronological — Undo depends on this
+    // Chronological, with `id` breaking ties. `ts` alone is not a total order
+    // — two taps in the same millisecond leave PostgREST free to return them
+    // either way round, and "the last event of this game" IS the definition of
+    // Undo. The client sorts by the same (ts, id) key (see compareEvents), so
+    // both sides always name the same row.
+    sb.from('events').select('*').order('ts').order('id'),
   ]);
 
   if (lr.error) { warn('[sync] fetch leagues error:', lr.error.message); return null; }
@@ -125,6 +130,24 @@ function checkCritical(label: string, res: { error: any }): void {
     throw new Error(`${label}: ${msg}`);
   }
 }
+
+// Actions whose push MUST reject when it fails.
+//
+// Everything else can fail quietly and reconverge on the next pull. These
+// cannot, because the person is looking at the result: a logged basket, an
+// undone mis-tap, a drop-in game they just set up. Two things depend on the
+// rejection reaching the caller — the sync badge turning red, and the pending
+// ledger pinning the local value so a later snapshot does not quietly rewrite
+// the score (see sync/pendingEvents.ts).
+//
+// This used to be a regex over the thrown message, which meant a write only
+// counted as critical if its label happened to be spelled into the pattern.
+// INSERT_events was not, so with the network down every logged stat reported
+// 'saved', the ledger was told the server had it, and the next pull deleted it.
+const MUST_NOT_FAIL_SILENTLY: ReadonlySet<Action['t']> = new Set([
+  'ADD_EVENT', 'REDO_EVENT', 'UNDO_EVENT', 'DELETE_EVENT',
+  'REC_SETUP_GAME', 'BULK_IMPORT_ROSTER',
+]);
 
 export async function pushAction(sb: SupabaseClient, action: Action, state: AppState): Promise<void> {
   try {
@@ -311,10 +334,13 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
 
       case 'ADD_EVENT': {
         const l = state.leagues.find(x => x.id === action.leagueId);
-        // The reducer creates the event last in events[]; find by matching the action's fields.
-        const ev = l?.events[l.events.length - 1];
+        // By id, not by position. Events are held in canonical (ts, id) order to
+        // match the server's, so the row this action created is not necessarily
+        // the last element — stampActionIds put its id on the action for exactly
+        // this lookup.
+        const ev = action.id ? l?.events.find(e => e.id === action.id) : undefined;
         if (!l || !ev) return;
-        check('INSERT_events', await sb.from('events').insert({
+        checkCritical('INSERT_events', await sb.from('events').insert({
           id: ev.id, league_id: l.id, game_id: ev.gameId, team_id: ev.teamId,
           player_id: ev.playerId, type: ev.type, period: ev.period, ts: ev.ts, note: ev.note ?? null,
         }));
@@ -366,11 +392,12 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
 
       case 'REDO_EVENT': {
         // Redo re-adds the event locally; mirror it back to the server or it
-        // would vanish again on the next pull.
+        // would vanish again on the next pull. By id (see ADD_EVENT): a redone
+        // event goes back to its own place in ts order, not to the end.
         const l = state.leagues.find(x => x.id === action.leagueId);
-        const ev = l?.events[l.events.length - 1];
+        const ev = action.eventId ? l?.events.find(e => e.id === action.eventId) : undefined;
         if (!l || !ev) return;
-        check('INSERT_events(redo)', await sb.from('events').upsert({
+        checkCritical('INSERT_events(redo)', await sb.from('events').upsert({
           id: ev.id, league_id: l.id, game_id: ev.gameId, team_id: ev.teamId,
           player_id: ev.playerId, type: ev.type, period: ev.period, ts: ev.ts, note: ev.note ?? null,
         }));
@@ -378,7 +405,7 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
       }
 
       case 'DELETE_EVENT': {
-        check('DELETE_events', await sb.from('events').delete().eq('id', action.eventId));
+        checkCritical('DELETE_events', await sb.from('events').delete().eq('id', action.eventId));
         // Deleting a foul-out-causing foul restores the player to court (see
         // the reducer) — push the game row so other devices pick it up too.
         const l = state.leagues.find(x => x.id === action.leagueId);
@@ -440,7 +467,10 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
     // rethrown so the caller can show a real error instead of a false 'saved'.
     const msg = (e as Error)?.message ?? String(e);
     warn('sync push failed:', msg);
-    if (/^(REC_setup_game|BULK_IMPORT_ROSTER|UNDO_EVENT):/.test(msg)) throw e;
+    // Keyed off the action, not off how the message happens to be worded. A
+    // network TypeError carries no label at all, so a message test could never
+    // have classified the case that matters most.
+    if (MUST_NOT_FAIL_SILENTLY.has(action.t)) throw e;
   }
 }
 
