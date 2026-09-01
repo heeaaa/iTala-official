@@ -6,8 +6,8 @@ import * as AppleAuthentication from 'expo-apple-authentication';
 import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
 import { devLog, warn } from '../lib/log';
 import {
-  AuthErrors, AuthScope, clearScopedError, describeAuthFailure, errorForScope,
-  sessionRecoveryPlan, setScopedError,
+  AuthErrors, AuthScope, clearScopedError, describeAuthFailure, diagnoseAuthFailure,
+  errorForScope, isNetworkFailure, sessionRecoveryPlan, setScopedError,
 } from './authErrors';
 
 export type { AuthScope } from './authErrors';
@@ -366,6 +366,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         'signInWithOAuth'
       );
       if (start?.error || !start?.data?.url) {
+        warn('[auth] could not start Google sign-in -', diagnoseAuthFailure(start?.error?.message, 'Google'));
         setError('signin', describeAuthFailure(start?.error?.message, 'Google'));
         return null;
       }
@@ -375,8 +376,8 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
       // iOS shows when it is, and it reads to the user like a broken app rather
       // than a failed request.
       if (!/^https?:\/\//i.test(start.data.url)) {
-        warn('[auth] provider returned a URL the browser cannot open');
-        setError('signin', 'The sign-in link the server returned was not usable. Check the Supabase URL configuration.');
+        warn('[auth] the provider returned a URL the browser cannot open:', start.data.url);
+        setError('signin', "Sign-in couldn't start. Please try again.");
         return null;
       }
 
@@ -394,21 +395,26 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         // iOS gives no way to tell them apart after the fact, so say nothing
         // in a build whose scheme is registered (where only the first is
         // plausible) and name the second where it is the likely one.
-        if (inExpoGo) {
-          setError('signin', `Sign-in didn't come back to the app.\n\n${allowlistHint(redirectTo)}\n\nIf you cancelled, ignore this.`);
-        }
+        devLog('[auth] the browser closed without reaching', redirectTo,
+               '- either the person cancelled, or the provider sent it somewhere',
+               'this build cannot receive.', allowlistHint(redirectTo));
+        // Deliberately silent. The common case by far is "they tapped Cancel",
+        // and iOS gives no way to tell that apart after the fact - so an error
+        // here would accuse most people of a failure they did not have.
         return null;
       }
 
-      const ok = await createSessionFromUrl(sb, result.url);
-      if (!ok) {
-        setError('signin', `Sign-in didn't complete.\n\n${allowlistHint(redirectTo)}`);
+      const created = await createSessionFromUrl(sb, result.url);
+      if (!created.ok) {
+        warn('[auth] sign-in did not complete -', diagnoseAuthFailure(created.reason, 'Google'));
+        devLog('[auth] redirect in use:', redirectTo, '-', allowlistHint(redirectTo));
+        setError('signin', describeAuthFailure(created.reason, 'Google'));
         return null;
       }
 
       return await completeSignIn(sb);
     } catch (e) {
-      warn('[auth] signInWithGoogle threw:', (e as Error).message);
+      warn('[auth] signInWithGoogle threw -', diagnoseAuthFailure((e as Error).message, 'Google'));
       setError('signin', describeAuthFailure((e as Error).message, 'Google'));
       return null;
     } finally {
@@ -458,6 +464,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         'signInWithIdToken(apple)'
       );
       if (res?.error) {
+        warn('[auth] Apple sign-in rejected -', diagnoseAuthFailure(res.error.message, 'Apple'));
         setError('signin', describeAuthFailure(res.error.message, 'Apple'));
         return null;
       }
@@ -469,7 +476,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       const code = (e as { code?: string })?.code;
       if (code === 'ERR_REQUEST_CANCELED') return null; // user closed the sheet
-      warn('[auth] signInWithApple threw:', (e as Error).message);
+      warn('[auth] signInWithApple threw -', diagnoseAuthFailure((e as Error).message, 'Apple'));
       setError('signin', describeAuthFailure((e as Error).message, 'Apple'));
       return null;
     } finally {
@@ -493,6 +500,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         'delete_own_account'
       );
       if (res?.error) {
+        warn('[auth] delete_own_account failed -', diagnoseAuthFailure(res.error.message));
         setError('account', describeAuthFailure(res.error.message));
         return false;
       }
@@ -587,7 +595,13 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     const sb = getSupabase();
     if (!sb) return null;
     const res = await withTimeout(sb.rpc('create_creation_code'), 8000, { data: null, error: { message: 'timeout' } } as any, 'create_creation_code');
-    if (res?.error) { setError('admin', describeAuthFailure(res.error.message)); return null; }
+    if (res?.error) {
+      warn('[auth] create_creation_code failed -', diagnoseAuthFailure(res.error.message));
+      setError('admin', isNetworkFailure(res.error.message)
+        ? describeAuthFailure(res.error.message)
+        : res.error.message);
+      return null;
+    }
     return typeof res?.data === 'string' ? res.data : null;
   };
 
@@ -617,7 +631,13 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     const sb = getSupabase();
     if (!sb) return false;
     const res = await withTimeout(sb.rpc('remove_member', { p_league_id: leagueId, p_user_id: userId }), 8000, { data: null, error: { message: 'timeout' } } as any, 'remove_member');
-    if (res?.error) { setError('admin', describeAuthFailure(res.error.message)); return false; }
+    if (res?.error) {
+      warn('[auth] remove_member failed -', diagnoseAuthFailure(res.error.message));
+      setError('admin', isNetworkFailure(res.error.message)
+        ? describeAuthFailure(res.error.message)
+        : res.error.message);
+      return false;
+    }
     return true;
   };
 
@@ -643,7 +663,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
 
     const restored = await ensureSession(sb);
     if (!restored?.uid) {
-      setError('admin', "Couldn't reach the iTala server, so the password could not be checked. Check this device's connection and try again.");
+      setError('admin', "Couldn't reach iTala, so the password couldn't be checked. Check your internet connection and try again.");
       return false;
     }
     setUserId(restored.uid);
@@ -664,7 +684,8 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         // carries the remaining wait.
         setError('admin', msg);
       } else {
-        setError('admin', describeAuthFailure(msg));
+        warn('[auth] elevate_to_admin failed -', diagnoseAuthFailure(msg));
+        setError('admin', isNetworkFailure(msg) ? describeAuthFailure(msg) : msg);
       }
       return false;
     }
@@ -714,19 +735,34 @@ function toAuthUser(u: { id: string; email?: string | null; is_anonymous?: boole
 
 /** Turns the OAuth redirect URL back into a Supabase session.
  *  Handles both PKCE (?code=) and implicit (#access_token=) responses. */
-async function createSessionFromUrl(sb: NonNullable<ReturnType<typeof getSupabase>>, url: string): Promise<boolean> {
+interface SessionFromUrl {
+  ok: boolean;
+  /** Raw reason, for the log and for classifying the user-facing message.
+   *  Never shown verbatim. */
+  reason?: string;
+}
+
+async function createSessionFromUrl(
+  sb: NonNullable<ReturnType<typeof getSupabase>>,
+  url: string,
+): Promise<SessionFromUrl> {
   try {
     const parsed = Linking.parse(url);
     const qp = (parsed.queryParams ?? {}) as Record<string, string | string[]>;
-    const errDesc = str(qp['error_description']);
-    if (errDesc) { warn('[auth] OAuth error:', errDesc); return false; }
+
+    // The provider itself refused (consent declined, misconfigured client,
+    // redirect the provider would not accept). Its own words are the only
+    // useful diagnostic here.
+    const errDesc = str(qp['error_description']) ?? str(qp['error']);
+    if (errDesc) return { ok: false, reason: `provider returned: ${errDesc}` };
 
     const code = str(qp['code']);
     if (code) {
-      const res = await withTimeout(sb.auth.exchangeCodeForSession(code), 8000,
+      const res = await withTimeout(sb.auth.exchangeCodeForSession(code), 15000,
         { data: { session: null }, error: { message: 'timeout' } } as any, 'exchangeCodeForSession');
-      if (res?.error) { warn('[auth] exchangeCodeForSession:', res.error.message); return false; }
-      return !!res?.data?.session;
+      if (res?.error) return { ok: false, reason: `exchangeCodeForSession: ${res.error.message}` };
+      if (!res?.data?.session) return { ok: false, reason: 'exchangeCodeForSession returned no session' };
+      return { ok: true };
     }
 
     // Implicit flow: tokens arrive in the URL fragment.
@@ -736,16 +772,20 @@ async function createSessionFromUrl(sb: NonNullable<ReturnType<typeof getSupabas
       const access_token = p.get('access_token');
       const refresh_token = p.get('refresh_token');
       if (access_token && refresh_token) {
-        const res = await withTimeout(sb.auth.setSession({ access_token, refresh_token }), 8000,
+        const res = await withTimeout(sb.auth.setSession({ access_token, refresh_token }), 15000,
           { data: { session: null }, error: { message: 'timeout' } } as any, 'setSession');
-        if (res?.error) { warn('[auth] setSession:', res.error.message); return false; }
-        return !!res?.data?.session;
+        if (res?.error) return { ok: false, reason: `setSession: ${res.error.message}` };
+        if (!res?.data?.session) return { ok: false, reason: 'setSession returned no session' };
+        return { ok: true };
       }
     }
-    return false;
+
+    // Came back, but with neither a code nor tokens. Worth naming the keys that
+    // DID arrive - this is the case that is impossible to guess at from a log
+    // line saying only that sign-in did not complete.
+    return { ok: false, reason: `callback carried no code and no tokens (params: ${Object.keys(qp).join(', ') || 'none'})` };
   } catch (e) {
-    warn('[auth] createSessionFromUrl threw:', (e as Error).message);
-    return false;
+    return { ok: false, reason: `threw: ${(e as Error).message}` };
   }
 }
 
@@ -785,20 +825,26 @@ async function ensureSession(sb: ReturnType<typeof getSupabase>): Promise<{ uid:
       return { uid: existing.id, user: toAuthUser(existing) };
     }
 
-    // getSession ANSWERED, and the answer is "no session". Two ways to get
-    // here: a genuinely fresh install, or a stale session whose refresh token
-    // was rotated, revoked, or belongs to another project — which keeps
-    // poisoning every auth call and repeats on EVERY launch ("Invalid Refresh
-    // Token: Refresh Token Not Found"). Clearing the stored tokens locally (no
-    // network round trip) heals the second and is a no-op for the first. It is
-    // only safe because the answer was real: there is nothing here to lose.
-    await withTimeout(
-      sb.auth.signOut({ scope: 'local' }),
-      3000,
-      { error: null } as any,
-      'signOut(purge-stale)',
-    );
-
+    // getSession ANSWERED "no session", so start a guest one.
+    //
+    // There used to be a `signOut({ scope: 'local' })` here first, to clear a
+    // stale refresh token. It has to go, because it ALSO deletes the PKCE code
+    // verifier - auth-js `_signOut` removes `<storageKey>-code-verifier` for
+    // any scope other than 'others' - and this function runs at boot, racing
+    // whatever the person is doing:
+    //
+    //   app launches, ensureSession starts
+    //   person taps "Sign in with Google"  -> signInWithOAuth WRITES the verifier
+    //   ensureSession reaches the purge    -> DELETES the verifier
+    //   person finishes in the browser     -> exchangeCodeForSession has nothing
+    //
+    // which is a first-attempt-after-launch sign-in failing while a retry a
+    // minute later succeeds - exactly the reported behaviour.
+    //
+    // Removing it loses nothing. An unusable stored session is already removed
+    // by supabase-js inside __loadSession (it checks _isValidSession and calls
+    // _removeSession) BEFORE getSession can answer "no session", so by the time
+    // we are on this line there is nothing left to purge.
     const signin = await raceTimeout(sb.auth.signInAnonymously(), 6000, 'signInAnonymously');
     if (!signin.ok) return null;
     if (signin.value?.error) {
