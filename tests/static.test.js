@@ -43,6 +43,18 @@ for (const r of registered) {
      'registered in App.tsx but missing from RootStackParams');
 }
 
+// Every screen needs a human `title`, whatever its header renders.
+//
+// On iOS the native stack labels the back button with the PREVIOUS screen's
+// `title` and falls back to the ROUTE NAME when there isn't one. Route names
+// are PascalCase code identifiers, so the top-left of the screen read
+// "LeagueDetail". `headerTitle` (the brand wordmark on most screens) overrides
+// what the header draws but is not a label, so it never covered this.
+for (const m of app.matchAll(/<Stack\.Screen\s+name="(\w+)"[^>]*?options=\{([\s\S]*?)\}\s*\/>/g)) {
+  ok(`screen "${m[1]}" has a human title`, /title:\s*'[^']+'/.test(m[2]),
+     'without one iOS labels the back button with the route name');
+}
+
 // ---------------------------------------------------------------------------
 // CHECK 2 — every navigate()/replace()/push() target is a real route.
 // A typo here is a runtime crash, invisible to the type checker when the
@@ -239,6 +251,38 @@ ok('DEPLOYMENT.md keeps the zip-apply commands', read('DEPLOYMENT.md').includes(
   ok('event pushes look their row up by id, never by position',
      !/events\[l\.events\.length - 1\]/.test(sync),
      'canonical ordering means the row an action created is not always last');
+}
+
+// ---------------------------------------------------------------------------
+// CHECK 9b — the play-by-play sheet.
+//
+// No render harness exists for this screen, so these are structural: they check
+// the two properties the sheet is required to have, and would fail if either
+// were removed. Behaviour beyond this is on the manual regression list.
+// ---------------------------------------------------------------------------
+{
+  const live = read('src/screens/LiveGameScreen.tsx');
+
+  ok('deleting a play asks first',
+     /const confirmDelete = \(/.test(live) &&
+     /Alert\.alert\(\s*'Delete this play\?'/.test(live) &&
+     /onPress: \(\) => onDelete\(e\.id\)/.test(live),
+     'the row X sits millimetres from the row and rewrites the score on the first tap');
+  ok('the play-by-play X is wired to the confirmation, not straight to the delete',
+     /onPress=\{\(\) => confirmDelete\(e\)\}/.test(live) &&
+     !/onPress=\{\(\) => onDelete\(e\.id\)\}/.test(live));
+  ok('the confirmation names the play it is about',
+     /fullLineFor\(e\)/.test(live),
+     '"Delete this play?" alone does not tell the user which one');
+  ok('every play-by-play row shows which team it belongs to',
+     /const team = teamOf\(e\.teamId\);/.test(live) &&
+     /<TeamBadge logo=\{team\.logo\} color=\{team\.color\} size=\{14\} \/>/.test(live),
+     'the side was previously inferable only from the player name');
+  ok('the team is named, not only coloured',
+     /\{team\.name\}/.test(live),
+     'colour alone fails a colour-blind scorekeeper and two same-palette drop-in teams');
+  ok('the delete label reads out the team too',
+     /accessibilityLabel=\{`Delete \$\{fullLineFor\(e\)\}`\}/.test(live));
 }
 
 // ---------------------------------------------------------------------------

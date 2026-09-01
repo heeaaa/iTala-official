@@ -635,7 +635,10 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
         <PlayByPlayModal
           events={events.slice().reverse()}
           nameOf={(id) => id ? (league.players.find(p => p.id === id)?.name ?? 'Player') : 'Team'}
-          teamNameOf={(teamId) => league.teams.find(t => t.id === teamId)?.name ?? 'Team'}
+          teamOf={(teamId) => {
+            const t = league.teams.find(x => x.id === teamId);
+            return { name: t?.name ?? 'Team', color: t?.color ?? colors.muted, logo: t?.logo };
+          }}
           canDelete={!readOnly}
           onDelete={(eid) => dispatch({ t: 'DELETE_EVENT', leagueId, gameId, eventId: eid })}
           onClose={() => setLogOpen(false)}
@@ -992,14 +995,38 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
   );
 }
 
-function PlayByPlayModal({ events, nameOf, teamNameOf, canDelete, onDelete, onClose }:
-  { events: { id: string; period: number; type: EventType; playerId: string | null; teamId: string; note?: string }[]; nameOf: (id: string | null) => string; teamNameOf: (teamId: string) => string; canDelete: boolean; onDelete: (id: string) => void; onClose: () => void }) {
+interface PbpTeam { name: string; color: string; logo?: string }
+
+function PlayByPlayModal({ events, nameOf, teamOf, canDelete, onDelete, onClose }:
+  { events: { id: string; period: number; type: EventType; playerId: string | null; teamId: string; note?: string }[]; nameOf: (id: string | null) => string; teamOf: (teamId: string) => PbpTeam; canDelete: boolean; onDelete: (id: string) => void; onClose: () => void }) {
+  // Which side a play belongs to used to be readable only from the player's
+  // name, which needs you to already know both rosters — and team-level plays
+  // (timeouts) were the only rows that named a team at all. Every row now leads
+  // with the team's badge and name.
   const lineFor = (e: { type: EventType; playerId: string | null; teamId: string; note?: string }) => {
     if (e.type === 'timeout') {
-      const team = teamNameOf(e.teamId);
-      return e.note ? `${team} Timeout — ${e.note} remaining` : `${team} Timeout`;
+      return e.note ? `Timeout — ${e.note} remaining` : 'Timeout';
     }
     return `${nameOf(e.playerId)} — ${PBP_LABEL[e.type]}`;
+  };
+  // Used for the confirmation and the screen-reader label, where the team has
+  // to be spelled out rather than shown as a badge.
+  const fullLineFor = (e: { type: EventType; playerId: string | null; teamId: string; note?: string }) =>
+    `${teamOf(e.teamId).name} · ${lineFor(e)}`;
+
+  // Deleting a play re-applies its points and stats immediately, and the ✕ sits
+  // a few millimetres from the row it belongs to on a phone held courtside. A
+  // mis-tap silently rewriting the score is exactly the kind of thing nobody
+  // notices until the final buzzer, so it is confirmed first.
+  const confirmDelete = (e: { id: string; type: EventType; playerId: string | null; teamId: string; note?: string }) => {
+    Alert.alert(
+      'Delete this play?',
+      `${fullLineFor(e)}\n\nThe score and stats update straight away. This can't be undone from here.`,
+      [
+        { text: 'Keep it', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => onDelete(e.id) },
+      ],
+    );
   };
   return (
     <Modal transparent animationType="slide" onRequestClose={onClose}>
@@ -1027,22 +1054,39 @@ function PlayByPlayModal({ events, nameOf, teamNameOf, canDelete, onDelete, onCl
               initialNumToRender={20}
               windowSize={11}
               removeClippedSubviews
-              renderItem={({ item: e, index: i }) => (
-                <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: i === 0 ? 0 : 1, borderTopColor: colors.line }}>
-                  <Txt k="stat" color={colors.muted} style={{ width: 28 }}>{e.period}</Txt>
-                  <Txt k="body" style={{ flex: 1 }} color={e.type === 'timeout' ? colors.yellow : colors.text}>{lineFor(e)}</Txt>
-                  {canDelete && (
-                    <Pressable
-                      onPress={() => onDelete(e.id)}
-                      hitSlop={8}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Delete ${lineFor(e)}`}
-                    >
-                      <Txt k="body" color={colors.red}>✕</Txt>
-                    </Pressable>
-                  )}
-                </View>
-              )}
+              renderItem={({ item: e, index: i }) => {
+                const team = teamOf(e.teamId);
+                return (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: i === 0 ? 0 : 1, borderTopColor: colors.line }}>
+                    <Txt k="stat" color={colors.muted} style={{ width: 24 }}>{e.period}</Txt>
+                    {/* Badge AND name: colour alone cannot carry the distinction
+                        for a colour-blind scorekeeper, and two teams in a
+                        drop-in game are often picked from the same palette. */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', width: 92, marginRight: 8 }}>
+                      <TeamBadge logo={team.logo} color={team.color} size={14} />
+                      <Txt
+                        k="body"
+                        color={colors.muted}
+                        numberOfLines={1}
+                        style={{ marginLeft: 6, flex: 1, fontSize: 12 }}>
+                        {team.name}
+                      </Txt>
+                    </View>
+                    <Txt k="body" style={{ flex: 1 }} color={e.type === 'timeout' ? colors.yellow : colors.text}>{lineFor(e)}</Txt>
+                    {canDelete && (
+                      <Pressable
+                        onPress={() => confirmDelete(e)}
+                        hitSlop={12}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Delete ${fullLineFor(e)}`}
+                        accessibilityHint="Asks for confirmation before the score and stats change."
+                      >
+                        <Txt k="body" color={colors.red}>✕</Txt>
+                      </Pressable>
+                    )}
+                  </View>
+                );
+              }}
             />
           )}
         </View>
