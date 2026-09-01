@@ -14,6 +14,7 @@ import {
   recordPending, reconcileLeagueEvents, sortEvents, __resetPending,
 } from '../sync/pendingEvents';
 import { warn } from '../lib/log';
+import { isNetworkFailure } from './authErrors';
 
 /**
  * Resolve once the client has a session, or once `ms` have passed.
@@ -32,23 +33,31 @@ async function waitForSession(sb: NonNullable<ReturnType<typeof getSupabase>>, m
   }
   return new Promise<boolean>(resolve => {
     let done = false;
+    // `let`, declared first, and assigned after subscribing. A callback that
+    // fires during the subscribe call would otherwise read this binding inside
+    // its temporal dead zone - a ReferenceError, which `?.` does not protect
+    // against because the reference itself is what throws.
+    let sub: { unsubscribe: () => void } | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (got: boolean) => {
       if (done) return;
       done = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       sub?.unsubscribe();
       resolve(got);
     };
-    const timer = setTimeout(() => finish(false), ms);
-    const { data } = sb.auth.onAuthStateChange((_e, s) => { if (s) finish(true); });
-    const sub = data.subscription;
+    timer = setTimeout(() => finish(false), ms);
+    sub = sb.auth.onAuthStateChange((_e, s) => { if (s) finish(true); }).data.subscription;
+    // If the callback already resolved us, the subscription above was created
+    // after finish() ran and would otherwise leak.
+    if (done) sub.unsubscribe();
   });
 }
 
 /** A sync failure, said in a way that points at the right thing to check. */
 function describeSyncFailure(e: unknown): string {
   const msg = (e as Error)?.message ?? String(e ?? '');
-  if (/network request failed|failed to fetch/i.test(msg)) {
+  if (isNetworkFailure(msg)) {
     return "The app couldn't reach the server. Check this device's connection and try again.";
   }
   if (/sign in to start a drop-in game/i.test(msg)) {

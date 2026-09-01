@@ -10,13 +10,8 @@ import { colors, space, font, wordmarkGradient } from '../theme';
 import { ScreenProps } from '../navigation';
 import { teamBoxScore, gameScore, lineScore, statPlayersOfGame } from '../lib/stats';
 import { pct } from '../lib/format';
-import { StatLine, EventType } from '../types';
-
-const EV_LABEL: Record<EventType, string> = {
-  fg2_make: 'made 2', fg2_miss: 'missed 2', fg3_make: 'made 3', fg3_miss: 'missed 3',
-  ft_make: 'made FT', ft_miss: 'missed FT', reb: 'rebound', oreb: 'off. reb', dreb: 'def. reb',
-  ast: 'assist', stl: 'steal', blk: 'block', tov: 'turnover', pf: 'foul', timeout: 'Timeout',
-};
+import { StatLine } from '../types';
+import { PlayLogRow } from '../components/PlayLog';
 
 export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxScore'>) {
   const { leagueId, gameId } = route.params;
@@ -287,19 +282,19 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
         <Card>
           {events.length === 0 ? <Txt k="body" color={colors.muted}>No events logged.</Txt> :
             events.map((e, i) => (
-              <View key={e.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 9, borderTopWidth: i === 0 ? 0 : 1, borderTopColor: colors.line }}>
-                <Txt k="stat" color={colors.muted} style={{ width: 28 }}>{e.period}</Txt>
-                <Txt k="body" style={{ flex: 1 }} color={e.type === 'timeout' ? colors.yellow : colors.text}>
-                  {e.type === 'timeout'
-                    ? (() => { const tn = league.teams.find(t => t.id === e.teamId)?.name ?? 'Team'; return e.note ? `${tn} Timeout — ${e.note} remaining` : `${tn} Timeout`; })()
-                    : `${playerName(e.playerId)} — ${EV_LABEL[e.type]}`}
-                </Txt>
-                {game.status !== 'final' && (
-                  <Pressable onPress={() => dispatch({ t: 'DELETE_EVENT', leagueId, gameId, eventId: e.id })} hitSlop={8}>
-                    <Txt k="body" color={colors.red}>✕</Txt>
-                  </Pressable>
-                )}
-              </View>
+              <PlayLogRow
+                key={e.id}
+                event={e}
+                team={(() => {
+                  const t = league.teams.find(x => x.id === e.teamId);
+                  return { name: t?.name ?? 'Team', color: t?.color ?? colors.muted, logo: t?.logo };
+                })()}
+                nameOf={playerName}
+                first={i === 0}
+                onDelete={game.status !== 'final'
+                  ? (eventId) => dispatch({ t: 'DELETE_EVENT', leagueId, gameId, eventId })
+                  : undefined}
+              />
             ))
           }
         </Card>

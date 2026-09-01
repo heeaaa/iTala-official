@@ -61,6 +61,18 @@ export function errorForScope(errors: AuthErrors, scope: AuthScope): string | nu
  * not reach the host at all) went unmentioned. A message that points at the
  * wrong layer costs more time than no message.
  */
+/**
+ * Does this message mean the request never reached the host?
+ *
+ * React Native's fetch rejects with `TypeError: Network request failed` and no
+ * further detail, which is the failure the reported logs are full of. Exported
+ * so the auth layer and the sync layer classify it identically - they word the
+ * advice differently, but they must not disagree about what happened.
+ */
+export function isNetworkFailure(raw: string | null | undefined): boolean {
+  return /network request failed|failed to fetch|network error/i.test(raw ?? '');
+}
+
 export function describeAuthFailure(raw: string | null | undefined, provider?: string): string {
   const msg = (raw ?? '').trim();
   const who = provider ?? 'The provider';
@@ -68,7 +80,7 @@ export function describeAuthFailure(raw: string | null | undefined, provider?: s
   if (!msg || msg === 'timeout') {
     return "Couldn't reach the iTala server. Check this device's internet connection and try again.";
   }
-  if (/network request failed|failed to fetch|network error/i.test(msg)) {
+  if (isNetworkFailure(msg)) {
     return "Couldn't reach the iTala server. If other apps are online, check for a VPN, a content blocker, or a wifi network still waiting for its sign-in page.";
   }
   if (/provider is not enabled|unsupported provider|validation_failed/i.test(msg)) {

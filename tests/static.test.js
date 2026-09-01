@@ -261,28 +261,40 @@ ok('DEPLOYMENT.md keeps the zip-apply commands', read('DEPLOYMENT.md').includes(
 // were removed. Behaviour beyond this is on the manual regression list.
 // ---------------------------------------------------------------------------
 {
+  const row = read('src/components/PlayLog.tsx');
   const live = read('src/screens/LiveGameScreen.tsx');
+  const box = read('src/screens/BoxScoreScreen.tsx');
 
   ok('deleting a play asks first',
-     /const confirmDelete = \(/.test(live) &&
-     /Alert\.alert\(\s*'Delete this play\?'/.test(live) &&
-     /onPress: \(\) => onDelete\(e\.id\)/.test(live),
+     /Alert\.alert\(\s*'Delete this play\?'/.test(row) &&
+     /onPress: \(\) => onDelete\(event\.id\)/.test(row),
      'the row X sits millimetres from the row and rewrites the score on the first tap');
-  ok('the play-by-play X is wired to the confirmation, not straight to the delete',
-     /onPress=\{\(\) => confirmDelete\(e\)\}/.test(live) &&
-     !/onPress=\{\(\) => onDelete\(e\.id\)\}/.test(live));
+  ok('the X is wired to the confirmation, not straight to the delete',
+     /onPress=\{confirmDelete\}/.test(row) &&
+     !/onPress=\{\(\) => onDelete\(/.test(row));
   ok('the confirmation names the play it is about',
-     /fullLineFor\(e\)/.test(live),
+     /\$\{full\}/.test(row),
      '"Delete this play?" alone does not tell the user which one');
   ok('every play-by-play row shows which team it belongs to',
-     /const team = teamOf\(e\.teamId\);/.test(live) &&
-     /<TeamBadge logo=\{team\.logo\} color=\{team\.color\} size=\{14\} \/>/.test(live),
+     /<TeamBadge logo=\{team\.logo\} color=\{team\.color\} size=\{14\} \/>/.test(row),
      'the side was previously inferable only from the player name');
   ok('the team is named, not only coloured',
-     /\{team\.name\}/.test(live),
+     /\{team\.name\}/.test(row),
      'colour alone fails a colour-blind scorekeeper and two same-palette drop-in teams');
   ok('the delete label reads out the team too',
-     /accessibilityLabel=\{`Delete \$\{fullLineFor\(e\)\}`\}/.test(live));
+     /accessibilityLabel=\{`Delete \$\{full\}`\}/.test(row));
+
+  // BOTH lists must go through it. They previously held byte-identical copies of
+  // the label map and the row, so a change to one silently left the other behind
+  // - which is how the live sheet and the box score could disagree about what a
+  // play says or whether deleting it asks first.
+  for (const [name, src] of [['LiveGameScreen', live], ['BoxScoreScreen', box]]) {
+    ok(`${name} renders the play log through PlayLogRow`, /<PlayLogRow\b/.test(src),
+       'a second copy of the row drifts from this one');
+    ok(`${name} has no private play-by-play label map`,
+       !/_LABEL: Record<EventType, string>/.test(src),
+       'PLAY_LABEL in components/PlayLog.tsx is the only vocabulary');
+  }
 }
 
 // ---------------------------------------------------------------------------
