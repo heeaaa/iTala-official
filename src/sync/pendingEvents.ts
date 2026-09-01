@@ -74,6 +74,7 @@
 // ============================================================================
 
 import { Game, GameEvent } from '../types';
+import { warn } from '../lib/log';
 
 /** An entry's lifecycle position, shared by both entry kinds. */
 interface Settled {
@@ -393,6 +394,11 @@ export function reconcileLeagueEvents(
 ): GameEvent[] {
   if (pending.size === 0) return sortEvents(serverEvents);
 
+  // What the snapshot ACTUALLY contains. Computed before any decision, because
+  // it is the evidence every decision below rests on.
+  const inSnapshot = new Set<string>();
+  for (const ev of serverEvents) inSnapshot.add(ev.id);
+
   const retire: string[] = [];
   const drop = new Set<string>();
   const add: GameEvent[] = [];
@@ -400,10 +406,32 @@ export function reconcileLeagueEvents(
   for (const [token, e] of pending) {
     if (e.kind !== 'event' || e.leagueId !== leagueId) continue;
     if (retirable(e, snapshotStarted)) {
-      // The server had applied this before the snapshot was read, so the
-      // snapshot already reflects it and the ledger has nothing left to say.
-      retire.push(token);
-      continue;
+      // Ordering says this snapshot SHOULD reflect the write. Check that it
+      // does, and only then let go.
+      //
+      // Retiring on ordering alone is what lost a logged stat about a second
+      // after the tap, with no error and nothing in the play-by-play. The chain
+      // was: a push RESOLVED without the row reaching the server, so the ledger
+      // was told "the server has it"; the next snapshot started after that, so
+      // the entry was eligible; and the entry was then dropped without anyone
+      // asking whether the rows in hand actually contained it. They did not, so
+      // the server's version - which had no such event - won.
+      //
+      // A resolved push is not proof. It is only evidence that the request came
+      // back without complaint, and there is more than one way for that to
+      // happen with nothing written: a write the server filtered instead of
+      // refusing, and a push that returned early because it could not find the
+      // row it was asked to mirror. The snapshot itself is the proof, so the
+      // snapshot decides.
+      const reflected = e.op === 'add' ? inSnapshot.has(e.eventId) : !inSnapshot.has(e.eventId);
+      if (reflected) { retire.push(token); continue; }
+      // Confirmed, eligible, and the snapshot still disagrees. Keep the local
+      // value and say so out loud: silence here is the whole bug.
+      warn(
+        `[sync] server disagreement: ${e.op} of event ${e.eventId} was acknowledged, `
+        + `but a snapshot read afterwards ${e.op === 'add' ? 'does not contain it' : 'still contains it'}. `
+        + 'Keeping the local value.',
+      );
     }
     if (e.op === 'remove') drop.add(e.eventId);
     else if (e.event) add.push(e.event);

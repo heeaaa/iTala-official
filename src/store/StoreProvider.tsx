@@ -763,6 +763,15 @@ interface Ctx {
   /** True when the app is connected to Supabase and syncing across devices. */
   synced: boolean;
   syncState: 'idle' | 'saving' | 'saved' | 'error';
+  /**
+   * Why the last write failed, in words, or null once one succeeds.
+   *
+   * `syncState: 'error'` says a write failed; it cannot say whether the server
+   * refused it, the network never carried it, or a policy rejected the row - and
+   * those need completely different answers. The live tracker shows this text,
+   * because the person who needs it is standing courtside with no console.
+   */
+  lastSyncError: string | null;
   refresh: () => Promise<void>;
   /** Device-local favorites (leagues/teams pinned to the top of lists). */
   prefs: LocalPrefs;
@@ -783,6 +792,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [prefsReady, setPrefsReady] = React.useState(false);
   const [initialSyncDone, setInitialSyncDone] = React.useState(!SYNC_ENABLED);
   const [syncState, setSyncState] = React.useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [lastSyncError, setLastSyncError] = React.useState<string | null>(null);
   const savedTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const first = useRef(true);
   const stateRef = useRef(state);
@@ -1078,6 +1088,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             // after this moment confirms it — an older one is still in flight.
             confirmPending(pushTokens);
             trace('PERSIST', `ok t=${action.t} tokens=${pushTokens.join(',') || 'none'}`);
+            setLastSyncError(null);
             setSyncState('saved');
             if (savedTimer.current) clearTimeout(savedTimer.current);
             savedTimer.current = setTimeout(() => setSyncState('idle'), 2000);
@@ -1087,6 +1098,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             // badge stays red, rather than the board quietly reverting later.
             failPending(pushTokens);
             trace('PERSIST', `FAILED t=${action.t} tokens=${pushTokens.join(',') || 'none'}`);
+            // Keep the reason, not just the fact. `${action.t}` is included
+            // because "which write failed" is half the diagnosis: an ADD_EVENT
+            // that the server refuses and a game-row upsert that the server
+            // refuses look identical from a red badge, and only one of them
+            // loses the stat.
+            setLastSyncError(`${action.t}: ${describeSyncFailure(e)}`);
             setSyncState('error');
 
             // Setting up a drop-in game or importing a roster is all-or-nothing
@@ -1161,7 +1178,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     saveState(state);
   }, [state, ready]);
 
-  return <StoreCtx.Provider value={{ state, dispatch, ready, synced: SYNC_ENABLED, refresh, prefs, toggleFavLeague, toggleFavTeam, setHaptics, setNotifs, syncState, prefsReady, initialSyncDone, dismissOnboarding }}>{children}</StoreCtx.Provider>;
+  return <StoreCtx.Provider value={{ state, dispatch, ready, synced: SYNC_ENABLED, refresh, prefs, toggleFavLeague, toggleFavTeam, setHaptics, setNotifs, syncState, lastSyncError, prefsReady, initialSyncDone, dismissOnboarding }}>{children}</StoreCtx.Provider>;
 }
 
 export function useStore(): Ctx {
