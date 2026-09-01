@@ -3,7 +3,9 @@ export {
   reducer, stampActionIds, __resetSyncPrimitives,
 } from '../src/store/StoreProvider';
 export {
-  beginSnapshot, confirmPending, failPending, recordPending, reconcileLeagueEvents,
+  beginSnapshot, acceptSnapshot, appliedSnapshotAt,
+  confirmPending, failPending, recordPending,
+  reconcileLeagueEvents, reconcileLeagueGames,
   compareEvents, insertEvent, lastEventOf, sortEvents, pendingCount,
 } from '../src/sync/pendingEvents';
 export { pushAction, fetchAllState } from '../src/sync/sync';

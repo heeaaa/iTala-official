@@ -11,9 +11,9 @@
 // that models per-operation latency and RLS-as-a-silent-filter.
 //
 // The dispatch-side sync primitives (undo target resolution, the serialized
-// push queue, the undo tombstone guard) are imported from the app, not
-// reimplemented here - see tests/static.test.js for the check that
-// StoreProvider actually wires them up.
+// push queue, the pending-writes ledger and the snapshot watermark) are imported
+// from the app, not reimplemented here - see tests/static.test.js for the check
+// that StoreProvider actually wires them up.
 
 const M = require(process.env.ITALA_BUNDLE || '../.test-bundle.js');
 const { FakeServer, makeClient } = require('./harness/fakeSupabase.js');
@@ -24,13 +24,15 @@ const {
   // these is removed the suite fails to load rather than quietly testing a copy
   // of behaviour the app no longer has.
   stampActionIds, enqueuePush,
-  beginSnapshot, recordPending, confirmPending, failPending, pendingCount,
+  beginSnapshot, acceptSnapshot, appliedSnapshotAt,
+  recordPending, confirmPending, failPending, pendingCount,
   __resetSyncPrimitives: resetSyncPrimitives,
 } = M;
 
 for (const [name, fn] of Object.entries({
   reducer, pushAction, fetchAllState, stampActionIds, enqueuePush,
-  beginSnapshot, recordPending, confirmPending, failPending, pendingCount,
+  beginSnapshot, acceptSnapshot, appliedSnapshotAt,
+  recordPending, confirmPending, failPending, pendingCount,
   resetSyncPrimitives,
 })) {
   if (typeof fn !== 'function') {
@@ -64,6 +66,8 @@ class Device {
     this.inflight = [];
     this.syncState = 'idle';
     this.pushErrors = [];
+    // Why the last snapshot was refused, if it was: 'empty' | 'stale' | null.
+    this.refused = null;
   }
 
   dispatch(incoming) {
@@ -74,13 +78,15 @@ class Device {
     // reads "the row this action produced" out of it, so it must be the snapshot
     // from THIS dispatch and not whatever the device holds when the queued push
     // eventually runs.
-    const next = reducer(this.state, action);
+    const prev = this.state;
+    const next = reducer(prev, action);
     this.state = next;
 
     // Record the write in the pending ledger before the push starts, so a
     // snapshot landing mid-flight is reconciled against it rather than
-    // overwriting it. Same call the app makes.
-    const touched = recordPending(action, next);
+    // overwriting it. Same call the app makes: prev and next together, so the
+    // ledger can see whether the game row moved as well as the event list.
+    const touched = recordPending(action, prev, next);
 
     this.syncState = 'saving';
     const p = enqueuePush(() => pushAction(this.client, action, next)).then(
@@ -131,18 +137,34 @@ class Device {
     const remote = await fetchAllState(this.client);
     return { at, remote };
   }
+  // The same two gates StoreProvider.applySnapshot puts in front of HYDRATE:
+  // never hydrate an empty read over a device that has data, and never hydrate a
+  // snapshot older than one already applied. Returns whether it was applied.
   applySnapshot(snap) {
-    this.dispatch({ t: 'HYDRATE', state: { leagues: snap.remote.leagues }, snapshotAt: snap.at });
+    const leagues = snap.remote && snap.remote.leagues;
+    if (!leagues) return false;
+    if (leagues.length === 0 && this.state.leagues.length > 0) { this.refused = 'empty'; return false; }
+    if (!acceptSnapshot(snap.at)) { this.refused = 'stale'; return false; }
+    this.dispatch({ t: 'HYDRATE', state: { leagues }, snapshotAt: snap.at });
+    return true;
   }
 
   league(id = 'lg1') { return this.state.leagues.find(l => l.id === id); }
+  game(gameId = 'g1', leagueId = 'lg1') {
+    const l = this.league(leagueId);
+    return l && l.games.find(g => g.id === gameId);
+  }
   eventIds(gameId = 'g1') {
     const l = this.league();
     return (l ? l.events : []).filter(e => e.gameId === gameId).map(e => e.id);
   }
   points(gameId = 'g1') {
     const l = this.league();
-    const val = { '3pm': 3, '2pm': 2, ftm: 1 };
+    // The short names are this suite's own shorthand, kept because every group
+    // below already reads in them; the fg2_make/fg3_make/ft_make spellings are
+    // the app's real EventType values, used by the groups added for the
+    // stale-snapshot work so they exercise the reducer's actual vocabulary.
+    const val = { '3pm': 3, '2pm': 2, ftm: 1, fg3_make: 3, fg2_make: 2, ft_make: 1 };
     return (l ? l.events : [])
       .filter(e => e.gameId === gameId)
       .reduce((n, e) => n + (val[e.type] || 0), 0);
@@ -533,9 +555,13 @@ async function s11_canonical_order_is_shared() {
   ok('S11.11 and the same row server-side', !server.has('events', target));
 }
 
-/* Same-millisecond taps: `ts` ties, so only the id tie-break keeps the two
-   sides in step. Without it PostgREST is free to return them either way round
-   and Undo becomes a coin flip. */
+/* Same-millisecond taps. `stampActionIds` now takes `ts` as strictly after the
+   latest event already logged for the game, so a burst does not tie in the first
+   place - which is what makes Undo remove the tap the scorekeeper just made
+   rather than whichever tied row sorted last (see S25). The id tie-break behind
+   it still has to hold, for rows this device did not mint: two devices inside one
+   millisecond, and rows already stored by an older build. Without it PostgREST is
+   free to return tied rows either way round. */
 async function s12_same_millisecond_taps() {
   const server = new FakeServer();
   const A = await seed(server);
@@ -728,6 +754,404 @@ async function s17_rollback_spares_an_existing_space() {
   ok('S17.5 the failed bundle left no game behind', !l.games.some(g => g.id === 'gRec'));
 }
 
+/* ==========================================================================
+   GROUP S18 - THE REPORTED BUG, with no undo, no redo and one device
+   ==========================================================================
+   The ledger answers "may this snapshot overwrite my pending write?". It does
+   not answer "has a NEWER snapshot already been applied?", and that gap loses a
+   committed stat on its own:
+
+     pull A starts, reads no events, its reply is slow in transit
+     tap 3PT                    -> 3, the ledger protects it
+     INSERT confirmed
+     pull B reads one event, lands first, and the ledger entry RETIRES
+                                   (correctly - the server really does have it)
+     pull A finally lands       -> 0     <- the basket is gone
+
+   Nothing pulls again, because nothing changed on the server, so the board sits
+   wrong indefinitely. Before the fix there were five uncoordinated pull sites
+   (boot, boot retry, post-auth re-pull, realtime refetch, pull-to-refresh), so
+   two of them overlapping was ordinary rather than exotic.
+*/
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function s18_out_of_order_snapshot_cannot_revert_a_stat() {
+  const server = new FakeServer();
+  const A = await seed(server);
+
+  // A pull is already on the wire when the tap happens.
+  const stale = await A.snapshot();
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg3_make', 1));
+  eq('S18.1 the tap shows immediately', A.points(), 3);
+  await A.settle();
+
+  const fresh = await A.snapshot();
+  ok('S18.2 the newer snapshot is applied', A.applySnapshot(fresh));
+  eq('S18.3 the score is right', A.points(), 3);
+  eq('S18.4 and the ledger has legitimately retired the write', pendingCount(), 0);
+
+  ok('S18.5 the older reply is refused', A.applySnapshot(stale) === false);
+  eq('S18.6 refused for being out of order', A.refused, 'stale');
+  eq('S18.7 a committed stat does not revert', A.points(), 3);
+  eq('S18.8 and the server was right all along', server.count('events'), 1);
+}
+
+/* The same shape with a second tap still in flight, which is what a scorekeeper
+   working at speed actually looks like. */
+async function s19_out_of_order_snapshot_with_a_later_tap_pending() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  const stale = await A.snapshot();
+
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg2_make', 1));
+  await A.settle();
+  A.applySnapshot(await A.snapshot());          // retires tap 1
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'ft_make', 1)); // tap 2 still pending
+  eq('S19.1 three points on the board', A.points(), 3);
+
+  ok('S19.2 the stale reply is refused', A.applySnapshot(stale) === false);
+  eq('S19.3 both taps survive', A.points(), 3);
+  await A.settle();
+  A.applySnapshot(await A.snapshot());
+  eq('S19.4 and both are on the server', server.count('events'), 2);
+}
+
+/* ==========================================================================
+   GROUP S20 - one ledger slot per event was one too few
+   ==========================================================================
+   The ledger used to be keyed by event id alone, so an ADD and the UNDO of that
+   same row shared a slot, and `confirmPending(eventId)` could not tell which of
+   the two it was acknowledging. Undoing a mis-tap therefore ended with the
+   INSERT's acknowledgement stamped onto the UNDO's entry: the next snapshot
+   retired the undo and handed the basket straight back.
+*/
+
+async function s20_insert_confirmation_does_not_retire_the_undo() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  server.latency['insert:events'] = 5;
+  server.latency['delete:events'] = 200;   // the DELETE is still on the wire
+
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg3_make', 1));
+  const evId = A.eventIds()[0];
+  A.dispatch({ t: 'UNDO_EVENT', leagueId: 'lg1', gameId: 'g1' });
+  eq('S20.1 the undo clears the board', A.points(), 0);
+
+  await sleep(60);                          // INSERT confirmed, DELETE pending
+  eq('S20.2 the row is on the server', server.has('events', evId), true);
+
+  ok('S20.3 the snapshot is applied, not refused', A.applySnapshot(await A.snapshot()));
+  eq('S20.4 the undone basket must not come back', A.points(), 0);
+
+  await A.settle();
+  A.applySnapshot(await A.snapshot());
+  eq('S20.5 final score', A.points(), 0);
+  eq('S20.6 and the row is gone server-side', server.count('events'), 0);
+}
+
+/* And the mirror image: a redo whose re-INSERT is still queued behind the
+   DELETE it is undoing must not be retired by that DELETE's acknowledgement. */
+async function s21_delete_confirmation_does_not_retire_the_redo() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg3_make', 1));
+  await A.settle();
+  A.applySnapshot(await A.snapshot());
+  eq('S21.1 baseline', A.points(), 3);
+  eq('S21.2 ledger clear', pendingCount(), 0);
+
+  server.latency['delete:events'] = 5;
+  server.latency['upsert:events'] = 200;   // the redo's re-INSERT is slow
+
+  A.dispatch({ t: 'UNDO_EVENT', leagueId: 'lg1', gameId: 'g1' });
+  A.dispatch({ t: 'REDO_EVENT', leagueId: 'lg1', gameId: 'g1' });
+  eq('S21.3 redo restores it locally', A.points(), 3);
+
+  await sleep(60);                          // DELETE confirmed, re-INSERT pending
+  eq('S21.4 the server is empty for the moment', server.count('events'), 0);
+
+  ok('S21.5 the snapshot is applied, not refused', A.applySnapshot(await A.snapshot()));
+  eq('S21.6 the redone basket must survive it', A.points(), 3);
+
+  await A.settle();
+  A.applySnapshot(await A.snapshot());
+  eq('S21.7 final score', A.points(), 3);
+  eq('S21.8 with exactly one row', server.count('events'), 1);
+}
+
+/* ==========================================================================
+   GROUP S22 - an empty read is not proof the account owns nothing
+   ==========================================================================
+   An RLS read taken while the access token is mid-refresh returns [] rather
+   than an error. The post-auth re-pull hydrated that unconditionally, which
+   wiped every league on the device until the next successful pull. The boot pull
+   always checked; nothing else did.
+*/
+
+async function s22_an_empty_snapshot_never_wipes_a_device() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg2_make', 1));
+  await A.settle();
+  A.applySnapshot(await A.snapshot());
+  eq('S22.1 baseline', A.points(), 2);
+
+  const empty = { at: beginSnapshot(), remote: { leagues: [] } };
+  ok('S22.2 an empty read is refused', A.applySnapshot(empty) === false);
+  eq('S22.3 refused for being empty', A.refused, 'empty');
+  ok('S22.4 the league survives', !!A.league());
+  eq('S22.5 and so does the score', A.points(), 2);
+
+  // But a device that genuinely has nothing must still be able to settle on
+  // "nothing", or a fresh install would sit on a loading state forever.
+  const B = new Device('B', new FakeServer());
+  ok('S22.6 a device with no data accepts an empty read',
+     B.applySnapshot({ at: beginSnapshot(), remote: { leagues: [] } }));
+}
+
+/* ==========================================================================
+   GROUP S23 - the game row gets the same guarantee as the events
+   ==========================================================================
+   Lineups, substitutions, the period and the status used to be protected by
+   `lineupGuard`: a 2.5-second tombstone in StoreProvider. Same shape of answer
+   as the undo tombstone that preceded the ledger, and the same two failure
+   modes - too short for a slow push, and wrong the instant its clock ran out.
+   A substitution is as much a committed user action as a basket.
+*/
+
+async function s23_game_row_ledger_protects_a_substitution() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.dispatch({ t: 'ADD_PLAYER', leagueId: 'lg1', teamId: 'tH', name: 'Bench', id: 'p3' });
+  A.dispatch({ t: 'SET_LINEUP', leagueId: 'lg1', gameId: 'g1', side: 'home', playerIds: ['p1'] });
+  await A.settle();
+  A.applySnapshot(await A.snapshot());
+  eq('S23.1 the lineup is on the board', A.game().homeOnCourt, ['p1']);
+  eq('S23.2 and the ledger is clear', pendingCount(), 0);
+
+  // A refetch reads the pre-substitution row...
+  const inFlight = await A.snapshot();
+  // ...the scorekeeper subs, and the upsert is slow...
+  server.latency['upsert:games'] = 200;
+  A.dispatch({ t: 'SUBSTITUTE', leagueId: 'lg1', gameId: 'g1', side: 'home', outId: 'p1', inId: 'p3' });
+  eq('S23.3 the sub is immediate locally', A.game().homeOnCourt, ['p3']);
+
+  // ...and that snapshot lands while the upsert is still on the wire. Nothing
+  // newer has been applied, so the watermark has no opinion here: the ledger is
+  // the only thing that can stop this reverting the substitution.
+  ok('S23.4 the snapshot is applied, not refused', A.applySnapshot(inFlight));
+  eq('S23.5 the substitution survives it', A.game().homeOnCourt, ['p3']);
+
+  await A.settle();
+  A.applySnapshot(await A.snapshot());
+  eq('S23.6 and survives the echo of its own write', A.game().homeOnCourt, ['p3']);
+  eq('S23.7 the server agrees', server.find('games', 'g1').home_on_court, ['p3']);
+}
+
+/* The period is on the same row, and moves for the same reason. */
+async function s24_game_row_ledger_protects_the_period() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.applySnapshot(await A.snapshot());
+  const inFlight = await A.snapshot();
+  server.latency['upsert:games'] = 200;
+  A.dispatch({ t: 'SET_PERIOD', leagueId: 'lg1', gameId: 'g1', period: 3 });
+  eq('S24.1 period advanced locally', A.game().period, 3);
+  ok('S24.2 the stale-read snapshot is applied', A.applySnapshot(inFlight));
+  eq('S24.3 the period does not fall back', A.game().period, 3);
+  await A.settle();
+  A.applySnapshot(await A.snapshot());
+  eq('S24.4 and it round-trips', A.game().period, 3);
+}
+
+/* ==========================================================================
+   GROUP S25 - ADD_EVENT must be stamped once, not once per reducer run
+   ==========================================================================
+   The reducer runs TWICE per action in this app: once in the dispatch wrapper,
+   to build the rows the push mirrors, and again inside React's useReducer for
+   the state the UI renders. `ts: Date.now()` inside the reducer therefore gave
+   the server row and the on-screen row different timestamps - and `ts` is half
+   of the (ts, id) key that makes "the last event of this game" name the same row
+   on both sides, which is the whole definition of Undo.
+*/
+
+function s25_add_event_is_stamped_once() {
+  let st = { leagues: [] };
+  st = reducer(st, { t: 'ADD_LEAGUE', id: 'lg1', name: 'BPBL', season: 'S3' });
+  st = reducer(st, { t: 'ADD_TEAM', leagueId: 'lg1', name: 'Warriors', id: 'tH' });
+  st = reducer(st, { t: 'CREATE_GAME', id: 'g1', leagueId: 'lg1', homeTeamId: 'tH', awayTeamId: 'tA' });
+
+  const action = stampActionIds(st, score('lg1', 'g1', 'tH', 'p1', 'fg3_make', 1));
+  ok('S25.1 the action carries an id', typeof action.id === 'string' && action.id.length > 0);
+  ok('S25.2 the action carries a ts', typeof action.ts === 'number');
+
+  const runA = reducer(st, action);
+  const t0 = Date.now();
+  while (Date.now() === t0) { /* cross a millisecond boundary, as a slow render does */ }
+  const runB = reducer(st, action);
+
+  eq('S25.3 both reducer runs stamp the same ts',
+     runA.leagues[0].events[0].ts, runB.leagues[0].events[0].ts);
+  eq('S25.4 and the same id',
+     runA.leagues[0].events[0].id, runB.leagues[0].events[0].id);
+  eq('S25.5 re-stamping an already-stamped action changes nothing',
+     stampActionIds(st, action), action);
+}
+
+/* ==========================================================================
+   GROUP S26 - the reported reproduction scenarios, end to end
+   ==========================================================================
+   Every step is followed by a full round trip and re-hydrate, which is what
+   "wait a few seconds", "navigate away and back" and "reload the screen" all
+   reduce to in this architecture: the state comes from the store, and the store
+   is re-hydrated from the server.
+*/
+
+async function s26_reported_scenarios_end_to_end() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  const ev = (type) => score('lg1', 'g1', 'tH', 'p1', type, 1);
+  const roundTrip = async () => { await A.settle(); A.applySnapshot(await A.snapshot()); };
+
+  // Scenario 1 - one stat update, then wait.
+  A.dispatch(ev('fg2_make'));
+  eq('S26.1 two points', A.points(), 2);
+  await roundTrip();
+  eq('S26.2 still two after a round trip', A.points(), 2);
+
+  // Scenario 2 - several updates, mixing scoring, misses and non-scoring stats.
+  A.dispatch(ev('fg3_make'));
+  A.dispatch(ev('fg2_miss'));
+  A.dispatch(ev('reb'));
+  A.dispatch(ev('tov'));
+  A.dispatch(ev('ft_make'));
+  eq('S26.3 six points', A.points(), 6);
+  eq('S26.4 six events in the log', A.eventIds().length, 6);
+  await roundTrip();
+  eq('S26.5 all six survive', A.points(), 6);
+  eq('S26.6 and the log is intact', A.eventIds().length, 6);
+
+  // Scenarios 3 and 4 - undo moves exactly one step back, and stays there.
+  A.dispatch({ t: 'UNDO_EVENT', leagueId: 'lg1', gameId: 'g1' });
+  eq('S26.7 undo drops the free throw only', A.points(), 5);
+  eq('S26.8 five events remain', A.eventIds().length, 5);
+  await roundTrip();
+  eq('S26.9 the undo holds', A.points(), 5);
+  eq('S26.10 and so does the log', A.eventIds().length, 5);
+
+  // Scenario 5 - redo moves exactly one step forward, and stays there.
+  A.dispatch({ t: 'REDO_EVENT', leagueId: 'lg1', gameId: 'g1' });
+  eq('S26.11 redo restores the free throw', A.points(), 6);
+  await roundTrip();
+  eq('S26.12 the redo holds', A.points(), 6);
+  eq('S26.13 with no duplicate row', server.count('events'), 6);
+
+  // Scenario 6 - a new action after undo invalidates the redo branch.
+  A.dispatch({ t: 'UNDO_EVENT', leagueId: 'lg1', gameId: 'g1' });
+  eq('S26.14 back to five', A.points(), 5);
+  A.dispatch(ev('ft_make'));
+  eq('S26.15 a new free throw takes it to six', A.points(), 6);
+  A.dispatch({ t: 'REDO_EVENT', leagueId: 'lg1', gameId: 'g1' });
+  eq('S26.16 redo after a new action does nothing', A.points(), 6);
+  await roundTrip();
+  eq('S26.17 and the round trip agrees', A.points(), 6);
+  eq('S26.18 six rows server-side, not seven', server.count('events'), 6);
+
+  // Scenario 7 - a substitution alongside the stats.
+  A.dispatch({ t: 'ADD_PLAYER', leagueId: 'lg1', teamId: 'tH', name: 'Bench', id: 'p3' });
+  A.dispatch({ t: 'SET_LINEUP', leagueId: 'lg1', gameId: 'g1', side: 'home', playerIds: ['p1'] });
+  A.dispatch({ t: 'SUBSTITUTE', leagueId: 'lg1', gameId: 'g1', side: 'home', outId: 'p1', inId: 'p3' });
+  A.dispatch(ev('fg3_make'));
+  eq('S26.19 nine points', A.points(), 9);
+  await roundTrip();
+  eq('S26.20 the score survives the sub', A.points(), 9);
+  eq('S26.21 and so does the lineup', A.game().homeOnCourt, ['p3']);
+
+  // Scenario 10 - a rapid burst, then wait.
+  A.dispatch(ev('fg2_make'));
+  A.dispatch(ev('fg3_make'));
+  A.dispatch(ev('ft_make'));
+  A.dispatch({ t: 'UNDO_EVENT', leagueId: 'lg1', gameId: 'g1' });
+  A.dispatch({ t: 'REDO_EVENT', leagueId: 'lg1', gameId: 'g1' });
+  A.dispatch(ev('fg2_make'));
+  const settled = A.points();
+  eq('S26.22 the burst arithmetic is exact', settled, 9 + 2 + 3 + 1 + 2);
+  await roundTrip();
+  eq('S26.23 and it is deterministic across the round trip', A.points(), settled);
+
+  // Scenario 9 - a cold reload sees exactly the same board.
+  const B = new Device('B', server);
+  await B.pull();
+  eq('S26.24 a freshly loaded device agrees on the score', B.points(), settled);
+  eq('S26.25 and on the log', B.eventIds().length, A.eventIds().length);
+  eq('S26.26 and on the lineup', B.game().homeOnCourt, ['p3']);
+}
+
+/* ==========================================================================
+   GROUP S27 - a pinned game write must not resurrect a rolled-back game
+   ==========================================================================
+   Putting the game row into the ledger creates a trap the events never had. A
+   FAILED write is pinned rather than retired, deliberately, so the scorekeeper's
+   value stays on the board - but a drop-in game whose transaction was rejected
+   is ROLLED BACK locally, and a pinned entry would then put it straight back on
+   the next pull, pointing at teams and players the rollback also removed. Which
+   is the "?" team crash the bundle guard exists to prevent, reintroduced through
+   the back door.
+
+   The rule that closes it is not a list of actions to special-case: a ledger
+   entry is a local write held open until the server agrees, so an entry whose row
+   is no longer on the device has nothing left to protect.
+*/
+
+async function s27_a_failed_bundle_is_not_resurrected_by_the_ledger() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.applySnapshot(await A.snapshot());
+
+  server.failures['rpc:rec_setup_game'] = { message: 'Scorekeeper access required.' };
+  A.dispatch({
+    t: 'REC_SETUP_GAME',
+    leagueId: 'lg1', gameId: 'gRec', location: 'Gym',
+    teams: [
+      { id: 'tNew1', name: 'Alpha', color: '#111', players: [{ id: 'pNew1', name: 'A' }] },
+      { id: 'tNew2', name: 'Bravo', color: '#222', players: [{ id: 'pNew2', name: 'B' }] },
+    ],
+  });
+  await A.settle();
+  ok('S27.1 the push was rejected', A.syncState === 'error');
+  ok('S27.2 the local half is rolled back', !A.game('gRec'));
+
+  // The pull that follows must not hand the rolled-back game back.
+  A.applySnapshot(await A.snapshot());
+  ok('S27.3 a pinned game write does not resurrect it', !A.game('gRec'));
+  eq('S27.4 the existing game is untouched', A.league().games.map(g => g.id), ['g1']);
+  eq('S27.5 and the ledger has let it go', pendingCount(), 0);
+}
+
+/* Deleting a game after a substitution whose push failed is the same shape
+   without the bundle: the pinned entry must not bring the game back either. */
+async function s28_deleting_a_game_releases_its_pending_write() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.dispatch({ t: 'ADD_PLAYER', leagueId: 'lg1', teamId: 'tH', name: 'Bench', id: 'p3' });
+  A.dispatch({ t: 'SET_LINEUP', leagueId: 'lg1', gameId: 'g1', side: 'home', playerIds: ['p1'] });
+  await A.settle();
+  A.applySnapshot(await A.snapshot());
+
+  server.failures['upsert:games'] = 'network';
+  A.dispatch({ t: 'SUBSTITUTE', leagueId: 'lg1', gameId: 'g1', side: 'home', outId: 'p1', inId: 'p3' });
+  await A.settle();
+  eq('S28.1 the sub stands locally despite the failure', A.game().homeOnCourt, ['p3']);
+
+  delete server.failures['upsert:games'];
+  A.dispatch({ t: 'DELETE_GAME', leagueId: 'lg1', gameId: 'g1' });
+  await A.settle();
+  ok('S28.2 the game is gone locally', !A.game());
+  A.applySnapshot(await A.snapshot());
+  ok('S28.3 and the pinned sub does not bring it back', !A.game());
+}
+
 /* --------------------------------------------------------------------------- */
 
 const TESTS = [
@@ -748,6 +1172,17 @@ const TESTS = [
   ['S15 ledger retires confirmed writes', s15_ledger_retires_confirmed_writes],
   ['S16 failed drop-in rolls back', s16_failed_drop_in_rolls_back],
   ['S17 rollback spares an existing space', s17_rollback_spares_an_existing_space],
+  ['S18 out-of-order snapshot cannot revert a stat', s18_out_of_order_snapshot_cannot_revert_a_stat],
+  ['S19 out-of-order snapshot with a later tap pending', s19_out_of_order_snapshot_with_a_later_tap_pending],
+  ['S20 insert confirmation does not retire the undo', s20_insert_confirmation_does_not_retire_the_undo],
+  ['S21 delete confirmation does not retire the redo', s21_delete_confirmation_does_not_retire_the_redo],
+  ['S22 an empty snapshot never wipes a device', s22_an_empty_snapshot_never_wipes_a_device],
+  ['S23 game-row ledger protects a substitution', s23_game_row_ledger_protects_a_substitution],
+  ['S24 game-row ledger protects the period', s24_game_row_ledger_protects_the_period],
+  ['S25 ADD_EVENT is stamped once', s25_add_event_is_stamped_once],
+  ['S26 reported scenarios end to end', s26_reported_scenarios_end_to_end],
+  ['S27 a failed bundle is not resurrected by the ledger', s27_a_failed_bundle_is_not_resurrected_by_the_ledger],
+  ['S28 deleting a game releases its pending write', s28_deleting_a_game_releases_its_pending_write],
 ];
 
 (async () => {

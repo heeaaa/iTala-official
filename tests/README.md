@@ -153,8 +153,9 @@ about React state and timing, and this project has no component-render harness.
 suite proves what an action does LOCALLY; this one proves what it does on the
 SERVER, and what the other device sees afterwards. It drives the real reducer, the
 real `pushAction`/`fetchAllState`, and the real dispatch-side primitives
-(`resolveUndoTarget`, `enqueuePush`, the undo tombstone guard) against a PostgREST
-emulator in `harness/fakeSupabase.js`.
+(`stampActionIds`, `enqueuePush`, the pending-writes ledger and the snapshot
+watermark in `sync/pendingEvents.ts`) against a PostgREST emulator in
+`harness/fakeSupabase.js`.
 
 The emulator models the two server behaviours a naive stub hides, both of which
 were live undo bugs:
@@ -187,10 +188,13 @@ converge on an ordinary sequence of stats and undos.
   declared on Google Play's Data safety form), and
   `docs/DEPLOYMENT.md` still has the zip-apply commands
 - the sync primitives stay wired into `dispatch` - pushes go through
-  `enqueuePush`, undo resolves its target id and tombstones it, `HYDRATE` drops
-  tombstoned events, and the undo delete asks for the deleted rows back. The sync
-  suite builds its own dispatch glue, so these checks are what stop it passing
-  while the app has quietly stopped calling them
+  `enqueuePush`, every write is recorded in the pending ledger and settled by
+  push token, `HYDRATE` reconciles both the events and the game rows against it,
+  there is exactly one place that fetches server state, a snapshot older than one
+  already applied is refused, an empty read never wipes a device that has data,
+  and the undo delete asks for the deleted rows back. The sync suite builds its
+  own dispatch glue, so these checks are what stop it passing while the app has
+  quietly stopped calling them
 - no hard-coded password literal in the schema, the client, or the docs; the
   schema stores a hash, seeds no usable secret, and throttles attempts
 - CI actually verifies pull requests: a workflow runs `tests/run.js` on

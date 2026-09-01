@@ -10,10 +10,11 @@ import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
 import { fetchAllState, pushAction, subscribeRealtime } from '../sync/sync';
 import { enqueuePush, __resetPushQueue } from '../sync/pushQueue';
 import {
-  beginSnapshot, confirmPending, failPending, insertEvent, lastEventOf,
-  recordPending, reconcileLeagueEvents, sortEvents, __resetPending,
+  acceptSnapshot, appliedSnapshotAt, beginSnapshot, confirmPending, failPending,
+  insertEvent, lastEventOf, recordPending, reconcileLeagueEvents,
+  reconcileLeagueGames, sortEvents, __resetPending,
 } from '../sync/pendingEvents';
-import { warn } from '../lib/log';
+import { trace, warn } from '../lib/log';
 import { isNetworkFailure } from './authErrors';
 
 /**
@@ -69,17 +70,11 @@ function describeSyncFailure(e: unknown): string {
   return msg;
 }
 
-// gameId -> expiry timestamp. Lineups written locally are protected from being
-// overwritten by a lagging realtime echo until the expiry passes.
-const lineupGuard = new Map<string, number>();
-const LINEUP_GUARD_MS = 2500;
-function guardLineup(gameId: string) { lineupGuard.set(gameId, Date.now() + LINEUP_GUARD_MS); }
-function isLineupGuarded(gameId: string) {
-  const exp = lineupGuard.get(gameId);
-  if (exp === undefined) return false;
-  if (Date.now() > exp) { lineupGuard.delete(gameId); return false; }
-  return true;
-}
+// Lineups, substitutions, the period and the game status are no longer guarded
+// by a clock here. They go into the same pending-writes ledger as the events
+// (see sync/pendingEvents.ts, `pendingGameWrite`), so a substitution keeps the
+// ordering guarantee a basket gets instead of a 2.5-second tombstone that was
+// both too short for a slow push and wrong the moment it expired.
 
 // Freshly-created-bundle guard. A local write (e.g. starting a drop-in game)
 // is visible locally immediately, but the server round trip takes a moment. If
@@ -111,6 +106,12 @@ function activeBundles(): PendingBundle[] {
 
 interface RecTeamInput { id: string; name: string; color?: string; players: { id: string; name: string; number?: string }[] }
 
+/** What one server pull did. `applied` is whether local state moved; `hadData`
+ *  is whether the server returned any league at all, which is the question boot
+ *  has to keep retrying on - an empty read may only mean the session wasn't
+ *  ready yet, and looks identical to an account that genuinely owns nothing. */
+interface PullResult { applied: boolean; hadData: boolean }
+
 export type Action =
   // `settings` is the legacy app-wide toggle. It is no longer part of AppState,
   // but a saved state loaded off an older build still carries it, so the shape
@@ -136,10 +137,11 @@ export type Action =
   | { t: 'SET_LINEUP'; leagueId: string; gameId: string; side: 'home' | 'away'; playerIds: string[] }
   | { t: 'SET_LINEUPS'; leagueId: string; gameId: string; home: string[]; away: string[] }
   | { t: 'SUBSTITUTE'; leagueId: string; gameId: string; side: 'home' | 'away'; outId: string; inId: string }
-  // `id` on ADD_EVENT and `eventId` on UNDO/REDO are filled in by stampActionIds
-  // at dispatch time. Callers leave them out; the reducer, the sync push and the
-  // pending ledger then all name the same row.
-  | { t: 'ADD_EVENT'; leagueId: string; gameId: string; teamId: string; playerId: string | null; type: EventType; period: number; note?: string; id?: string }
+  // `id` and `ts` on ADD_EVENT, and `eventId` on UNDO/REDO, are filled in by
+  // stampActionIds at dispatch time. Callers leave them out; the reducer, the
+  // sync push and the pending ledger then all name the same row, with the same
+  // timestamp.
+  | { t: 'ADD_EVENT'; leagueId: string; gameId: string; teamId: string; playerId: string | null; type: EventType; period: number; note?: string; id?: string; ts?: number }
   | { t: 'UNDO_EVENT'; leagueId: string; gameId: string; eventId?: string }
   | { t: 'REDO_EVENT'; leagueId: string; gameId: string; eventId?: string }
   | { t: 'DELETE_EVENT'; leagueId: string; gameId: string; eventId: string }
@@ -182,16 +184,43 @@ function foulLimitOf(l: League): number {
  * they were fragile anyway: an id resolved here, once, from the PRE-dispatch
  * state is unambiguous for all three.
  *
- *   ADD_EVENT   → mint the new id
+ *   ADD_EVENT   → mint the new id, and stamp the timestamp
  *   UNDO_EVENT  → the canonical last event of the game
  *   REDO_EVENT  → the event on top of the redo stack
+ *
+ * `ts` is stamped here for the same reason, and it matters more than it looks.
+ * The reducer runs TWICE per action in this app: once in the dispatch wrapper
+ * below, to compute the rows the server push mirrors, and again inside React's
+ * useReducer for the state the UI renders (React may also re-run a reducer for
+ * an action whose update it re-bases). `ts: Date.now()` inside the reducer
+ * therefore produced a DIFFERENT timestamp in each run - the row on the server
+ * and the row on screen disagreed by a millisecond or two. `ts` is half of the
+ * (ts, id) key that makes "the last event of this game" mean the same row on
+ * both sides, which is the entire definition of Undo, so the two must not be
+ * allowed to drift. Resolved once, here, from the action.
+ *
+ * And `ts` is taken as strictly AFTER every event already logged for this game,
+ * not simply as the clock reading. Six taps in one burst land inside the same
+ * millisecond, `ts` ties, and the (ts, id) order then falls back to comparing
+ * random ids - so "the last event of this game" became whichever of the six
+ * happened to sort last, and Undo removed a stat the scorekeeper did not just
+ * enter. Ties are prevented at the source instead. The id tie-break stays as the
+ * backstop for rows this device did not mint (two devices inside one
+ * millisecond, and rows already stored by an older build).
  *
  * Exported so the sync tests exercise the same resolution the app uses rather
  * than a copy of it.
  */
 export function stampActionIds(state: AppState, action: Action): Action {
   if (action.t === 'ADD_EVENT') {
-    return action.id ? action : { ...action, id: uid() };
+    if (action.id !== undefined && action.ts !== undefined) return action;
+    const lg = state.leagues.find(l => l.id === action.leagueId);
+    const latest = lastEventOf(lg?.events ?? [], action.gameId);
+    return {
+      ...action,
+      id: action.id ?? uid(),
+      ts: action.ts ?? Math.max(Date.now(), (latest?.ts ?? 0) + 1),
+    };
   }
   if (action.t === 'UNDO_EVENT') {
     if (action.eventId) return action;
@@ -212,7 +241,6 @@ export function stampActionIds(state: AppState, action: Action): Action {
 /** Test hook: clear module-level guards and the push chain between suites. */
 export function __resetSyncPrimitives(): void {
   __resetPending();
-  lineupGuard.clear();
   bundleGuard.length = 0;
   __resetPushQueue();
 }
@@ -227,11 +255,6 @@ export function reducer(state: AppState, a: Action): AppState {
       // `true` default matches the old defaultSettings value, so a device that
       // never set it is unaffected.
       const legacyTrackMisses = a.state.settings?.trackMisses ?? true;
-      // Build a quick lookup of the CURRENT (pre-hydrate) games so we can
-      // preserve just-written lineups that the incoming snapshot may not have
-      // yet (see lineupGuard). Everything else takes the server value.
-      const currentGames = new Map<string, Game>();
-      for (const l of state.leagues) for (const g of l.games) currentGames.set(g.id, g);
 
       const bundles = activeBundles();
       const localLeagues = new Map(state.leagues.map(l => [l.id, l]));
@@ -250,13 +273,14 @@ export function reducer(state: AppState, a: Action): AppState {
         const migrated = reconciled.trackMisses === undefined
           ? { ...reconciled, trackMisses: legacyTrackMisses }
           : reconciled;
-        const games = migrated.games.map(g => {
-          if (isLineupGuarded(g.id)) {
-            const local = currentGames.get(g.id);
-            if (local) return { ...g, homeOnCourt: local.homeOnCourt, awayOnCourt: local.awayOnCourt };
-          }
-          return g;
-        });
+        // Same reconciliation for the game rows: a lineup, substitution, period
+        // or status written locally stays authoritative until a snapshot read
+        // after the server confirmed it. The local rows go in too, so a pending
+        // write for a game the device no longer has (a rolled-back drop-in, a
+        // deleted game) is discarded rather than re-added.
+        const games = a.snapshotAt === undefined
+          ? migrated.games
+          : reconcileLeagueGames(l.id, migrated.games, a.snapshotAt, localLeagues.get(l.id)?.games);
         // _redo is local-only and never present in a server snapshot, so it
         // must be carried across or every background sync would clear it.
         let out: League = { ...migrated, games, _redo: localLeagues.get(l.id)?._redo };
@@ -430,9 +454,12 @@ export function reducer(state: AppState, a: Action): AppState {
 
     case 'ADD_EVENT':
       return mapLeague(state, a.leagueId, l => {
+        // Both `id` and `ts` come off the action (see stampActionIds). The
+        // fallbacks cover a direct reducer call in a test; the app always
+        // stamps them, so the two reducer runs per dispatch agree.
         const ev: GameEvent = {
           id: a.id ?? uid(), gameId: a.gameId, teamId: a.teamId,
-          playerId: a.playerId, type: a.type, period: a.period, ts: Date.now(),
+          playerId: a.playerId, type: a.type, period: a.period, ts: a.ts ?? Date.now(),
           note: a.note,
         };
         const events = insertEvent(l.events, ev);
@@ -764,6 +791,96 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   stateRef.current = state;
   prefsRef.current = prefs;
 
+  /* ------------------------------------------------------------------ pulls --
+   * ONE owner for every server pull.
+   *
+   * There used to be five, none of them aware of the others: the boot pull, its
+   * background retry loop, the post-auth re-pull, the realtime refetch, and
+   * pull-to-refresh. Each took its own snapshot tick, read the whole server
+   * state, and hydrated whatever came back, whenever it came back. Two of them
+   * overlapping is all it takes to lose a committed stat, because the pending
+   * ledger has legitimately retired the write by the time the older reply lands:
+   *
+   *     auth re-pull starts, reads 0 rows, reply slow in transit
+   *     tap 3PT                -> 3
+   *     realtime refetch reads 1 row, lands first, ledger entry retires
+   *     auth re-pull lands     -> 0     <- reverted, with no user action
+   *
+   * The realtime handler's own `refetching` flag guarded it only against
+   * itself, and it DROPPED coalesced echoes rather than queueing one, so the
+   * device could also be left holding a snapshot older than the change that
+   * asked for it - removing the accidental self-healing that had been masking
+   * how often this happened.
+   *
+   * So: at most one read on the wire, a single queued follow-up when something
+   * asks while one is running, and `acceptSnapshot` as the backstop that refuses
+   * an out-of-order reply outright.
+   */
+  const aliveRef = useRef(true);
+  useEffect(() => () => { aliveRef.current = false; }, []);
+  const pullGate = useRef<{ inFlight: Promise<PullResult> | null; trailing: boolean }>({ inFlight: null, trailing: false });
+
+  /** Hydrate one snapshot, or refuse it and say why. */
+  const applySnapshot = useCallback((at: number, remote: Partial<AppState> | null, source: string): boolean => {
+    const leagues = remote?.leagues;
+    if (!leagues) return false;
+    // An empty league list is not evidence that this account owns nothing: an
+    // RLS read taken while the access token is mid-refresh comes back as an
+    // empty array rather than an error. The post-auth re-pull hydrated it
+    // unconditionally, which wiped every league on the device until the next
+    // successful pull. The boot pull always checked; this now does too.
+    if (leagues.length === 0 && stateRef.current.leagues.length > 0) {
+      warn(`[sync] refused an empty snapshot (${source}); keeping ${stateRef.current.leagues.length} local league(s)`);
+      return false;
+    }
+    // Ordering, not order of arrival.
+    if (!acceptSnapshot(at)) {
+      trace('SNAPSHOT', `REJECTED at=${at} applied=${appliedSnapshotAt()} reason=stale-snapshot source=${source}`);
+      return false;
+    }
+    trace('SNAPSHOT', `accepted at=${at} leagues=${leagues.length} source=${source}`);
+    baseDispatch({ t: 'HYDRATE', state: { leagues }, snapshotAt: at });
+    return true;
+  }, []);
+
+  const pullState = useCallback((source: string): Promise<PullResult> => {
+    const sb = SYNC_ENABLED ? getSupabase() : null;
+    if (!sb) return Promise.resolve({ applied: false, hadData: false });
+    const gate = pullGate.current;
+    if (gate.inFlight) {
+      // Queue exactly one follow-up and hand back the pull already running, so
+      // pull-to-refresh still resolves when the data it is waiting for arrives.
+      gate.trailing = true;
+      trace('PULL', `queued source=${source}`);
+      return gate.inFlight;
+    }
+    const run = (async (): Promise<PullResult> => {
+      let applied = false;
+      let hadData = false;
+      try {
+        do {
+          gate.trailing = false;
+          // Tick BEFORE the fetch: rows read after this point may predate any
+          // local write confirmed after it. See sync/pendingEvents.ts.
+          const at = beginSnapshot();
+          const remote = await fetchAllState(sb);
+          if (!aliveRef.current) break;
+          hadData = hadData || !!remote?.leagues?.length;
+          applied = applySnapshot(at, remote, source) || applied;
+        } while (gate.trailing);
+      } catch (e) {
+        // Never silent: a failed pull is how a device ends up looking empty for
+        // no visible reason.
+        warn(`[sync] pull failed (${source}):`, (e as Error)?.message ?? String(e));
+      } finally {
+        gate.inFlight = null;
+      }
+      return { applied, hadData };
+    })();
+    gate.inFlight = run;
+    return run;
+  }, [applySnapshot]);
+
   // Hydrate from local storage first (fast, offline-friendly), then if synced,
   // wait until Supabase auth is ready (anonymous sign-in finishes), then pull
   // the authoritative server state. Without waiting, the initial pull would
@@ -806,23 +923,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           // the user to sign in or relaunch. This is the iPad "empty on first
           // open, appeared after sign-in" fix: the sign-in wasn't required,
           // the retry would have filled it in regardless.
-          const tryPull = async (): Promise<boolean> => {
-            try {
-              // Tick BEFORE the fetch: rows read after this point may predate
-              // any local write confirmed after it. See sync/pendingEvents.ts.
-              const at = beginSnapshot();
-              const remote = await fetchAllState(sb);
-              if (!cancelled && remote && remote.leagues && remote.leagues.length > 0) {
-                baseDispatch({ t: 'HYDRATE', state: { leagues: remote.leagues }, snapshotAt: at });
-                return true;
-              }
-            } catch (e) {
-              warn('Supabase pull attempt failed:', (e as Error).message);
-            }
-            return false;
-          };
-
-          const gotData = await tryPull();
+          // `hadData`, not "the pull worked": an empty result may only mean the
+          // session was not ready, so it must keep retrying. Applying the
+          // snapshot is now pullState's business, not this loop's.
+          const gotData = (await pullState('boot')).hadData;
           if (gotData && !cancelled) setInitialSyncDone(true);
           if (!gotData && !cancelled) {
             // Background retry: 1s, 2s, 4s, 8s, then every 15s up to ~1 min.
@@ -833,7 +937,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
                 if (cancelled) return;
                 await new Promise(r => setTimeout(r, d));
                 if (cancelled) return;
-                if (await tryPull()) { if (!cancelled) setInitialSyncDone(true); return; }
+                if ((await pullState('boot-retry')).hadData) { if (!cancelled) setInitialSyncDone(true); return; }
               }
               // Retries exhausted: stop showing a loading state and let the
               // empty view (with pull-to-refresh) take over.
@@ -843,19 +947,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
           // If auth state changes later (e.g. the very first sign-in completes
           // after the initial wait), re-pull so the device picks up data.
-          const { data: sub } = sb.auth.onAuthStateChange(async (_event, s) => {
+          //
+          // Only for the events that actually change WHICH DATA this device can
+          // see. This used to fire on every auth event, and with
+          // `autoRefreshToken: true` that includes TOKEN_REFRESHED - a periodic
+          // background event that says nothing whatsoever about the data, and
+          // whose re-pull raced the realtime refetch for the live game the
+          // scorekeeper was in the middle of. INITIAL_SESSION is skipped too:
+          // supabase-js replays it to every new subscriber, and the boot pull
+          // above has already covered that moment.
+          const { data: sub } = sb.auth.onAuthStateChange((event, s) => {
             if (!s || cancelled) return;
-            try {
-              const at = beginSnapshot();
-              const remote = await fetchAllState(sb);
-              if (!cancelled && remote && remote.leagues) {
-                baseDispatch({ t: 'HYDRATE', state: { leagues: remote.leagues }, snapshotAt: at });
-              }
-            } catch (e) {
-              // Never silent: a failed re-pull after sign-in is exactly how a
-              // device ends up looking empty for no visible reason.
-              warn('[sync] post-auth re-pull failed:', (e as Error)?.message ?? String(e));
-            }
+            if (event !== 'SIGNED_IN' && event !== 'USER_UPDATED') return;
+            void pullState(`auth:${event}`);
           });
           // Stash so cleanup works
           authSubRef.current = sub.subscription;
@@ -867,7 +971,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
       authSubRef.current?.unsubscribe();
     };
-  }, []);
+    // `pullState` is stable for the life of the provider (its only dependency,
+    // applySnapshot, has an empty dependency list), so this still runs exactly
+    // once - it is listed because it is used, not because it changes.
+  }, [pullState]);
 
   // Realtime subscription: when ANY row changes (from another device), re-pull
   // the full state. Cheap on a free tier with our data volume; the realtime
@@ -876,35 +983,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (!SYNC_ENABLED || !ready) return;
     const sb = getSupabase();
     if (!sb) return;
-    let refetching = false;
-    const refetch = async () => {
-      if (refetching) return; // coalesce bursts
-      refetching = true;
-      try {
-        const at = beginSnapshot();
-        const remote = await fetchAllState(sb);
-        if (remote && remote.leagues) {
-          baseDispatch({ t: 'HYDRATE', state: { leagues: remote.leagues }, snapshotAt: at });
-        }
-      } finally {
-        refetching = false;
-      }
-    };
-    const unsubscribe = subscribeRealtime(sb, refetch);
+    // Coalescing, queueing and ordering all live in pullState now, so a burst
+    // of echoes costs one read and a single trailing one - and can no longer
+    // overlap the boot retry, a post-auth re-pull, or pull-to-refresh.
+    const unsubscribe = subscribeRealtime(sb, () => { void pullState('realtime'); });
     return unsubscribe;
-  }, [ready]);
+  }, [ready, pullState]);
 
   // Manual refresh for pull-to-refresh: re-pull the full server state now.
   const refresh = useCallback(async () => {
-    if (!SYNC_ENABLED) return;
-    const sb = getSupabase();
-    if (!sb) return;
-    const at = beginSnapshot();
-    const remote = await fetchAllState(sb);
-    if (remote && remote.leagues) {
-      baseDispatch({ t: 'HYDRATE', state: { leagues: remote.leagues }, snapshotAt: at });
-    }
-  }, []);
+    await pullState('manual-refresh');
+  }, [pullState]);
 
   // Wrapped dispatch: apply the action locally, then push the resulting state
   // to Supabase. We compute the post-dispatch state inline via the reducer so
@@ -918,19 +1007,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // the pending ledger then all agree on which row moved.
     const action: Action = stampActionIds(stateRef.current, incoming);
 
-    const next = reducer(stateRef.current, action);
+    const prev = stateRef.current;
+    const next = reducer(prev, action);
     stateRef.current = next;
     baseDispatch(action);
 
     // Record this write in the pending ledger BEFORE the push starts, so a
     // snapshot that lands mid-flight is reconciled against it rather than
-    // silently overwriting it. See sync/pendingEvents.ts.
-    const touchedEventIds = recordPending(action, next);
-
-    // Protect freshly-written lineups from a lagging realtime echo.
-    if (action.t === 'SET_LINEUPS' || action.t === 'SET_LINEUP' || action.t === 'REC_SETUP_GAME') {
-      guardLineup(action.gameId);
-    }
+    // silently overwriting it. Both halves of the state a live game can move -
+    // the events and the game row - go in, and the ledger works out which by
+    // diffing prev against next. See sync/pendingEvents.ts.
+    const pushTokens = recordPending(action, prev, next);
+    trace('ACTION', `t=${action.t} game=${'gameId' in action ? action.gameId : '-'} tokens=${pushTokens.join(',') || 'none'}`);
 
     // Protect freshly-created bundles (rows that exist locally but haven't
     // finished their server round trip) from being deleted by a mid-write
@@ -988,7 +1076,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           .then(() => {
             // The server has it. The ledger entry stays until a snapshot read
             // after this moment confirms it — an older one is still in flight.
-            confirmPending(touchedEventIds);
+            confirmPending(pushTokens);
+            trace('PERSIST', `ok t=${action.t} tokens=${pushTokens.join(',') || 'none'}`);
             setSyncState('saved');
             if (savedTimer.current) clearTimeout(savedTimer.current);
             savedTimer.current = setTimeout(() => setSyncState('idle'), 2000);
@@ -996,7 +1085,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           .catch((e) => {
             // Pin the entry: the scorekeeper's stat stays on the board and the
             // badge stays red, rather than the board quietly reverting later.
-            failPending(touchedEventIds);
+            failPending(pushTokens);
+            trace('PERSIST', `FAILED t=${action.t} tokens=${pushTokens.join(',') || 'none'}`);
             setSyncState('error');
 
             // Setting up a drop-in game or importing a roster is all-or-nothing
