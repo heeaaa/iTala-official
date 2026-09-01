@@ -825,20 +825,26 @@ async function ensureSession(sb: ReturnType<typeof getSupabase>): Promise<{ uid:
       return { uid: existing.id, user: toAuthUser(existing) };
     }
 
-    // getSession ANSWERED, and the answer is "no session". Two ways to get
-    // here: a genuinely fresh install, or a stale session whose refresh token
-    // was rotated, revoked, or belongs to another project — which keeps
-    // poisoning every auth call and repeats on EVERY launch ("Invalid Refresh
-    // Token: Refresh Token Not Found"). Clearing the stored tokens locally (no
-    // network round trip) heals the second and is a no-op for the first. It is
-    // only safe because the answer was real: there is nothing here to lose.
-    await withTimeout(
-      sb.auth.signOut({ scope: 'local' }),
-      3000,
-      { error: null } as any,
-      'signOut(purge-stale)',
-    );
-
+    // getSession ANSWERED "no session", so start a guest one.
+    //
+    // There used to be a `signOut({ scope: 'local' })` here first, to clear a
+    // stale refresh token. It has to go, because it ALSO deletes the PKCE code
+    // verifier - auth-js `_signOut` removes `<storageKey>-code-verifier` for
+    // any scope other than 'others' - and this function runs at boot, racing
+    // whatever the person is doing:
+    //
+    //   app launches, ensureSession starts
+    //   person taps "Sign in with Google"  -> signInWithOAuth WRITES the verifier
+    //   ensureSession reaches the purge    -> DELETES the verifier
+    //   person finishes in the browser     -> exchangeCodeForSession has nothing
+    //
+    // which is a first-attempt-after-launch sign-in failing while a retry a
+    // minute later succeeds - exactly the reported behaviour.
+    //
+    // Removing it loses nothing. An unusable stored session is already removed
+    // by supabase-js inside __loadSession (it checks _isValidSession and calls
+    // _removeSession) BEFORE getSession can answer "no session", so by the time
+    // we are on this line there is nothing left to purge.
     const signin = await raceTimeout(sb.auth.signInAnonymously(), 6000, 'signInAnonymously');
     if (!signin.ok) return null;
     if (signin.value?.error) {

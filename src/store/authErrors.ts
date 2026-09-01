@@ -156,11 +156,22 @@ export function diagnoseAuthFailure(raw: string | null | undefined, provider?: s
  * quietly signing people out and reassigning everything they owned.
  *
  * A non-answer is never grounds for a destructive action.
+ *
+ * Note what is NOT here any more: a "purge" step. Boot used to call
+ * `signOut({ scope: 'local' })` whenever the probe answered "no session", to
+ * clear a stale refresh token. That call also deletes the PKCE code verifier
+ * (auth-js `_signOut`: `scope !== 'others'` removes `<storageKey>-code-verifier`),
+ * and a Google sign-in started while boot was still running would have its
+ * verifier deleted between writing it and exchanging the code - so the exchange
+ * failed with nothing to exchange against. It is also redundant: an unusable
+ * stored session is removed by `__loadSession` before it can answer "no
+ * session" at all, so by the time this plan is chosen there is nothing left to
+ * purge. See `sign-in-anonymously`.
  */
 export type SessionProbe = { answered: false } | { answered: true; hasSession: boolean };
-export type SessionPlan = 'use-existing' | 'purge-and-sign-in-anonymously' | 'leave-alone';
+export type SessionPlan = 'use-existing' | 'sign-in-anonymously' | 'leave-alone';
 
 export function sessionRecoveryPlan(probe: SessionProbe): SessionPlan {
   if (!probe.answered) return 'leave-alone';
-  return probe.hasSession ? 'use-existing' : 'purge-and-sign-in-anonymously';
+  return probe.hasSession ? 'use-existing' : 'sign-in-anonymously';
 }

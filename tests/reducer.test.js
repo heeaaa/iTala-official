@@ -1181,12 +1181,29 @@ ok('P13 uid() emits no comma, which is what makes P12 unreachable',
      sessionRecoveryPlan({ answered: false }), 'leave-alone');
   eq('R39 a real session is used as-is',
      sessionRecoveryPlan({ answered: true, hasSession: true }), 'use-existing');
-  eq('R40 a real "no session" answer may purge and start a guest session',
-     sessionRecoveryPlan({ answered: true, hasSession: false }), 'purge-and-sign-in-anonymously');
+  eq('R40 a real "no session" answer starts a guest session',
+     sessionRecoveryPlan({ answered: true, hasSession: false }), 'sign-in-anonymously');
 
-  const destructive = ['purge-and-sign-in-anonymously'];
-  ok('R41 no unanswered probe reaches a destructive plan',
-     !destructive.includes(sessionRecoveryPlan({ answered: false })));
+  // No plan may clear stored credentials.
+  //
+  // Boot used to sign out locally before starting a guest session, to clear a
+  // stale refresh token. That call also deletes the PKCE code verifier
+  // (auth-js _signOut removes <storageKey>-code-verifier for any scope but
+  // 'others'), so a Google sign-in started while boot was still running lost
+  // the verifier between writing it and exchanging the code - the first attempt
+  // after launch failed, a retry a minute later worked. It was redundant too:
+  // an unusable stored session is removed inside __loadSession before
+  // getSession can answer "no session" at all.
+  const DESTRUCTIVE = /purge|sign-?out|clear|remove|reset/i;
+  for (const probe of [
+    { answered: false },
+    { answered: true, hasSession: true },
+    { answered: true, hasSession: false },
+  ]) {
+    const plan = sessionRecoveryPlan(probe);
+    ok(`R41 no recovery plan clears stored credentials (${JSON.stringify(probe)})`,
+       !DESTRUCTIVE.test(plan), plan);
+  }
 }
 
 // ===========================================================================
