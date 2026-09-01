@@ -4,11 +4,10 @@ import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
-import { isNetworkFailure } from './authErrors';
 import { devLog, warn } from '../lib/log';
 import {
   AuthErrors, AuthScope, clearScopedError, describeAuthFailure, diagnoseAuthFailure,
-  errorForScope, sessionRecoveryPlan, setScopedError,
+  errorForScope, isNetworkFailure, sessionRecoveryPlan, setScopedError,
 } from './authErrors';
 
 export type { AuthScope } from './authErrors';
