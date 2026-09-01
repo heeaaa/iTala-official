@@ -78,14 +78,22 @@ export default function TeamProfileScreen({ route, navigation }: ScreenProps<'Te
           const us = isHome ? s.home : s.away;
           const them = isHome ? s.away : s.home;
           const opp = league.teams.find(t => t.id === (isHome ? g.awayTeamId : g.homeTeamId));
-          const won = us >= them;
+          // Three states, not two. `us >= them` gave a level game a green W here,
+          // which is the same F-11 mistake this screen's record no longer makes:
+          // a level game has no result, so it gets neither a W nor an L.
+          const level = us === them;
+          const won = us > them;
+          const resultColor = level ? colors.muted : won ? colors.green : colors.red;
           return (
             <Pressable key={g.id} onPress={() => navigation.navigate('BoxScore', { leagueId, gameId: g.id })}
               style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, borderTopWidth: i === 0 ? 0 : 1, borderTopColor: colors.line }}>
-              <Pill label={won ? 'W' : 'L'} color={won ? colors.greenDim : 'rgba(255,77,79,0.15)'} textColor={won ? colors.green : colors.red} />
+              <Pill
+                label={level ? '—' : won ? 'W' : 'L'}
+                color={level ? colors.surfaceHi : won ? colors.greenDim : 'rgba(255,77,79,0.15)'}
+                textColor={resultColor} />
               <TeamBadge logo={opp?.logo} color={opp?.color ?? colors.muted} size={13} />
               <Txt k="body" numberOfLines={1} style={{ flex: 1, fontSize: 14 }}>{isHome ? 'vs' : '@'} {opp?.name ?? '—'}</Txt>
-              <Txt k="stat" color={won ? colors.green : colors.red}>{us}–{them}</Txt>
+              <Txt k="stat" color={resultColor}>{us}–{them}</Txt>
               {g.finishedAt ? <Txt k="body" color={colors.muted} style={{ fontSize: 11 }}>{dayLabel(g.finishedAt)}</Txt> : null}
             </Pressable>
           );
