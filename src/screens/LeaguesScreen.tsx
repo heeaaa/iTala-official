@@ -33,6 +33,9 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
   const [codeOpen, setCodeOpen] = useState(false);
   const [codeBusy, setCodeBusy] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
+  // Measured height of the bottom action bar, so the list can reserve exactly
+  // that much room instead of a hard-coded guess. See the bar's own comment.
+  const [barHeight, setBarHeight] = useState(0);
 
   // Hidden-gesture counter (10 quick taps on the iTala wordmark).
   const tapCount = useRef(0);
@@ -261,7 +264,11 @@ Share this with the organizer. It can create exactly one league, then expires.`)
       <FlatList
         data={leagueList}
         keyExtractor={l => l.id}
-        contentContainerStyle={{ flexGrow: 1, paddingHorizontal: space(4), paddingBottom: role === 'guest' ? space(10) : (isAdmin ? space(52) : space(36)) }}
+        // Measured, not guessed: `barHeight` comes from the action bar's own
+        // onLayout, plus a gap so the last row clears it rather than touching it.
+        // The space(52)/space(36) guesses this replaces were 50px short for a
+        // Super Admin, which is what buried the archived-leagues footer.
+        contentContainerStyle={{ flexGrow: 1, paddingHorizontal: space(4), paddingBottom: role === 'guest' ? space(10) : barHeight + space(4) }}
         refreshControl={synced ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.brandTeal} colors={[colors.brandTeal]} /> : undefined}
         ListHeaderComponent={(() => {
           const recs = visibleLeagues.filter(l =>
@@ -366,19 +373,35 @@ Share this with the organizer. It can create exactly one league, then expires.`)
       />
 
       {role !== 'guest' && (
-        <View style={{
-          position: 'absolute', left: 0, right: 0, bottom: 0,
-          paddingHorizontal: space(4), paddingTop: space(3), paddingBottom: space(6), gap: 10,
-          backgroundColor: colors.bg, borderTopWidth: 1, borderTopColor: colors.line,
-        }}>
-          {isAdmin && (
-            <Button title="🎟  Create league-creation code" kind="ghost" onPress={() => { void onMintCode(); }} />
-          )}
-          {isAdmin && (
-            <Button title="📣  Sponsor promos" kind="ghost" onPress={() => navigation.navigate('ManagePromos')} />
-          )}
-          <Button title="🏀  Recreational / Drop-In Game" kind="ghost" onPress={() => navigation.navigate('RecGame')} />
-          <Button title="+  New League" onPress={onNewLeague} />
+        // ONE row, the same for every role.
+        //
+        // This used to be a stack of full-width buttons that grew with the
+        // user's rights: two for a signed-in user, FOUR for a Super Admin. At
+        // four it stood 258px tall while the list below it reserved only
+        // space(52) = 208px, so the last 50px of the list - which is exactly
+        // where the "Archived leagues" footer sits - was permanently underneath
+        // the bar and could not be scrolled into view. A Super Admin could not
+        // reach their own archived leagues at all.
+        //
+        // Two fixes, because either alone would leave the trap in place:
+        //   * the two Super-Admin-only tools moved into the profile sheet,
+        //     where Settings and the invite code already live, so the bar is a
+        //     constant height for everyone and reads like a normal app;
+        //   * the list's bottom padding is now MEASURED off this bar rather
+        //     than guessed, so no future button can outgrow it again.
+        <View
+          onLayout={e => {
+            const h = Math.round(e.nativeEvent.layout.height);
+            setBarHeight(prev => (Math.abs(prev - h) > 1 ? h : prev));
+          }}
+          style={{
+            position: 'absolute', left: 0, right: 0, bottom: 0,
+            paddingHorizontal: space(4), paddingTop: space(3), paddingBottom: space(6),
+            flexDirection: 'row', gap: 10,
+            backgroundColor: colors.bg, borderTopWidth: 1, borderTopColor: colors.line,
+          }}>
+          <Button title="🏀  Drop-In" kind="ghost" style={{ flex: 1 }} onPress={() => navigation.navigate('RecGame')} />
+          <Button title="+  New League" style={{ flex: 1 }} onPress={onNewLeague} />
         </View>
       )}
 
@@ -402,6 +425,12 @@ Share this with the organizer. It can create exactly one league, then expires.`)
         onSettings={() => { setSheetOpen(false); navigation.navigate('Settings'); }}
         onAbout={onAbout}
         onEnterCode={user ? () => { setSheetOpen(false); setCodeError(null); setCodeOpen(true); } : undefined}
+        // Super-Admin-only tools. They used to be two more full-width buttons in
+        // the bottom bar, which is what pushed it past the room the list
+        // reserved. They belong here with Settings and the invite code: rarely
+        // used, and nothing to do with starting a game.
+        onMintCode={isAdmin ? () => { void onMintCode(); } : undefined}
+        onPromos={isAdmin ? () => { setSheetOpen(false); navigation.navigate('ManagePromos'); } : undefined}
       />
 
       <InviteCodeModal

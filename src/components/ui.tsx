@@ -679,7 +679,7 @@ export function ProfileButton({ avatarUrl, onPress }:
 
 // Bottom sheet opened from the header profile button. Slides up/down with a
 // short spring; taps on the dimmed backdrop dismiss it.
-export function ProfileSheet({ visible, onClose, user, role, busy, error, onGoogle, onApple, onSignOut, onSettings, onAbout, onEnterCode }: {
+export function ProfileSheet({ visible, onClose, user, role, busy, error, onGoogle, onApple, onSignOut, onSettings, onAbout, onEnterCode, onMintCode, onPromos }: {
   visible: boolean;
   onClose: () => void;
   user: { name: string; email: string; avatarUrl: string | null } | null;
@@ -692,8 +692,12 @@ export function ProfileSheet({ visible, onClose, user, role, busy, error, onGoog
   onSettings: () => void;
   onAbout: () => void;
   onEnterCode?: () => void;
+  /** Super-Admin tools. Omitted for everyone else, and the section with them. */
+  onMintCode?: () => void;
+  onPromos?: () => void;
 }) {
   const [mounted, setMounted] = useState(visible);
+  const [sheetH, setSheetH] = useState(560); // replaced by the measured height
   const slide = useRef(new Animated.Value(0)).current; // 0 = hidden, 1 = shown
 
   React.useEffect(() => {
@@ -707,7 +711,12 @@ export function ProfileSheet({ visible, onClose, user, role, busy, error, onGoog
 
   if (!mounted) return null;
 
-  const translateY = slide.interpolate({ inputRange: [0, 1], outputRange: [420, 0] });
+  // The slide distance is the sheet's own measured height, not a fixed 420.
+  // The sheet grows with what it offers - a signed-in Super Admin now sees the
+  // invite code, two admin tools, Settings, About and Sign out - and a hard
+  // 420 leaves anything taller than that peeking above the bottom edge while
+  // "hidden". Starts at a generous default so the first frame is off-screen.
+  const translateY = slide.interpolate({ inputRange: [0, 1], outputRange: [sheetH, 0] });
   const backdrop = slide.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
 
   const RowBtn = ({ label, onPress, color = colors.text, disabled }:
@@ -724,12 +733,17 @@ export function ProfileSheet({ visible, onClose, user, role, busy, error, onGoog
       <Animated.View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#000B', opacity: backdrop }}>
         <Pressable style={{ flex: 1 }} onPress={onClose} />
       </Animated.View>
-      <Animated.View style={{
-        position: 'absolute', left: 0, right: 0, bottom: 0,
-        transform: [{ translateY }],
-        backgroundColor: colors.surface, borderTopLeftRadius: radius.lg + 4, borderTopRightRadius: radius.lg + 4,
-        borderWidth: 1, borderColor: colors.line, padding: space(5), paddingBottom: space(9),
-      }}>
+      <Animated.View
+        onLayout={e => {
+          const h = Math.ceil(e.nativeEvent.layout.height);
+          setSheetH(prev => (Math.abs(prev - h) > 1 ? h : prev));
+        }}
+        style={{
+          position: 'absolute', left: 0, right: 0, bottom: 0,
+          transform: [{ translateY }],
+          backgroundColor: colors.surface, borderTopLeftRadius: radius.lg + 4, borderTopRightRadius: radius.lg + 4,
+          borderWidth: 1, borderColor: colors.line, padding: space(5), paddingBottom: space(9),
+        }}>
         {/* Grab handle */}
         <View style={{ alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: colors.line, marginBottom: space(4) }} />
 
@@ -755,6 +769,17 @@ export function ProfileSheet({ visible, onClose, user, role, busy, error, onGoog
             <Line />
             <RowBtn label="About" onPress={onAbout} />
             <Line />
+            {/* Super-Admin tools, grouped and labelled so they read as the
+                separate class of thing they are. They were two more full-width
+                buttons in Home's bottom bar until that bar grew taller than the
+                room the league list reserved beneath it. */}
+            {(onMintCode || onPromos) ? (
+              <>
+                <Txt k="label" color={colors.brandTeal} style={{ marginTop: space(3) }}>SUPER ADMIN</Txt>
+                {onMintCode ? (<><RowBtn label="🎟  Create league-creation code" onPress={onMintCode} /><Line /></>) : null}
+                {onPromos ? (<><RowBtn label="📣  Sponsor promos" onPress={onPromos} /><Line /></>) : null}
+              </>
+            ) : null}
             <RowBtn label={busy ? 'Signing out…' : 'Sign out'} color={colors.red} onPress={onSignOut} disabled={busy} />
           </>
         ) : (
