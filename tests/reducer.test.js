@@ -4,7 +4,7 @@ const { reducer, teamBoxScore, gameScore, standings, careerStats, leagueAwards,
         effectiveFoulLimit, fouledOutSet, playerFouls, winPctOf, outcomeOf,
         promoteStrayToTeam, claimOnce, courtKeyOf, reconcileLineup,
         setScopedError, clearScopedError, errorForScope, describeAuthFailure,
-        sessionRecoveryPlan,
+        diagnoseAuthFailure, sessionRecoveryPlan,
         devLog, devWarn, relWarn } = M;
 
 let pass = 0, fail = 0;
@@ -1097,32 +1097,77 @@ ok('P13 uid() emits no comma, which is what makes P12 unreachable',
   ok('R13 clearing an empty map returns the same object', clearScopedError({}) !== undefined);
 }
 
-// --- what the message actually says ----------------------------------------
-// The device in the bug report could not reach Supabase at all. The app blamed
-// the Supabase provider configuration, so that got checked (twice) while the
-// real cause went unmentioned.
+// --- two audiences: what a person reads, and what the log gets --------------
+// Reported: "please dont display error messages like that which is not user
+// friendly. Users shouldnt know about configuration."
+//
+// The app had been telling whoever tapped Sign in to add a URL to Supabase ->
+// Authentication -> URL Configuration, and which bundle id Expo Go signs tokens
+// with. That is a dashboard they cannot open. The configuration detail is still
+// produced - it is genuinely useful - but it goes to the log.
 {
+  // Anything in a user-facing string that describes plumbing rather than the
+  // person's situation. A leak here is the bug being guarded against.
+  const PLUMBING = /supabase|redirect url|url configuration|bundle id|host\.exp|client id|allowlist|provider config|expo go|dashboard|schema|rls|anon key|\.md\b|exp:\/\/|itala:\/\//i;
+
+  const cases = [
+    ['a network failure', 'Network request failed', 'Apple'],
+    ['a timeout', 'timeout', 'Google'],
+    ['no reason at all', null, 'Google'],
+    ['a disabled provider', 'Provider is not enabled', 'Google'],
+    ['a rejected id token', 'Unacceptable audience in id_token', 'Apple'],
+    ['disabled anonymous sign-in', 'Anonymous sign-ins are disabled', undefined],
+    ['an unrecognised server error', 'invalid request: both auth code and code verifier should be non-empty', 'Google'],
+    ['a callback with nothing in it', 'callback carried no code and no tokens (params: none)', 'Google'],
+  ];
+
+  let n = 14;
+  for (const [label, raw, provider] of cases) {
+    const shown = describeAuthFailure(raw, provider);
+    ok(`R${n++} the user message for ${label} mentions no configuration`,
+       !PLUMBING.test(shown), shown);
+    ok(`R${n++} the user message for ${label} is not empty`, shown.trim().length > 0, shown);
+  }
+
+  // A raw server string is not a user message even when it contains no
+  // dashboard keyword. "invalid request: both auth code and code verifier
+  // should be non-empty" tells a person nothing and looks like a crash.
+  for (const raw of [
+    'invalid request: both auth code and code verifier should be non-empty',
+    'exchangeCodeForSession: bad_code_verifier',
+    'callback carried no code and no tokens (params: none)',
+    'AuthApiError: Database error saving new user',
+  ]) {
+    ok(`R${n++} a raw technical reason is not shown verbatim`,
+       describeAuthFailure(raw, 'Google') !== raw,
+       describeAuthFailure(raw, 'Google'));
+  }
+
+  // Connectivity is the one thing a person CAN act on, so it must be named.
   const net = describeAuthFailure('Network request failed', 'Apple');
-  ok('R14 a network failure is named as a network failure', /reach the iTala server/i.test(net), net);
-  ok('R15 and does not blame the provider configuration',
-     !/provider/i.test(net) && !/bundle/i.test(net), net);
+  ok('R30 a network failure tells the person to check their connection',
+     /internet connection/i.test(net), net);
+  eq('R31 a timeout says the same thing - both mean "we could not reach it"',
+     describeAuthFailure('timeout', 'Apple'), net);
 
-  const to = describeAuthFailure('timeout', 'Google');
-  ok('R16 a timeout is also a connectivity message', /reach the iTala server/i.test(to), to);
-  ok('R17 an empty reason still says something useful', describeAuthFailure(null).length > 0);
+  // A throttling message is written by the server FOR a person and carries the
+  // remaining wait, so it is the one raw message that passes through.
+  const busy = describeAuthFailure('Too many attempts. Try again in 30 seconds.');
+  ok('R32 a lockout message reaches the person verbatim', /30 seconds/.test(busy), busy);
 
-  const off = describeAuthFailure('Provider is not enabled', 'Google');
-  ok('R18 a genuinely disabled provider IS named as one', /not enabled/i.test(off), off);
-  ok('R19 and names which provider', /Google/.test(off), off);
+  // The diagnosis is the opposite: it exists to be specific.
+  const diagNet = diagnoseAuthFailure('Network request failed', 'Google');
+  ok('R33 the log diagnosis keeps the raw reason', /Network request failed/.test(diagNet), diagNet);
+  ok('R34 and adds something to check', /VPN|captive portal|paused/i.test(diagNet), diagNet);
 
-  const aud = describeAuthFailure('Unacceptable audience in id_token', 'Apple');
-  ok('R20 a rejected id token explains the Expo Go bundle id', /Expo Go/.test(aud), aud);
+  const diagAud = diagnoseAuthFailure('Unacceptable audience in id_token', 'Apple');
+  ok('R35 the log diagnosis names the Expo Go bundle id', /host\.exp\.Exponent/.test(diagAud), diagAud);
 
-  const anon = describeAuthFailure('Anonymous sign-ins are disabled');
-  ok('R21 disabled guest access is named', /Guest access/i.test(anon), anon);
+  const diagPkce = diagnoseAuthFailure('invalid request: both auth code and code verifier should be non-empty');
+  ok('R36 the log diagnosis explains a missing PKCE verifier', /AsyncStorage/.test(diagPkce), diagPkce);
 
-  eq('R22 an unrecognised server message is passed through verbatim',
-     describeAuthFailure('Scorekeeper access required.'), 'Scorekeeper access required.');
+  ok('R37 the log diagnosis for a disabled provider names the dashboard page',
+     /Providers/.test(diagnoseAuthFailure('Provider is not enabled', 'Google')));
 }
 
 // --- a non-answer is never grounds for a destructive action ----------------
@@ -1132,15 +1177,15 @@ ok('P13 uid() emits no comma, which is what makes P12 unreachable',
 // identical to "signed out" and triggered a purge of the stored tokens plus a
 // brand new anonymous user, quietly reassigning everything the person owned.
 {
-  eq('R23 a timed-out probe must not touch stored tokens',
+  eq('R38 a timed-out probe must not touch stored tokens',
      sessionRecoveryPlan({ answered: false }), 'leave-alone');
-  eq('R24 a real session is used as-is',
+  eq('R39 a real session is used as-is',
      sessionRecoveryPlan({ answered: true, hasSession: true }), 'use-existing');
-  eq('R25 a real "no session" answer may purge and start a guest session',
+  eq('R40 a real "no session" answer may purge and start a guest session',
      sessionRecoveryPlan({ answered: true, hasSession: false }), 'purge-and-sign-in-anonymously');
 
   const destructive = ['purge-and-sign-in-anonymously'];
-  ok('R26 no unanswered probe reaches a destructive plan',
+  ok('R41 no unanswered probe reaches a destructive plan',
      !destructive.includes(sessionRecoveryPlan({ answered: false })));
 }
 

@@ -14,6 +14,7 @@ export * from '../src/lib/liveInput';
 export { gameCardOptions } from '../src/lib/cardSpecs';
 export { devLog, devWarn, warn as relWarn } from '../src/lib/log';
 export {
-  setScopedError, clearScopedError, errorForScope, describeAuthFailure, sessionRecoveryPlan,
+  setScopedError, clearScopedError, errorForScope, describeAuthFailure,
+  diagnoseAuthFailure, isNetworkFailure, sessionRecoveryPlan,
 } from '../src/store/authErrors';
 export { uid } from '../src/lib/format';
