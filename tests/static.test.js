@@ -8,6 +8,8 @@ const ok = (n, c, d) => c ? pass++ : (fail++, problems.push(`${n}${d ? ' :: ' + 
 const soft = (n, c, d) => c ? pass++ : (warn++, warnings.push(`${n}${d ? ' :: ' + d : ''}`));
 
 const read = f => fs.readFileSync(path.join(ROOT, f), 'utf8');
+// Repo-relative existence check, used by the doc-link check (CHECK 22).
+const exists = f => fs.existsSync(path.join(ROOT, f));
 function walk(dir, out = []) {
   for (const e of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
     const rel = `${dir}/${e.name}`;
@@ -189,7 +191,7 @@ ok('app.json declares no RECORD_AUDIO permission',
   ok('expo-image-picker blocks the camera permission', picker?.[1]?.cameraPermission === false,
      'the app never calls launchCameraAsync');
 }
-ok('DEPLOYMENT.md keeps the zip-apply commands', read('DEPLOYMENT.md').includes('Expand-Archive'));
+ok('docs/DEPLOYMENT.md keeps the zip-apply commands', read('docs/DEPLOYMENT.md').includes('Expand-Archive'));
 
 // ---------------------------------------------------------------------------
 // CHECK 9 — the sync primitives stay wired into dispatch.
@@ -305,7 +307,7 @@ ok('DEPLOYMENT.md keeps the zip-apply commands', read('DEPLOYMENT.md').includes(
 // repo. Neither is recoverable once committed, so this check is the guard.
 {
   const files = ['supabase/schema.sql', 'src/store/AdminProvider.tsx', 'README.md',
-                 'DEPLOYMENT.md', 'AUTH_SETUP.md', 'app.json', '.env.example'];
+                 'docs/DEPLOYMENT.md', 'docs/AUTH_SETUP.md', 'app.json', '.env.example'];
   // Matches an assignment/seed of a quoted literal to something password-shaped.
   const seeds = /(password|passcode|secret)\w*\s*(=|:|,)\s*'[^']{6,}'/i;
   for (const f of files) {
@@ -382,7 +384,7 @@ for (const f of srcFiles) {
 // CHECK 15 - the privacy policy must keep covering what the store declarations
 // depend on. Three things describe the same behaviour and must not disagree:
 // what the code does, the policy in site/privacy/, and the Apple/Google tables
-// in DEPLOYMENT.md. The policy is the one nobody re-reads, so deleting a
+// in docs/DEPLOYMENT.md. The policy is the one nobody re-reads, so deleting a
 // section from it fails the build instead of going unnoticed until a store
 // review or a removal request.
 //
@@ -391,10 +393,10 @@ for (const f of srcFiles) {
 // ---------------------------------------------------------------------------
 {
   const policyPath = 'site/privacy/index.html';
-  const exists = fs.existsSync(path.join(ROOT, policyPath));
-  ok('a privacy policy exists in the repo', exists,
+  const policyExists = exists(policyPath);
+  ok('a privacy policy exists in the repo', policyExists,
      'both stores require a reachable policy URL, and it has to live somewhere version-controlled');
-  if (exists) {
+  if (policyExists) {
     const policy = read(policyPath);
     for (const [label, needle] of [
       // The single most consequential disclosure: the read_all_* RLS policies are
@@ -431,15 +433,15 @@ for (const f of srcFiles) {
        'section 13 must offer a way to actually reach the operator');
   }
 
-  // The declarations in DEPLOYMENT.md are the other half of the same pair.
-  const deploy = read('DEPLOYMENT.md');
-  ok('DEPLOYMENT.md declares the promo tap counter as Usage Data',
+  // The declarations in docs/DEPLOYMENT.md are the other half of the same pair.
+  const deploy = read('docs/DEPLOYMENT.md');
+  ok('docs/DEPLOYMENT.md declares the promo tap counter as Usage Data',
      /Usage Data → Advertising Data/.test(deploy) && /bump_promo_tap/.test(deploy),
      'server-side promo taps are collected and have to appear on both store forms');
-  ok('DEPLOYMENT.md tells you not to declare Location',
+  ok('docs/DEPLOYMENT.md tells you not to declare Location',
      /Do not declare Location/.test(deploy),
      'the venue field is user-typed text, and declaring device location would be false');
-  ok('DEPLOYMENT.md still refuses "Data Not Collected"',
+  ok('docs/DEPLOYMENT.md still refuses "Data Not Collected"',
      /does collect data/.test(deploy));
 }
 
@@ -623,6 +625,62 @@ for (const f of srcFiles) {
   ok('log.ts still has an always-on warn for real failures',
      /export function warn\(/.test(log),
      'CLAUDE.md forbids swallowing errors; release diagnostics must survive');
+}
+
+// ---------------------------------------------------------------------------
+// CHECK 22 — every referenced doc path resolves to a file that exists.
+//
+// The four guides moved from the repo root into docs/, and roughly thirty
+// places referred to them: prose in other docs, `read('DEPLOYMENT.md')` in this
+// very file, a comment in the CI workflow. A move that misses one leaves a
+// reference pointing at nothing, and a wrong path in a doc is worse than no
+// path - it reads as authoritative. Nothing would have caught it, so:
+// ---------------------------------------------------------------------------
+{
+  // Files worth scanning. Docs and the things that read them; not source, where
+  // a "*.md" string is far more likely to be an example than a link.
+  const docish = [
+    'README.md', 'CLAUDE.md',
+    'docs/README.md', 'docs/AUTH_SETUP.md', 'docs/CODE_REVIEW.md',
+    'docs/DEPLOYMENT.md', 'docs/TROUBLESHOOTING.md',
+    'tests/README.md', 'tests/MANUAL-REGRESSION.md',
+    'tests/static.test.js', 'tests/reducer.test.js', 'tests/sync.test.js',
+    '.github/workflows/ci.yml', 'site/README.md',
+  ];
+  // A repo-relative path ending in .md, as a markdown link, in backticks, or
+  // bare in prose. Deliberately not matching bare filenames with no directory
+  // when they sit next to the file doing the referencing - those are resolved
+  // relative to that file below.
+  const mdRef = /(?:\]\(|`|\s|^)((?:[\w.-]+\/)*[A-Z][\w.-]*\.md)(?=[`)\s,.:;]|$)/gm;
+
+  const seen = new Set();
+  for (const f of docish) {
+    if (!exists(f)) continue;
+    const dir = f.includes('/') ? f.slice(0, f.lastIndexOf('/')) : '';
+    // Fenced blocks are illustrations - the architecture tree in README.md draws
+    // file names indented under their directory, which is right as a diagram and
+    // meaningless as a path. Inline backticks still count: those are references.
+    const body = f.endsWith('.md') ? read(f).replace(/^```[\s\S]*?^```/gm, '') : read(f);
+    for (const m of body.matchAll(mdRef)) {
+      const ref = m[1];
+      // Resolve as repo-relative first, then relative to the referring file.
+      const asRepo = ref;
+      const asLocal = dir ? `${dir}/${ref}` : ref;
+      const found = exists(asRepo) || exists(asLocal);
+      const key = `${f}|${ref}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ok(`${f} references a real doc: ${ref}`, found,
+         'neither ' + asRepo + ' nor ' + asLocal + ' exists');
+    }
+  }
+
+  // The four guides must be in docs/, not back at the root. A file re-created at
+  // the old path would leave two copies and no signal about which is current.
+  for (const name of ['AUTH_SETUP', 'CODE_REVIEW', 'DEPLOYMENT', 'TROUBLESHOOTING']) {
+    ok(`${name}.md lives in docs/`, exists(`docs/${name}.md`) && !exists(`${name}.md`),
+       'the guides moved to docs/; only README.md and CLAUDE.md belong at the root');
+  }
 }
 
 console.log('='.repeat(64));

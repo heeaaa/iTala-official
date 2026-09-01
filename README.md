@@ -44,7 +44,7 @@ the device.
 realtime connections, 2 million realtime messages/month, 50K monthly active users, 5 GB
 bandwidth. Two live games with a handful of watchers each is comfortably within all of these.
 One catch: free projects auto-pause after **7 consecutive idle days**; the included GitHub
-Action pings the database every 3 days to keep it awake (see DEPLOYMENT.md).
+Action pings the database every 3 days to keep it awake (see docs/DEPLOYMENT.md).
 
 ### One-time setup
 
@@ -149,6 +149,20 @@ combined REB is logged for now) and **turnovers** (TOV). Also deferred per the s
 cloud sync & invites (Supabase), the social feed with reactions/comments, shot charts, video
 highlights, push notifications, round-robin schedule generator.
 
+## Documentation
+
+| Doc | Read it when |
+| --- | --- |
+| [docs/AUTH_SETUP.md](docs/AUTH_SETUP.md) | Setting up Google / Apple / anonymous sign-in. **First stop when sign-in "doesn't work" in Expo Go.** |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Shipping: EAS Build and Submit, store listings, data-safety declarations. |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Expo Go won't connect, sign-in fails, the score looks wrong. |
+| [docs/CODE_REVIEW.md](docs/CODE_REVIEW.md) | The audit and remediation tracker: every finding, its status, and the evidence. |
+| [tests/README.md](tests/README.md) | What each suite covers, and how to run the database checks. |
+| [tests/MANUAL-REGRESSION.md](tests/MANUAL-REGRESSION.md) | The checklist for what automation cannot reach. |
+
+Only `README.md` and `CLAUDE.md` live at the repo root - see
+[docs/README.md](docs/README.md) for why the rest do not.
+
 ## Testing
 
 ```bash
@@ -204,13 +218,18 @@ src/
     storage.ts           AsyncStorage load/save (offline cache) + device-local prefs
     StoreProvider.tsx    Context + reducer + autosave + Supabase sync wrapper
     AdminProvider.tsx    Auth gate (Supabase Auth in synced mode, local fallback otherwise)
+    authErrors.ts        Which flow an auth failure belongs to, what it should say,
+                         and why a timed-out session probe is never "signed out"
   sync/
     supabase.ts          Supabase client + SYNC_ENABLED flag (env-var driven)
     sync.ts              Pull initial state, push action → row, realtime subscription
     pushQueue.ts         Serialises pushes so a burst of taps cannot reorder on the server
+    pendingEvents.ts     Local event writes the server has not confirmed yet, plus the
+                         canonical (ts, id) event order both sides agree on
   components/
     ui.tsx               Screen, Txt, Button, Card, Pill, Field, Segmented, Empty, Toggle
     AchievementCard.tsx  The shareable card renderer (CardSpec → image)
+    PlayLog.tsx          One play-by-play row, shared by the live sheet and the box score
   screens/                   (19 screens, all registered in App.tsx)
     LeaguesScreen.tsx        Home: league list + resume-live banner + lock icon
     SettingsScreen.tsx       Account, haptics, notification and sync status, delete account
@@ -238,7 +257,13 @@ tests/
   MANUAL-REGRESSION.md   What automation cannot reach (gestures, native modules, devices)
   sql/                   schema.sql exercised against a real Postgres
 site/
-  privacy/index.html     Privacy policy (deployed to Cloudflare Pages; both stores require it)
+  privacy/index.html     Privacy policy (both stores require a reachable URL)
+wrangler.jsonc           Cloudflare Workers config - publishes site/ as static assets
+docs/
+  AUTH_SETUP.md          Google / Apple / anonymous sign-in, and the redirect allowlist
+  DEPLOYMENT.md          EAS Build + Submit, store listings, data-safety declarations
+  TROUBLESHOOTING.md     Expo Go won't connect, sign-in fails, the score looks wrong
+  CODE_REVIEW.md         Audit + remediation tracker
 .github/workflows/
   ci.yml                 Types, reducer, sync, static and SQL suites + a Metro/Hermes bundle
   supabase-keepalive.yml Pings Supabase every 3 days to prevent the 7-day auto-pause
@@ -259,7 +284,25 @@ changes from other devices back into the local reducer via HYDRATE. This means a
 device works offline, a flaky-Wi-Fi gym still keeps stats locally, and devices reconverge
 on the next successful sync.
 
+**...and the part that makes that safe on a live scoreboard.** HYDRATE replaces the whole
+event list with the server's, which is fine for data nobody is editing and wrong for the one
+screen where someone is typing into the state faster than the network can carry it. Realtime
+fires a refetch on every write, so a snapshot *read before* a tap's INSERT landed routinely
+*arrives after* it - and the basket disappears, then comes back once the INSERT lands, by
+which time the scorekeeper has re-tapped and the score jumps.
+
+`src/sync/pendingEvents.ts` is the answer: a ledger of local event writes keyed by event id,
+retired by **ordering** rather than by a timeout. Every fetch records the tick it started at,
+and an entry is retired only once the server confirmed it *before* that tick - so a snapshot
+can never contradict a write it could not have seen. A write whose push failed is pinned and
+the sync badge stays red, because silently reverting someone's stat minutes later is worse
+than showing them an error.
+
+Both sides also order events by `(ts, id)`, not `ts` alone. Two taps inside one millisecond
+tie, and "the last event of this game" is the entire definition of Undo - without a total
+order the device and the server can disagree about which row that is.
+
 ## Deploying to the App Store / Play Store
 
-See **DEPLOYMENT.md** for the full step-by-step guide (Apple Developer + Google Play setup,
+See **docs/DEPLOYMENT.md** for the full step-by-step guide (Apple Developer + Google Play setup,
 EAS Build, EAS Submit, store listing, and review notes).

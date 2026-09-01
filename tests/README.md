@@ -66,7 +66,7 @@ Two rules are set deliberately, both explained inline in the config:
   HTML parsing; RN's `<Text>` renders string children literally, so escaping
   would render a literal `&apos;` to the user.
 - `react-hooks/exhaustive-deps` is a **warning**, not an error. Its only two hits
-  are CODE_REVIEW.md F-14, and changing a dependency array changes when a memo
+  are docs/CODE_REVIEW.md F-14, and changing a dependency array changes when a memo
   recomputes - a behaviour change that needs its own tests. It stays visible on
   every run until F-14 lands.
 
@@ -131,6 +131,17 @@ does not usually reach:
   a safe gate, because `armed` is captured in the tap handler's closure and two
   taps before the re-render commits both see it set. `reconcileLineup` decides
   what a lineup picker does when the court changes underneath it.
+- **GROUP R** - auth failure handling, against the pure helpers in
+  `src/store/authErrors.ts`. Three rules that used to live inside AdminProvider,
+  where the only way to check them was to read the component - and all three
+  were wrong. (1) An error belongs to the flow that produced it: one shared
+  `lastError` string meant a failed Apple sign-in was still on screen inside the
+  "Admin access" modal opened afterwards. (2) A message must name the right
+  layer: a `TypeError: Network request failed` was reported as "is the provider
+  enabled in Supabase", which sends someone to check a correct setting.
+  (3) A timed-out session probe is **not** "signed out": treating it as one
+  purged the stored tokens and minted a new anonymous user, quietly signing
+  people out and reassigning their drop-in games.
 - **GROUP Q** - the composite-rating award selection (the "best all-around game"
   used to be the best *scoring* game), the zero-stat award gates, and the
   `__DEV__` behaviour of `src/lib/log.ts` across absent, false and true.
@@ -174,7 +185,7 @@ converge on an ordinary sequence of stats and undos.
 - `app.json` still has the EAS `projectId`, does **not** declare `RECORD_AUDIO`
   (nothing records audio, and an unused Android permission cannot be honestly
   declared on Google Play's Data safety form), and
-  `DEPLOYMENT.md` still has the zip-apply commands
+  `docs/DEPLOYMENT.md` still has the zip-apply commands
 - the sync primitives stay wired into `dispatch` - pushes go through
   `enqueuePush`, undo resolves its target id and tombstones it, `HYDRATE` drops
   tombstoned events, and the undo delete asks for the deleted rows back. The sync
@@ -202,6 +213,35 @@ Warnings are reported separately from failures. The positional-lookup warnings
 in `sync.ts` are known and currently safe, because `pushAction` receives the
 post-dispatch state for that one action, so "the last row" is that action's own
 row. They are flagged because the pattern is fragile, not because it is broken.
+
+### The sync suite's later groups (S9-S17)
+
+`sync.test.js` drives the real reducer and the real sync layer against a
+PostgREST emulator that models **per-operation latency** and **RLS as a silent
+filter**. Those two are what make it able to reproduce ordering bugs that only
+appear on a real network:
+
+- **S9-S10** - a snapshot *read before* a tap's INSERT landed, applied *after*
+  it. This is the reported "+3, then it reverted, then the next tap added +6":
+  HYDRATE replaced the whole event list, so the basket vanished and came back
+  once the INSERT landed. Held by the ledger in `src/sync/pendingEvents.ts`.
+- **S11-S12** - "the last event of this game" must mean the same row on the
+  device and on the server, which it does not if events are ordered by `ts`
+  alone. S12 shuffles the server's storage order to prove the client does not
+  depend on it.
+- **S13** - a push that fails must pin the local value, not silently revert it
+  minutes later. The emulator can throw the `TypeError` React Native's fetch
+  throws when it cannot reach the host, which is the state the original bug
+  report's logs were taken in.
+- **S14** - three baskets, two fast undos, two fast redos, with latencies set so
+  the pushes interleave.
+- **S15** - the ledger retires confirmed writes rather than growing forever.
+- **S16-S17** - an all-or-nothing bundle (`rec_setup_game`,
+  `bulk_import_roster`) that fails must not survive locally, and rolling it back
+  must not take an existing space or its earlier games with it.
+
+Each of these was verified by reverting the fix alone and confirming the
+assertions fail - a test that passes against the broken code proves nothing.
 
 ## Database checks (`tests/sql/`)
 
@@ -233,6 +273,26 @@ name of an input parameter that way.
 PGHOST=127.0.0.1 PGUSER=postgres node tests/sql/run.js               # all wired suites
 PGHOST=127.0.0.1 PGUSER=postgres node tests/sql/run.js admin_secret  # just one
 ```
+
+### Getting a Postgres to point at, without installing one
+
+The suites skip silently with no server, which is easy to leave in place forever.
+A portable build is enough and needs no installer or admin rights:
+
+```bash
+curl -sL -o pg.zip https://get.enterprisedb.com/postgresql/postgresql-16.4-1-windows-x64-binaries.zip
+# extract pgsql/bin, pgsql/lib and pgsql/share  (~1650 files; the full zip has 22k)
+pgsql/bin/initdb -D pgdata -U postgres -A trust -E UTF8 --locale=C
+pgsql/bin/pg_ctl -D pgdata -l pglog.txt -o "-p 55432 -c listen_addresses=127.0.0.1" start
+```
+
+Then `PGHOST=127.0.0.1 PGPORT=55432 PGUSER=postgres ITALA_REQUIRE_DB=1 node tests/sql/run.js`.
+
+**On Windows, run that from PowerShell, not Git Bash.** Git Bash mangles a
+Windows path prepended to `PATH` - the drive colon collides with the `:`
+separator - so `spawnSync('psql')` in `run.js` gets `ENOENT` and the runner
+reports "psql not on PATH" while the binary is sitting right there. In
+PowerShell, `$env:PATH = "$dir\pgsql\bin;" + $env:PATH` works first time.
 
 `admin_secret.test.sql` covers the admin password path: the secret is stored as a
 bcrypt hash and never seeded by the schema, an unset password refuses everything

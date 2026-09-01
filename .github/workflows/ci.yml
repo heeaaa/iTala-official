@@ -49,7 +49,7 @@ jobs:
       #
       # `npm run format:check` is intentionally NOT run yet: Prettier would
       # reformat all 54 files in the repo, so the gate is added only once that
-      # mechanical reformat lands on its own. See CODE_REVIEW.md F-09.
+      # mechanical reformat lands on its own. See docs/CODE_REVIEW.md F-09.
       - name: Run ESLint
         run: npm run lint
 
