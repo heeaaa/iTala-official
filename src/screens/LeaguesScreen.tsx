@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
-import { View, FlatList, Pressable, Alert, TextInput, ScrollView, Dimensions, RefreshControl, ActivityIndicator } from 'react-native';
+import { View, FlatList, Pressable, Alert, TextInput, ScrollView, useWindowDimensions, RefreshControl, ActivityIndicator } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Screen, Txt, Card, Button, Pill, Empty, Wordmark, PasswordModal, LivePip,
   ProfileButton, ProfileSheet, InviteCodeModal, SyncBadge, OnboardingSheet, PromoCard,
@@ -9,8 +10,6 @@ import { useStore } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
 import { colors, space, font, radius } from '../theme';
 import { ScreenProps } from '../navigation';
-
-const SCREEN_W = Dimensions.get('window').width;
 
 // Tap the wordmark this many times (with <1.5s between taps) to reveal the
 // hidden password lock — the emergency admin backup when Google sign-in or
@@ -36,6 +35,25 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
   // Measured height of the bottom action bar, so the list can reserve exactly
   // that much room instead of a hard-coded guess. See the bar's own comment.
   const [barHeight, setBarHeight] = useState(0);
+
+  // Live-card width from the CURRENT window, not from the width at launch.
+  //
+  // This was `const SCREEN_W = Dimensions.get('window').width` at module scope,
+  // read once when the bundle loaded and never again. `app.json` sets
+  // `supportsTablet: true`, and an iPad window is resized at runtime by Split
+  // View, Slide Over and Stage Manager - so the cards kept the width the app
+  // launched at and stopped matching the container they sit in. `orientation:
+  // "portrait"` does not save it either: that constrains rotation, not the
+  // multitasking window. useWindowDimensions re-renders on every resize.
+  const { width: windowW } = useWindowDimensions();
+
+  // The bar sits at the very bottom edge, so it owes the home indicator its
+  // room. `Screen` takes only the TOP safe-area edge (the nav header covers the
+  // notch elsewhere), which left the fixed space(6) = 24pt to stand in for a
+  // 34pt indicator inset. The floor keeps the old spacing on devices that
+  // report no inset at all.
+  const insets = useSafeAreaInsets();
+  const barBottomPad = Math.max(insets.bottom + space(3), space(6));
 
   // Hidden-gesture counter (10 quick taps on the iTala wordmark).
   const tapCount = useRef(0);
@@ -243,7 +261,7 @@ Share this with the organizer. It can create exactly one league, then expires.`)
               key={ref.gameId}
               onPress={() => navigation.navigate('LiveGame', { leagueId: ref.leagueId, gameId: ref.gameId, spectator: !canScoreGame(ref.league, ref.game) })}
               style={{
-                width: liveRefs.length === 1 ? SCREEN_W - space(4) * 2 : SCREEN_W * 0.78,
+                width: liveRefs.length === 1 ? windowW - space(4) * 2 : windowW * 0.78,
                 backgroundColor: colors.surface, borderRadius: 14, padding: 14,
                 borderWidth: 1, borderColor: colors.brandTeal,
                 flexDirection: 'row', alignItems: 'center', gap: 12,
@@ -413,7 +431,7 @@ Share this with the organizer. It can create exactly one league, then expires.`)
           }}
           style={{
             position: 'absolute', left: 0, right: 0, bottom: 0,
-            paddingHorizontal: space(4), paddingTop: space(3), paddingBottom: space(6),
+            paddingHorizontal: space(4), paddingTop: space(3), paddingBottom: barBottomPad,
             flexDirection: 'row', gap: 10,
             backgroundColor: colors.bg, borderTopWidth: 1, borderTopColor: colors.line,
           }}>
