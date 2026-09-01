@@ -1,0 +1,28 @@
+// Cloudflare Workers configuration for the iTala public pages.
+//
+// WHY THIS FILE EXISTS
+//
+// The Worker's build settings lived only in the Cloudflare dashboard, and the
+// deploy command there (`npx wrangler versions upload`) has no way to know what
+// to upload without a config file in the repo. Every branch build therefore
+// failed before it started:
+//
+//   ✘ [ERROR] Missing entry-point to Worker script or to assets directory
+//
+// There is no Worker script to point at - these are four static files (the
+// landing page and the privacy policy the app stores link to), so this is an
+// assets-only Worker: `assets.directory` and no `main`.
+//
+// Keeping it in the repo also means the deployment is reviewable and
+// reproducible, instead of being a dashboard setting nobody can see in a diff.
+{
+  "name": "itala",
+  "compatibility_date": "2026-08-28",
+  "assets": {
+    "directory": "./site",
+    // The site is a handful of hand-written pages with no client-side router,
+    // so an unknown path is a genuine 404 and should say so rather than serving
+    // the landing page with a 200. `site/_headers` still applies.
+    "not_found_handling": "404-page"
+  }
+}

@@ -1,0 +1,4 @@
+# Files under site/ that are repo documentation, not part of the published site.
+# Without this they are served verbatim - site/README.md would be readable at
+# https://<domain>/README.md, which is not what it was written for.
+README.md
