@@ -23,6 +23,16 @@
 const isDev = (): boolean => typeof __DEV__ !== 'undefined' && __DEV__ === true;
 
 /**
+ * Is this a development build?
+ *
+ * Exported so a SCREEN can make the same call this module makes: show the
+ * server's own words to a developer, and never to a scorekeeper. Anything gated
+ * on this must be a detail nobody needs to act on - the user-facing sentence has
+ * to stand on its own without it.
+ */
+export const isDevBuild = isDev;
+
+/**
  * Development-only diagnostics: setup hints, redirect URLs, flow tracing.
  * Anything whose audience is a developer at a keyboard, not a user's device log.
  */

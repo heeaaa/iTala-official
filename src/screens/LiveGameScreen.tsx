@@ -64,7 +64,7 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   // `syncState` and `lastSyncError` only. Still no `state` here: this screen
   // derives everything from `league` and `game` so nothing re-runs because an
   // unrelated league changed (F-14).
-  const { dispatch, syncState, lastSyncError } = useStore();
+  const { dispatch, syncState, lastSyncError, lastSyncErrorDetail } = useStore();
   const { canScoreGame } = useAdmin();
   const league = useLeague(leagueId);
   const game = league?.games.find(g => g.id === gameId);
@@ -573,22 +573,25 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
             has to be visible while there is still time to act on it. */}
         {!readOnly && syncState === 'error' && (
           <Pressable
-            onPress={() => Alert.alert('Not saved to the server', lastSyncError
-              ? `${lastSyncError}\n\nThe stats you have logged are safe on this device and still counting, but they are not reaching the server. Closing the app loses anything unsaved.`
-              : 'The stats you have logged are safe on this device and still counting, but they are not reaching the server. Closing the app loses anything unsaved.')}
+            onPress={() => Alert.alert(
+              'Stats are not saving',
+              `${lastSyncError ?? 'The app could not save to the server.'}\n\n`
+              + 'Everything you have logged is safe on this device and still counting. '
+              + 'Keep the app open until the warning clears — closing it now loses anything unsaved.'
+              // Dev builds only. A scorekeeper cannot act on a policy name, and
+              // it is not ours to put in front of them; it is exactly what a
+              // developer needs, so it lives behind this and nothing else.
+              + (lastSyncErrorDetail ? `\n\nTechnical detail (development build):\n${lastSyncErrorDetail}` : ''),
+            )}
             accessibilityRole="alert"
-            accessibilityLabel={`Not saved to the server. ${lastSyncError ?? ''} Stats are on this device only. Do not close the app.`}
+            accessibilityLabel={`Stats are not saving. ${lastSyncError ?? ''} They are safe on this device. Keep the app open. Activate for more.`}
             style={{ marginTop: space(2), borderRadius: radius.md, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: 'rgba(255,77,79,0.15)', borderWidth: 1, borderColor: colors.red }}>
             <Txt k="body" color={colors.red} style={{ fontFamily: font.bodyBold, fontSize: 13 }}>
-              ⚠  Not saved to the server — tap for detail
+              ⚠  Stats are not saving — tap to find out more
             </Txt>
-            {lastSyncError ? (
-              <Txt k="body" color={colors.red} numberOfLines={2} style={{ fontSize: 11, marginTop: 2 }}>
-                {lastSyncError}
-              </Txt>
-            ) : null}
-            <Txt k="body" color={colors.red} style={{ fontSize: 12, marginTop: 2 }}>
-              Stats are safe on this device and still counting. Keep the app open.
+            <Txt k="body" color={colors.red} numberOfLines={3} style={{ fontSize: 12, marginTop: 2 }}>
+              {lastSyncError ?? 'The app could not save to the server.'} Your stats are safe on
+              this device and still counting — keep the app open.
             </Txt>
           </Pressable>
         )}

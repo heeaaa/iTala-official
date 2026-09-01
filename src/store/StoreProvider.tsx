@@ -14,7 +14,7 @@ import {
   insertEvent, lastEventOf, recordPending, reconcileLeagueEvents,
   reconcileLeagueGames, sortEvents, __resetPending,
 } from '../sync/pendingEvents';
-import { trace, warn } from '../lib/log';
+import { isDevBuild, trace, warn } from '../lib/log';
 import { isNetworkFailure } from './authErrors';
 
 /**
@@ -55,7 +55,18 @@ async function waitForSession(sb: NonNullable<ReturnType<typeof getSupabase>>, m
   });
 }
 
-/** A sync failure, said in a way that points at the right thing to check. */
+/**
+ * A sync failure, said to the PERSON.
+ *
+ * Never the server's own words. This used to fall through to `return msg`, so an
+ * unrecognised failure put raw PostgREST text in front of a scorekeeper - things
+ * like `new row violates row-level security policy for table "events"`. That
+ * names internal tables, tells nobody what to do, and is alarming courtside. The
+ * fallback is now a sentence a human can act on, and the server's wording goes
+ * where it belongs: the log, and `technicalSyncDetail` in dev builds.
+ *
+ * Every branch here has to say what to DO, not just what went wrong.
+ */
 function describeSyncFailure(e: unknown): string {
   const msg = (e as Error)?.message ?? String(e ?? '');
   if (isNetworkFailure(msg)) {
@@ -67,7 +78,22 @@ function describeSyncFailure(e: unknown): string {
   if (/scorekeeper access required/i.test(msg)) {
     return "You don't have scoring rights in that space.";
   }
-  return msg;
+  if (/row-level security|permission denied|not authori[sz]ed|jwt|401|403/i.test(msg)) {
+    return 'The server would not accept the change. Your scoring rights may have changed — '
+      + 'try signing out and back in, or ask a league owner to add you again.';
+  }
+  return 'The server would not accept the change. Nothing has been lost on this device.';
+}
+
+/**
+ * The same failure for a DEVELOPER: the server's own words, dev builds only.
+ *
+ * null in a release build, and every caller must render fine without it.
+ */
+function technicalSyncDetail(e: unknown): string | null {
+  if (!isDevBuild()) return null;
+  const msg = (e as Error)?.message ?? String(e ?? '');
+  return msg || null;
 }
 
 // Lineups, substitutions, the period and the game status are no longer guarded
@@ -772,6 +798,9 @@ interface Ctx {
    * because the person who needs it is standing courtside with no console.
    */
   lastSyncError: string | null;
+  /** The same failure in the server's own words, for a developer. null in a
+   *  release build, so nothing user-facing may depend on it. */
+  lastSyncErrorDetail: string | null;
   refresh: () => Promise<void>;
   /** Device-local favorites (leagues/teams pinned to the top of lists). */
   prefs: LocalPrefs;
@@ -793,6 +822,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [initialSyncDone, setInitialSyncDone] = React.useState(!SYNC_ENABLED);
   const [syncState, setSyncState] = React.useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [lastSyncError, setLastSyncError] = React.useState<string | null>(null);
+  const [lastSyncErrorDetail, setLastSyncErrorDetail] = React.useState<string | null>(null);
   const savedTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const first = useRef(true);
   const stateRef = useRef(state);
@@ -1089,6 +1119,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             confirmPending(pushTokens);
             trace('PERSIST', `ok t=${action.t} tokens=${pushTokens.join(',') || 'none'}`);
             setLastSyncError(null);
+            setLastSyncErrorDetail(null);
             setSyncState('saved');
             if (savedTimer.current) clearTimeout(savedTimer.current);
             savedTimer.current = setTimeout(() => setSyncState('idle'), 2000);
@@ -1098,12 +1129,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             // badge stays red, rather than the board quietly reverting later.
             failPending(pushTokens);
             trace('PERSIST', `FAILED t=${action.t} tokens=${pushTokens.join(',') || 'none'}`);
-            // Keep the reason, not just the fact. `${action.t}` is included
-            // because "which write failed" is half the diagnosis: an ADD_EVENT
-            // that the server refuses and a game-row upsert that the server
-            // refuses look identical from a red badge, and only one of them
-            // loses the stat.
-            setLastSyncError(`${action.t}: ${describeSyncFailure(e)}`);
+            // The reason, in two registers. The person gets a sentence they
+            // can act on; the server's own words are dev-only, because they name
+            // internal tables and mean nothing courtside. Which ACTION failed is
+            // real diagnostic value, so it goes in the technical half - not into
+            // the line a scorekeeper reads.
+            setLastSyncError(describeSyncFailure(e));
+            const detail = technicalSyncDetail(e);
+            setLastSyncErrorDetail(detail ? `${action.t}: ${detail}` : null);
             setSyncState('error');
 
             // Setting up a drop-in game or importing a roster is all-or-nothing
@@ -1178,7 +1211,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     saveState(state);
   }, [state, ready]);
 
-  return <StoreCtx.Provider value={{ state, dispatch, ready, synced: SYNC_ENABLED, refresh, prefs, toggleFavLeague, toggleFavTeam, setHaptics, setNotifs, syncState, lastSyncError, prefsReady, initialSyncDone, dismissOnboarding }}>{children}</StoreCtx.Provider>;
+  return <StoreCtx.Provider value={{ state, dispatch, ready, synced: SYNC_ENABLED, refresh, prefs, toggleFavLeague, toggleFavTeam, setHaptics, setNotifs, syncState, lastSyncError, lastSyncErrorDetail, prefsReady, initialSyncDone, dismissOnboarding }}>{children}</StoreCtx.Provider>;
 }
 
 export function useStore(): Ctx {
