@@ -426,16 +426,44 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
     ]);
   };
 
+  const doFinish = () => {
+    successFeedback();
+    leavingRef.current = true; // this navigation is intentional
+    dispatch({ t: 'SET_GAME_STATUS', leagueId, gameId, status: 'final' });
+    // Land on the celebratory FINAL screen; it leads to the box score.
+    navigation.replace('FinalScore', { leagueId, gameId });
+  };
+
   const finish = () => {
+    // Basketball has no draws: a level score at the end of regulation goes to
+    // overtime, which here means adding a period. Finishing level leaves a game
+    // with no result - it counts towards neither team's W-L and towards neither
+    // streak - so say so and offer the period instead of quietly recording it.
+    //
+    // Offered, not enforced. A game really can end level in a social setting,
+    // and refusing outright would trap a scorekeeper with no way to close it.
+    if (score.home === score.away) {
+      const canAddPeriod = period < MAX_PERIOD;
+      Alert.alert(
+        'Scores are level',
+        `${homeTeam.name} ${score.home} — ${score.away} ${awayTeam.name}.\n\n`
+        + 'Basketball goes to overtime rather than ending level. '
+        + (canAddPeriod
+            ? `Add period ${period + 1} to play it out, or finish now — a level game counts towards neither team's record.`
+            : `This is the last period the tracker allows, so finishing now records a game that counts towards neither team's record.`),
+        [
+          { text: 'Cancel', style: 'cancel' },
+          ...(canAddPeriod
+            ? [{ text: `Add period ${period + 1}`, onPress: () => setPeriod(period + 1) }]
+            : []),
+          { text: 'Finish level', style: 'destructive' as const, onPress: doFinish },
+        ],
+      );
+      return;
+    }
     Alert.alert('Finish game?', 'This locks the final score and updates standings. You can still edit the box score after.', [
       { text: 'Keep playing', style: 'cancel' },
-      { text: 'Finish', style: 'destructive', onPress: () => {
-        successFeedback();
-        leavingRef.current = true; // this navigation is intentional
-        dispatch({ t: 'SET_GAME_STATUS', leagueId, gameId, status: 'final' });
-        // Land on the celebratory FINAL screen; it leads to the box score.
-        navigation.replace('FinalScore', { leagueId, gameId });
-      } },
+      { text: 'Finish', style: 'destructive', onPress: doFinish },
     ]);
   };
 

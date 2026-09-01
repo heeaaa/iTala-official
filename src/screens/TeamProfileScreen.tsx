@@ -16,17 +16,20 @@ export default function TeamProfileScreen({ route, navigation }: ScreenProps<'Te
   if (!league || !team) return <Screen><Txt k="body">Team not found.</Txt></Screen>;
 
   const row = standings(league).find(r => r.team.id === teamId);
-  // Ties count towards games played. Leaving them out while pf/pa still include
-  // the tied game's points inflated PPG and OPP PPG by dividing by too few games.
-  const gp = (row?.wins ?? 0) + (row?.losses ?? 0) + (row?.ties ?? 0);
-  const ppg = gp ? (row!.pf / gp) : 0;
-  const oppg = gp ? (row!.pa / gp) : 0;
 
-  // Last 5 finals involving this team, newest first
-  const last5 = league.games
+  // Every final this team played, newest first.
+  const finals = league.games
     .filter(g => g.status === 'final' && (g.homeTeamId === teamId || g.awayTeamId === teamId))
-    .sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0))
-    .slice(0, 5);
+    .sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0));
+  const last5 = finals.slice(0, 5);
+
+  // Games played is counted off the games themselves, not off the record.
+  // W + L is not the same number: a level final has no result and so appears in
+  // neither column, while its points still count towards pf/pa - deriving gp
+  // from the record would divide those points by too few games and inflate PPG.
+  const gp = finals.length;
+  const ppg = gp && row ? (row.pf / gp) : 0;
+  const oppg = gp && row ? (row.pa / gp) : 0;
 
   const roster = team.playerIds
     .map(pid => league.players.find(p => p.id === pid))
@@ -50,8 +53,8 @@ export default function TeamProfileScreen({ route, navigation }: ScreenProps<'Te
       <Card style={{ marginBottom: space(3) }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-around' }}>
           {([
-            ['RECORD', gp ? `${row!.wins}-${row!.losses}-${row!.ties}` : '—'],
-            ['WIN %', gp ? winPctOf(row!.wins, row!.losses, row!.ties).toFixed(3).replace(/^0/, '') : '—'],
+            ['RECORD', gp && row ? `${row.wins}-${row.losses}` : '—'],
+            ['WIN %', gp && row ? winPctOf(row.wins, row.losses).toFixed(3).replace(/^0/, '') : '—'],
             ['PPG', gp ? ppg.toFixed(1) : '—'],
             ['OPP PPG', gp ? oppg.toFixed(1) : '—'],
             ['STREAK', row?.streak ?? '—'],

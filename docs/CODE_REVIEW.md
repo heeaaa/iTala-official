@@ -117,7 +117,7 @@ SKIP (see above) - no local Postgres server available.
 
 ## Remediation Progress
 
-**Progress last updated:** 01/09/2026 (N-32 to N-36 raised and fixed; N-19 to N-31 before that). Original audit: 27/08/2026.
+**Progress last updated:** 01/09/2026 (N-37 change request; N-32 to N-36 raised and fixed; N-19 to N-31 before that). Original audit: 27/08/2026.
 
 Status values used in the Findings Summary below:
 
@@ -324,6 +324,7 @@ Not in the original audit. Numbered `N-xx` to keep them distinct from the audit'
 | N-34 | HIGH | ~~An empty read wiped every league on the device.~~ **FIXED.** An RLS read taken while the access token is mid-refresh returns an empty array rather than an error. The boot pull checked the length; the post-auth re-pull, the realtime refetch and pull-to-refresh did not, and hydrated it. One gate for every pull now: an empty snapshot is refused whenever the device already holds data. Pinned by S22. | FIXED (PR) |
 | N-35 | MEDIUM | ~~The server row and the on-screen row disagreed on an event's timestamp.~~ **FIXED.** The reducer runs twice per action - once in the dispatch wrapper to build the rows the push mirrors, once inside React's `useReducer` - and `ADD_EVENT` read the clock itself, so the two runs differed by a millisecond or two. `ts` is half of the (ts, id) key that makes "the last event of this game" name the same row on both sides, which is the whole definition of Undo. Stamped once in `stampActionIds` now, as the later of the clock and one past the latest event already logged for that game - which also fixed Undo removing a randomly-tied row after a same-millisecond burst, since ids sort arbitrarily. Pinned by S25 and a new CHECK 9 clock assertion. | FIXED (PR) |
 | N-36 | MEDIUM | ~~A substitution could revert to the pre-substitution lineup.~~ **FIXED.** Lineups, substitutions, the period and the status were protected by `lineupGuard`, a 2.5-second tombstone: too short for a slow push, and wrong the instant it expired. The game row now goes into the same ledger as the events, recorded by diffing the pre- and post-reducer state so the foul-out auto-bench is covered without the condition being named twice. `lineupGuard` is gone. Pinned by S23/S24. | FIXED (PR) |
+| N-37 | INFO | **CHANGE REQUEST, not a defect.** Ties are gone from the data model and from every display. Basketball goes to overtime rather than drawing, so the record is W-L and a level final has NO RESULT: it counts towards neither team's wins, losses or streak, while its points still count towards PF/PA. `StandingRow.ties` and the third `winPctOf` argument are removed; `outcomeOf` KEEPS its `'tie'` case, because the box score, final-score screen and share card all have to render a level game without inventing a winner - which was F-11. The tracker now offers **Add period N+1** when FINISH is tapped at a level score, so overtime is the prompted path rather than a silent draw. This supersedes the tie half of N-03: games played on the team profile is now counted off the games themselves, not off W+L, so PPG cannot be inflated by a game that sits outside the record. GROUP M rewritten (21 -> 24 assertions) and P8 in tests/MANUAL-REGRESSION.md rewritten. | DONE (PR) |
 
 ### Verification evidence
 

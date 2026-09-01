@@ -338,7 +338,7 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
               <View>
                 <View style={{ flexDirection: 'row', paddingVertical: 6, paddingHorizontal: 6 }}>
                   <Txt k="label" style={{ width: 150 }}>Team</Txt>
-                  <Txt k="label" style={{ width: 56, textAlign: 'center' }}>W-L-T</Txt>
+                  <Txt k="label" style={{ width: 56, textAlign: 'center' }}>W-L</Txt>
                   <Txt k="label" style={{ width: 48, textAlign: 'center' }}>PCT</Txt>
                   <Txt k="label" style={{ width: 44, textAlign: 'center' }}>PF</Txt>
                   <Txt k="label" style={{ width: 44, textAlign: 'center' }}>PA</Txt>
@@ -353,11 +353,10 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
                       <TeamBadge logo={r.team.logo} color={r.team.color} size={14} />
                       <Txt k="body" numberOfLines={1} style={{ flex: 1 }}>{r.team.name}</Txt>
                     </View>
-                    <Txt k="stat" style={{ width: 56, textAlign: 'center' }}>{r.wins}-{r.losses}-{r.ties}</Txt>
-                    {/* Ties are half a win here, matching the order standings() sorts
-                        by. Passing only wins/losses would print a PCT that disagrees
+                    <Txt k="stat" style={{ width: 56, textAlign: 'center' }}>{r.wins}-{r.losses}</Txt>
+                    {/* Same inputs standings() sorts by, so PCT never disagrees
                         with the row's own position in the table. */}
-                    <Txt k="stat" color={colors.muted} style={{ width: 48, textAlign: 'center' }}>{winPctOf(r.wins, r.losses, r.ties).toFixed(3).replace(/^0/, '')}</Txt>
+                    <Txt k="stat" color={colors.muted} style={{ width: 48, textAlign: 'center' }}>{winPctOf(r.wins, r.losses).toFixed(3).replace(/^0/, '')}</Txt>
                     <Txt k="stat" color={colors.muted} style={{ width: 44, textAlign: 'center' }}>{r.pf}</Txt>
                     <Txt k="stat" color={colors.muted} style={{ width: 44, textAlign: 'center' }}>{r.pa}</Txt>
                     <Txt k="stat" color={r.diff > 0 ? colors.green : r.diff < 0 ? colors.red : colors.muted} style={{ width: 48, textAlign: 'center' }}>{r.diff > 0 ? `+${r.diff}` : r.diff}</Txt>

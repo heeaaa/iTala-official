@@ -79,20 +79,20 @@ export const outcomeOf = (home: number, away: number): GameOutcome =>
   home === away ? 'tie' : home > away ? 'home' : 'away';
 
 export interface StandingRow {
-  team: Team; wins: number; losses: number; ties: number;
+  team: Team; wins: number; losses: number;
   pf: number; pa: number; diff: number; streak: string;
 }
 
 export function standings(league: League): StandingRow[] {
   const rows = new Map<string, StandingRow>();
   for (const t of league.teams)
-    rows.set(t.id, { team: t, wins: 0, losses: 0, ties: 0, pf: 0, pa: 0, diff: 0, streak: '' });
+    rows.set(t.id, { team: t, wins: 0, losses: 0, pf: 0, pa: 0, diff: 0, streak: '' });
 
   const finals = league.games
     .filter(g => g.status === 'final')
     .sort((a, b) => (a.finishedAt ?? 0) - (b.finishedAt ?? 0));
 
-  const streakLog = new Map<string, ('W' | 'L' | 'T')[]>();
+  const streakLog = new Map<string, ('W' | 'L')[]>();
   for (const g of finals) {
     const s = gameScore(league, g);
     const home = rows.get(g.homeTeamId);
@@ -100,24 +100,29 @@ export function standings(league: League): StandingRow[] {
     if (!home || !away) continue;
     home.pf += s.home; home.pa += s.away;
     away.pf += s.away; away.pa += s.home;
-    // A level score is a draw, not a home win. This used to read `home >= away`,
-    // which credited the home side a win and the away side a loss, and that fed
-    // win%, streaks, top-5 award eligibility and standings[0] as "Champion".
-    // Nothing prevents a game being marked final while tied, and a game marked
-    // final with no events at all scores 0-0, so this is reachable in ordinary
-    // use rather than only by mis-tapping Finish.
+    // BASKETBALL HAS NO DRAWS. A level score at the end of regulation goes to
+    // overtime, which in this app means the scorekeeper adds a period - so the
+    // record is W-L, and there is no T column to keep.
+    //
+    // A level score can still reach here, and must not be guessed at. Two ways:
+    // a game marked final with no events at all is 0-0, and the tracker lets a
+    // scorekeeper Finish anyway after warning them (see LiveGameScreen.finish).
+    // Such a game counts towards NEITHER side's record and towards neither
+    // streak - it has no result. What it does still contribute is points for and
+    // against, because those points were really scored.
+    //
+    // What it must never do is resolve as a home win. That was the original
+    // `home >= away` bug (F-11): it credited the home side a win and the away
+    // side a loss, and fed win%, streaks, top-5 award eligibility and
+    // standings[0] as "Champion". Deciding the outcome in one place is what
+    // keeps that closed, whether or not a T is displayed.
     const outcome = outcomeOf(s.home, s.away);
-    if (outcome === 'tie') {
-      home.ties++; away.ties++;
-      pushStreak(streakLog, g.homeTeamId, 'T');
-      pushStreak(streakLog, g.awayTeamId, 'T');
-    } else {
-      const homeWon = outcome === 'home';
-      (homeWon ? home : away).wins++;
-      (homeWon ? away : home).losses++;
-      pushStreak(streakLog, g.homeTeamId, homeWon ? 'W' : 'L');
-      pushStreak(streakLog, g.awayTeamId, homeWon ? 'L' : 'W');
-    }
+    if (outcome === 'tie') continue;
+    const homeWon = outcome === 'home';
+    (homeWon ? home : away).wins++;
+    (homeWon ? away : home).losses++;
+    pushStreak(streakLog, g.homeTeamId, homeWon ? 'W' : 'L');
+    pushStreak(streakLog, g.awayTeamId, homeWon ? 'L' : 'W');
   }
   for (const r of rows.values()) {
     r.diff = r.pf - r.pa;
@@ -131,13 +136,13 @@ export function standings(league: League): StandingRow[] {
   });
 }
 
-const winPct = (r: StandingRow) => winPctOf(r.wins, r.losses, r.ties);
+const winPct = (r: StandingRow) => winPctOf(r.wins, r.losses);
 
-function pushStreak(log: Map<string, ('W' | 'L' | 'T')[]>, id: string, v: 'W' | 'L' | 'T') {
+function pushStreak(log: Map<string, ('W' | 'L')[]>, id: string, v: 'W' | 'L') {
   if (!log.has(id)) log.set(id, []);
   log.get(id)!.push(v);
 }
-function formatStreak(arr: ('W' | 'L' | 'T')[]): string {
+function formatStreak(arr: ('W' | 'L')[]): string {
   if (arr.length === 0) return '—';
   const last = arr[arr.length - 1];
   let n = 0;
@@ -152,13 +157,13 @@ export interface LeaderRow {
   rating: number; // composite per-game rating used for MVP/awards
 }
 
-// A tie counts as half a win, the standard sporting convention, so a drawn game
-// ranks a team above a loss and below a win rather than being discarded from the
-// record entirely. `ties` is optional so existing two-argument callers are
-// unaffected.
-export const winPctOf = (wins: number, losses: number, ties = 0): number => {
-  const played = wins + losses + ties;
-  return played === 0 ? 0 : (wins + ties / 2) / played;
+// Wins over decided games. There is no tie term: basketball goes to overtime
+// instead of drawing, so a level final has no result and is not counted here at
+// all (see standings). It used to take a third `ties` argument and score a draw
+// as half a win.
+export const winPctOf = (wins: number, losses: number): number => {
+  const played = wins + losses;
+  return played === 0 ? 0 : wins / played;
 };
 
 // Composite single-game value — the standard "game score"-style weighting.
