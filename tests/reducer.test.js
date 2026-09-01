@@ -847,6 +847,45 @@ eq('M21 outcomeOf never reports a winner on equal scores',
      promoteStrayToTeam(teams, 9, 0), teams);
 }
 
+// The jersey number written FIRST: "#11 Juan Dela Cruz".
+//
+// Every other supported shape puts the number after the name, and the parser
+// took "everything before the #" as the name span. Here that span is empty, so
+// the name fell back to the raw line and the row imported as
+// number 11 / name "#11 Juan Dela Cruz" - the number left sitting in the name,
+// which is exactly what was reported off a real paste.
+{
+  const r = parseRoster('Warriors\n\n#11 Juan Dela Cruz\n#7 Ana Lim\n# 3 Pedro Santos');
+  eq('O26 a leading #number is taken as the number, not kept in the name',
+     r[0].players.map(p => `${p.name}/${p.number}`),
+     ['Juan Dela Cruz/11', 'Ana Lim/7', 'Pedro Santos/3']);
+  eq('O27 and the team header is still a header', r.map(t => t.name), ['Warriors']);
+  eq('O28 no leading-# row is flagged for review',
+     r[0].players.filter(p => p.flag).length, 0);
+}
+
+// The shapes that already worked must keep working: the fix may only apply when
+// there is nothing before the hash at all.
+{
+  const r = parseRoster(
+    'Bulls\n\nJuan Dela Cruz #24\nGhelo Manuel#14\nJesse Pooni # 2\n'
+    + '1:Jarold James Baldia #9\n11. Taj Dayrit#3 - Taj\nArnold Mercado (Arnie) #16');
+  eq('O29 a trailing hash still names the player from the text before it',
+     r[0].players.map(p => `${p.name}/${p.number}`),
+     ['Juan Dela Cruz/24', 'Ghelo Manuel/14', 'Jesse Pooni/2',
+      'Jarold James Baldia/9', 'Taj Dayrit/3', 'Arnold Mercado/16']);
+}
+
+// A leading number with no hash is NOT in scope and must be untouched: "17-Juan"
+// and "17 Juan" are ambiguous against a team name, and the parser's contract is
+// to keep an ambiguous line verbatim rather than guess. Asserted so a later
+// change to the leading-# path cannot quietly start guessing at these too.
+{
+  const r = parseRoster('Reds\n\nAna Lim-4\n\n17-Juan Cruz');
+  eq('O30 [out of scope] a leading number with a dash is still not a player line',
+     r.map(t => t.name), ['Reds', '17-Juan Cruz']);
+}
+
 // ===========================================================================
 // GROUP P — live-game input safety (F-18 double tap, F-17 stale lineup)
 // ===========================================================================

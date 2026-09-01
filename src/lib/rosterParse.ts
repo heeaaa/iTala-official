@@ -9,6 +9,8 @@
 //   "1:Juan Dela Cruz #24"             index-colon-name-hash-number
 //   "Juan Dela Cruz#14"                hash with no space
 //   "Juan Dela Cruz # 2"               hash with space
+//   "#11 Juan Dela Cruz"               hash-number FIRST, then the name
+//   "# 3 Juan Dela Cruz"               same, with a space after the hash
 //   "Juan Dela Cruz (Juan) #16"        nickname (dropped)
 //   "11. Juan Dela Cruz#3 - Juan"      trailing nickname after number (dropped)
 // Rules: leading index (1. / 2: / 3) / "10 ") stripped when a real number
@@ -69,7 +71,14 @@ function parsePlayerLine(line: string): { name: string; number: string } {
   const hash = s.match(JERSEY_HASH);
   if (hash && hash.index !== undefined) {
     number = hash[1];
-    nameSpan = s.slice(0, hash.index);          // drop everything from # on
+    const before = s.slice(0, hash.index);      // drop everything from # on
+    // "#11 Juan Dela Cruz" - the number LEADS the line, so the name is what
+    // FOLLOWS it. Taking the text before the hash is right for every other
+    // supported shape ("Juan #24", "Juan#14", and "Juan#3 - Jun" where slicing
+    // is what drops the trailing nickname) and produces nothing at all here:
+    // the name then fell back to the raw line, so the row imported as
+    // number 11 / name "#11 Juan Dela Cruz", with the number left in the name.
+    nameSpan = before.trim() ? before : s.slice(hash.index + hash[0].length);
   } else {
     const dash = s.match(JERSEY_DASH);
     if (dash && dash.index !== undefined) {
