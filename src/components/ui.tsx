@@ -652,7 +652,11 @@ export function SyncBadge({ state }: { state: 'idle' | 'saving' | 'saved' | 'err
   const cfg = {
     saving: { text: 'Saving…', color: colors.muted, dot: colors.muted },
     saved: { text: 'Saved', color: colors.green, dot: colors.green },
-    error: { text: 'Save failed — will retry', color: colors.red, dot: colors.red },
+    // NOT "will retry". Nothing retries: a failed push pins its value in the
+    // pending ledger so the local number stays put, and that is all. Promising a
+    // retry that never comes is how somebody ends up closing the app on unsaved
+    // stats. See LiveGameScreen for the version of this that says what to do.
+    error: { text: 'Not saved', color: colors.red, dot: colors.red },
   }[state];
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>

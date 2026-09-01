@@ -149,6 +149,35 @@ const MUST_NOT_FAIL_SILENTLY: ReadonlySet<Action['t']> = new Set([
   'REC_SETUP_GAME', 'BULK_IMPORT_ROSTER',
 ]);
 
+/**
+ * A push that writes NOTHING must never resolve. This is the message for the
+ * case where the row an action is supposed to mirror is not in the state handed
+ * to us.
+ *
+ * These sites used to `return` quietly, and quietly is the one thing they could
+ * not afford. The caller treats a resolved push as "the server has it" and the
+ * pending ledger used to retire the entry on that basis, so the very next
+ * snapshot deleted the row locally - about a second after the tap, with no
+ * error, no badge and nothing in the play-by-play. Every symptom of a stat that
+ * will not stick, and no evidence anywhere.
+ *
+ * `reconcileLeagueEvents` now checks the snapshot's contents before retiring, so
+ * this can no longer lose the stat on its own. It is still wrong to report
+ * success for a write that never happened: pinned-and-silent is a slow leak, and
+ * the person deserves to know now rather than at the buzzer.
+ *
+ * It is also never a legitimate state - the reducer created that row immediately
+ * before this ran. The realistic way to reach it is a queued push whose rows were
+ * removed underneath it (a rolled-back drop-in bundle, a deleted game), and there
+ * the stat genuinely cannot be saved, so an error is the truth.
+ */
+function missingRow(label: string, id: string | undefined, leagueId: string): never {
+  throw new Error(
+    `${label}: nothing to push - no local row for ${id ?? '(no id)'} in league ${leagueId}. `
+    + 'The write was not attempted, so this reports a failure rather than a false save.',
+  );
+}
+
 export async function pushAction(sb: SupabaseClient, action: Action, state: AppState): Promise<void> {
   try {
     switch (action.t) {
@@ -339,7 +368,7 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
         // the last element — stampActionIds put its id on the action for exactly
         // this lookup.
         const ev = action.id ? l?.events.find(e => e.id === action.id) : undefined;
-        if (!l || !ev) return;
+        if (!l || !ev) missingRow('ADD_EVENT', action.id, action.leagueId);
         checkCritical('INSERT_events', await sb.from('events').insert({
           id: ev.id, league_id: l.id, game_id: ev.gameId, team_id: ev.teamId,
           player_id: ev.playerId, type: ev.type, period: ev.period, ts: ev.ts, note: ev.note ?? null,
@@ -396,7 +425,7 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
         // event goes back to its own place in ts order, not to the end.
         const l = state.leagues.find(x => x.id === action.leagueId);
         const ev = action.eventId ? l?.events.find(e => e.id === action.eventId) : undefined;
-        if (!l || !ev) return;
+        if (!l || !ev) missingRow('REDO_EVENT', action.eventId, action.leagueId);
         checkCritical('INSERT_events(redo)', await sb.from('events').upsert({
           id: ev.id, league_id: l.id, game_id: ev.gameId, team_id: ev.teamId,
           player_id: ev.playerId, type: ev.type, period: ev.period, ts: ev.ts, note: ev.note ?? null,
@@ -427,7 +456,7 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
 
       case 'REC_SETUP_GAME': {
         const l = state.leagues.find(x => x.id === action.leagueId);
-        if (!l) return;
+        if (!l) missingRow('REC_SETUP_GAME', action.gameId, action.leagueId);
         // ONE atomic call — league + teams + players + game in a single
         // transaction. This replaced four sequential round trips, which left
         // windows where the server held a partial bundle; a realtime echo

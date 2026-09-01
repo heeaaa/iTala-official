@@ -450,6 +450,37 @@ for (const f of srcFiles) {
 
 
 // ---------------------------------------------------------------------------
+// CHECK 24 - the server's own words never reach a user.
+//
+// `describeSyncFailure` used to end in `return msg`, so any failure it did not
+// recognise put raw PostgREST text on screen - `new row violates row-level
+// security policy for table "events"` and the like. That names internal tables,
+// tells a scorekeeper nothing they can act on, and is alarming courtside. The
+// technical wording is still kept, for a developer, behind isDevBuild().
+// ---------------------------------------------------------------------------
+{
+  const store = read('src/store/StoreProvider.tsx');
+  const from = store.indexOf('function describeSyncFailure');
+  const to = store.indexOf('function technicalSyncDetail');
+  const body = from >= 0 && to > from ? store.slice(from, to) : '';
+  ok('describeSyncFailure was locatable', body.length > 0,
+     'the checks below inspect it and would pass on an empty string');
+  ok('describeSyncFailure never returns the raw server message',
+     !/return msg;/.test(body),
+     "an unrecognised failure must fall back to a sentence, not to PostgREST's wording");
+  ok('every branch of describeSyncFailure returns a string literal',
+     !/return\s+(?!['"])\S/.test(body),
+     'a returned variable is how the server’s wording leaks out; every branch has '
+     + 'to be a sentence written here');
+  ok('the technical detail is gated on a development build',
+     /function technicalSyncDetail[\s\S]{0,240}if \(!isDevBuild\(\)\) return null;/.test(store),
+     'a release build must not carry policy or table names into the UI');
+  ok('the live tracker labels the technical detail as such',
+     /Technical detail \(development build\)/.test(read('src/screens/LiveGameScreen.tsx')),
+     'if it is shown at all it must be marked as not-for-users');
+}
+
+// ---------------------------------------------------------------------------
 // CHECK 23 - a horizontal ScrollView that says `flexGrow: 0` must also say
 // `flexShrink: 0`.
 //

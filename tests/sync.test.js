@@ -1152,6 +1152,123 @@ async function s28_deleting_a_game_releases_its_pending_write() {
   ok('S28.3 and the pinned sub does not bring it back', !A.game());
 }
 
+/* ==========================================================================
+   GROUP S29 - a resolved push is not proof the server has the row
+   ==========================================================================
+   THE REPORTED BUG, and the one the earlier fixes did not cover. Arm 2PT, tap a
+   player: the log shows "made 2", the score goes to 2, and about a second later
+   it is 0 with an empty play-by-play. No error, no red badge, nothing in the log.
+
+   The chain: the push RESOLVED without the row reaching the server, so the
+   ledger was told the server had it; the next snapshot started after that
+   moment, so the entry was eligible for retirement; and it was retired without
+   anyone checking whether the rows in hand actually contained it. They did not,
+   so the server's version - which had no such event - won.
+
+   `acceptSnapshot` (the watermark) cannot catch this: the snapshot is the newest
+   one, it is simply missing the row. Ordering was never the whole question.
+
+   The rule now: ordering decides ELIGIBILITY, the snapshot's CONTENT decides
+   confirmation. An add retires only when the snapshot contains the event; a
+   remove only when it does not.
+*/
+
+async function s29_a_resolved_push_without_the_row_keeps_the_stat() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.applySnapshot(await A.snapshot());
+  eq('S29.1 clean ledger to start', pendingCount(), 0);
+
+  // The server accepts the request and writes nothing - RLS as a silent filter,
+  // which is what this emulator exists to model, and the same shape as a push
+  // that returns early without inserting.
+  server.rls.events = (_row, op) => op !== 'insert';
+
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg2_make', 1));
+  const evId = A.eventIds()[0];
+  eq('S29.2 the tap shows immediately', A.points(), 2);
+  await A.settle();
+
+  ok('S29.3 the row really is not on the server', !server.has('events', evId));
+  ok('S29.4 and the push reported success, not failure', A.syncState === 'saved',
+     `syncState was '${A.syncState}'`);
+
+  // The snapshot is the NEWEST one and starts after the confirmation, so the
+  // watermark has no opinion. Only the content check stands between the
+  // scorekeeper and a stat that vanishes.
+  ok('S29.5 the snapshot is applied, not refused', A.applySnapshot(await A.snapshot()));
+  eq('S29.6 the stat is still on the board', A.points(), 2);
+  eq('S29.7 and still in the play-by-play', A.eventIds().length, 1);
+  ok('S29.8 the ledger did NOT retire an unreflected write', pendingCount() > 0,
+     'retiring it is what deleted the stat');
+
+  // It must keep surviving, not survive once.
+  A.applySnapshot(await A.snapshot());
+  A.applySnapshot(await A.snapshot());
+  eq('S29.9 it survives repeated snapshots', A.points(), 2);
+
+  // And once the server really does accept it, everything converges and the
+  // ledger lets go - no permanent leak.
+  delete server.rls.events;
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'ft_make', 1));
+  await A.settle();
+  A.applySnapshot(await A.snapshot());
+  eq('S29.10 the later write lands', server.count('events'), 1);
+  eq('S29.11 the board is the sum of what it has', A.points(), 3);
+}
+
+/* The mirror direction, as a guard on the retirement change itself: making an
+   ADD retire only when the snapshot contains it must not weaken the REMOVE side.
+   A delete the server did not perform is caught upstream by the read-back in
+   pushAction (see S6), so this passes with or without the content rule - it is
+   here to fail if the rule is ever written in a way that lets an undone event
+   back onto the board. */
+async function s30_an_acknowledged_delete_that_did_nothing_keeps_the_undo() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg3_make', 1));
+  await A.settle();
+  A.applySnapshot(await A.snapshot());
+  eq('S30.1 baseline', A.points(), 3);
+  eq('S30.2 clean ledger', pendingCount(), 0);
+
+  // The delete is acknowledged, the row survives, AND the read-back that would
+  // normally catch it is filtered too - so the push cannot tell and resolves.
+  server.rls.events = (_row, op) => op === 'insert' || op === 'select' ? true : false;
+  A.dispatch({ t: 'UNDO_EVENT', leagueId: 'lg1', gameId: 'g1' });
+  await A.settle();
+  eq('S30.3 the undo cleared the board locally', A.points(), 0);
+
+  A.applySnapshot(await A.snapshot());
+  eq('S30.4 the undone basket does not come back', A.points(), 0);
+  ok('S30.5 the ledger kept the unreflected removal', pendingCount() > 0);
+}
+
+/* A push asked to mirror a row it cannot find must REPORT, not resolve. Left as
+   a quiet `return`, it told the ledger the server had a row nobody ever wrote -
+   the same lie as above, reachable without any server misbehaviour at all. */
+async function s31_a_push_with_nothing_to_write_reports_failure() {
+  const server = new FakeServer();
+  const A = await seed(server);
+
+  // A well-formed ADD_EVENT for a league this state does not contain: exactly
+  // what a queued push sees after a rolled-back bundle or a deleted game.
+  const orphan = {
+    t: 'ADD_EVENT', leagueId: 'lgGone', gameId: 'g1', teamId: 'tH',
+    playerId: 'p1', type: 'fg2_make', period: 1, id: 'evOrphan', ts: 1,
+  };
+  let threw = null;
+  try {
+    await pushAction(A.client, orphan, A.state);
+  } catch (e) {
+    threw = (e && e.message) || String(e);
+  }
+  ok('S31.1 it throws rather than resolving', !!threw, 'a quiet resolve is read as "the server has it"');
+  ok('S31.2 and the message names what was missing',
+     !!threw && /ADD_EVENT/.test(threw) && /evOrphan/.test(threw) && /lgGone/.test(threw), threw);
+  eq('S31.3 nothing was written', server.count('events'), 0);
+}
+
 /* --------------------------------------------------------------------------- */
 
 const TESTS = [
@@ -1183,6 +1300,9 @@ const TESTS = [
   ['S26 reported scenarios end to end', s26_reported_scenarios_end_to_end],
   ['S27 a failed bundle is not resurrected by the ledger', s27_a_failed_bundle_is_not_resurrected_by_the_ledger],
   ['S28 deleting a game releases its pending write', s28_deleting_a_game_releases_its_pending_write],
+  ['S29 a resolved push without the row keeps the stat', s29_a_resolved_push_without_the_row_keeps_the_stat],
+  ['S30 an acknowledged delete that did nothing keeps the undo', s30_an_acknowledged_delete_that_did_nothing_keeps_the_undo],
+  ['S31 a push with nothing to write reports failure', s31_a_push_with_nothing_to_write_reports_failure],
 ];
 
 (async () => {

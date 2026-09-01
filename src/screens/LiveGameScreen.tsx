@@ -61,7 +61,10 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   const { activePromos } = usePromos();
   // No `state` here on purpose: this screen derives everything from `league` and
   // `game`, so nothing on it re-runs because an unrelated league changed (F-14).
-  const { dispatch } = useStore();
+  // `syncState` and `lastSyncError` only. Still no `state` here: this screen
+  // derives everything from `league` and `game` so nothing re-runs because an
+  // unrelated league changed (F-14).
+  const { dispatch, syncState, lastSyncError, lastSyncErrorDetail } = useStore();
   const { canScoreGame } = useAdmin();
   const league = useLeague(leagueId);
   const game = league?.games.find(g => g.id === gameId);
@@ -554,6 +557,44 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
             {readOnly ? '👁  Spectator only. Tap team to view on-court 5.' : statusText}
           </Txt>
         </View>
+
+        {/* SAVE FAILURE. Unmissable, and it stays until a write succeeds.
+
+            This screen showed NOTHING about whether a stat reached the server.
+            The sync badge lives on Home only, so the one screen where a failed
+            write costs somebody their work was the one screen with no feedback:
+            a stat that failed to save looked exactly like a stat that saved, and
+            the difference only showed up later as a number that had quietly
+            changed. Diagnosing "my stats disappear" without this is guesswork.
+
+            The local value is kept either way - the pending ledger pins a failed
+            write so nothing vanishes mid-game (see sync/pendingEvents.ts). What
+            it cannot survive is the app being closed, which is exactly why this
+            has to be visible while there is still time to act on it. */}
+        {!readOnly && syncState === 'error' && (
+          <Pressable
+            onPress={() => Alert.alert(
+              'Stats are not saving',
+              `${lastSyncError ?? 'The app could not save to the server.'}\n\n`
+              + 'Everything you have logged is safe on this device and still counting. '
+              + 'Keep the app open until the warning clears — closing it now loses anything unsaved.'
+              // Dev builds only. A scorekeeper cannot act on a policy name, and
+              // it is not ours to put in front of them; it is exactly what a
+              // developer needs, so it lives behind this and nothing else.
+              + (lastSyncErrorDetail ? `\n\nTechnical detail (development build):\n${lastSyncErrorDetail}` : ''),
+            )}
+            accessibilityRole="alert"
+            accessibilityLabel={`Stats are not saving. ${lastSyncError ?? ''} They are safe on this device. Keep the app open. Activate for more.`}
+            style={{ marginTop: space(2), borderRadius: radius.md, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: 'rgba(255,77,79,0.15)', borderWidth: 1, borderColor: colors.red }}>
+            <Txt k="body" color={colors.red} style={{ fontFamily: font.bodyBold, fontSize: 13 }}>
+              ⚠  Stats are not saving — tap to find out more
+            </Txt>
+            <Txt k="body" color={colors.red} numberOfLines={3} style={{ fontSize: 12, marginTop: 2 }}>
+              {lastSyncError ?? 'The app could not save to the server.'} Your stats are safe on
+              this device and still counting — keep the app open.
+            </Txt>
+          </Pressable>
+        )}
 
         {/* Roster: the 5 on court — fills available space, no scroll needed */}
         {!readOnly && <View style={{ flex: 1, marginTop: space(2) }}>
