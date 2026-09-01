@@ -23,7 +23,7 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
   const [onboardingClosed, setOnboardingClosed] = useState(false);
   const { activePromos, reload: reloadPromos } = usePromos();
   const onRefresh = async () => { setRefreshing(true); try { await Promise.all([refresh(), reloadPromos()]); } finally { setRefreshing(false); } };
-  const { role, isAdmin, user, unlock, lock, signOut, signInWithGoogle, appleAvailable, signInWithApple, authBusy, lastError, isOwner, redeemCode, createCreationCode, canScoreGame } = useAdmin();
+  const { role, isAdmin, user, unlock, lock, signOut, signInWithGoogle, appleAvailable, signInWithApple, authBusy, errorFor, clearError, isOwner, redeemCode, createCreationCode, canScoreGame } = useAdmin();
   const [askPw, setAskPw] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -89,8 +89,14 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
   const showSearch = visibleLeagues.filter(l => !l.isArchived).length >= 3 || q.length > 0;
   const archivedLeagues = state.leagues.filter(l => l.isArchived && l.kind !== 'recreational');
 
+  // Both sheets clear their OWN flow's error on the way in. Scoping already
+  // stops one flow's failure appearing inside another's sheet; this also stops
+  // a stale failure from the previous attempt greeting the next one.
+  const openProfileSheet = () => { clearError('signin'); setSheetOpen(true); };
+
   const onLockPress = () => {
     if (isAdmin) { void lock(); return; } // tapping the unlocked icon re-locks
+    clearError('admin');
     setAskPw(true);
   };
 
@@ -150,7 +156,7 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
 
 Share this with the organizer. It can create exactly one league, then expires.`);
     } else {
-      Alert.alert('Could not create code', lastError ?? 'Try again.');
+      Alert.alert('Could not create code', errorFor('admin') ?? 'Try again.');
     }
   };
 
@@ -192,7 +198,7 @@ Share this with the organizer. It can create exactly one league, then expires.`)
             </Pressable>
           )}
           {/* Profile: guest 👤 or the Google avatar */}
-          <ProfileButton avatarUrl={user?.avatarUrl} onPress={() => setSheetOpen(true)} />
+          <ProfileButton avatarUrl={user?.avatarUrl} onPress={openProfileSheet} />
         </View>
       </View>
 
@@ -389,7 +395,7 @@ Share this with the organizer. It can create exactly one league, then expires.`)
         user={user}
         role={role}
         busy={authBusy}
-        error={lastError}
+        error={errorFor('signin')}
         onGoogle={() => { void onGoogle(); }}
         onApple={appleAvailable ? () => { void onApple(); } : undefined}
         onSignOut={() => { void onSignOut(); }}
@@ -412,7 +418,7 @@ Share this with the organizer. It can create exactly one league, then expires.`)
         visible={askPw}
         title="Admin access"
         message="Backup admin unlock. Enter the admin password to unlock stat tracking without a Google account."
-        error={lastError ?? undefined}
+        error={errorFor('admin') ?? undefined}
         busy={submitting}
         onSubmit={submitPw}
         onCancel={() => setAskPw(false)}

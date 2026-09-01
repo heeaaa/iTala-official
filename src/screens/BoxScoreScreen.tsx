@@ -21,7 +21,7 @@ const EV_LABEL: Record<EventType, string> = {
 export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxScore'>) {
   const { leagueId, gameId } = route.params;
   const { dispatch } = useStore();
-  const { role, canScore, signInWithGoogle, appleAvailable, signInWithApple, authBusy, lastError, canScoreGame } = useAdmin();
+  const { role, canScore, signInWithGoogle, appleAvailable, signInWithApple, authBusy, errorFor, canScoreGame } = useAdmin();
   const league = useLeague(leagueId);
   const game = league?.games.find(g => g.id === gameId);
   const [side, setSide] = useState(0);
@@ -391,7 +391,7 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
       <SignInModal
         visible={askSignIn}
         message="Sharing box-score cards requires a Google account."
-        error={lastError ?? undefined}
+        error={errorFor('signin') ?? undefined}
         busy={authBusy}
         onGoogle={() => { void onSignInThenShare(signInWithGoogle); }}
         onApple={appleAvailable ? () => { void onSignInThenShare(signInWithApple); } : undefined}

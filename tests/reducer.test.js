@@ -3,6 +3,8 @@ const { reducer, teamBoxScore, gameScore, standings, careerStats, leagueAwards,
         perfRating, lineScore, parseRoster, leaderboards, gamesPlayedMap,
         effectiveFoulLimit, fouledOutSet, playerFouls, winPctOf, outcomeOf,
         promoteStrayToTeam, claimOnce, courtKeyOf, reconcileLineup,
+        setScopedError, clearScopedError, errorForScope, describeAuthFailure,
+        sessionRecoveryPlan,
         devLog, devWarn, relWarn } = M;
 
 let pass = 0, fail = 0;
@@ -1050,6 +1052,96 @@ ok('P13 uid() emits no comma, which is what makes P12 unreachable',
     console.log = orig.log; console.warn = orig.warn;
     if (hadDev) globalThis.__DEV__ = prevDev; else delete globalThis.__DEV__;
   }
+}
+
+// ===========================================================================
+// GROUP R — auth failure handling (src/store/authErrors.ts)
+// ===========================================================================
+// Reported: "after closing the sign in modal, I triggered the backup admin
+// access by tapping the logo 10x and when the admin access modal opened, the
+// error message from apple was still there."
+//
+// One `lastError` string served the sign-in sheet, the backup-admin password
+// modal, the account screen and the drop-in setup screen, and nothing cleared
+// it. An error about one thing was therefore presented as an error about
+// another. These cover the rule that replaced it.
+{
+  const APPLE = 'Apple sign-in failed: Network request failed';
+
+  let e = setScopedError({}, 'signin', APPLE);
+  eq('R1 the sign-in sheet sees its own failure', errorForScope(e, 'signin'), APPLE);
+  eq('R2 the admin modal sees nothing', errorForScope(e, 'admin'), null);
+  eq('R3 nor does the account screen', errorForScope(e, 'account'), null);
+  eq('R4 nor the invite-code modal', errorForScope(e, 'code'), null);
+
+  // The reported sequence: sign-in fails, sheet closes, admin modal opens.
+  const opened = clearScopedError(e, 'admin');
+  eq('R5 opening the admin modal shows no leftover Apple error',
+     errorForScope(opened, 'admin'), null);
+  eq('R6 and does not wipe the sign-in sheet behind it',
+     errorForScope(opened, 'signin'), APPLE);
+
+  // A real admin failure lands only on the admin modal.
+  const both = setScopedError(opened, 'admin', 'Incorrect password.');
+  eq('R7 the admin modal shows the admin failure', errorForScope(both, 'admin'), 'Incorrect password.');
+  eq('R8 the sign-in sheet is unaffected', errorForScope(both, 'signin'), APPLE);
+
+  eq('R9 clearing one flow leaves the other', errorForScope(clearScopedError(both, 'admin'), 'signin'), APPLE);
+  eq('R10 clearing everything clears everything', clearScopedError(both), {});
+
+  // Identity is preserved when nothing changes, so React can skip a render.
+  ok('R11 setting the same message returns the same object',
+     setScopedError(both, 'admin', 'Incorrect password.') === both);
+  ok('R12 clearing an already-empty flow returns the same object',
+     setScopedError(both, 'code', null) === both);
+  ok('R13 clearing an empty map returns the same object', clearScopedError({}) !== undefined);
+}
+
+// --- what the message actually says ----------------------------------------
+// The device in the bug report could not reach Supabase at all. The app blamed
+// the Supabase provider configuration, so that got checked (twice) while the
+// real cause went unmentioned.
+{
+  const net = describeAuthFailure('Network request failed', 'Apple');
+  ok('R14 a network failure is named as a network failure', /reach the iTala server/i.test(net), net);
+  ok('R15 and does not blame the provider configuration',
+     !/provider/i.test(net) && !/bundle/i.test(net), net);
+
+  const to = describeAuthFailure('timeout', 'Google');
+  ok('R16 a timeout is also a connectivity message', /reach the iTala server/i.test(to), to);
+  ok('R17 an empty reason still says something useful', describeAuthFailure(null).length > 0);
+
+  const off = describeAuthFailure('Provider is not enabled', 'Google');
+  ok('R18 a genuinely disabled provider IS named as one', /not enabled/i.test(off), off);
+  ok('R19 and names which provider', /Google/.test(off), off);
+
+  const aud = describeAuthFailure('Unacceptable audience in id_token', 'Apple');
+  ok('R20 a rejected id token explains the Expo Go bundle id', /Expo Go/.test(aud), aud);
+
+  const anon = describeAuthFailure('Anonymous sign-ins are disabled');
+  ok('R21 disabled guest access is named', /Guest access/i.test(anon), anon);
+
+  eq('R22 an unrecognised server message is passed through verbatim',
+     describeAuthFailure('Scorekeeper access required.'), 'Scorekeeper access required.');
+}
+
+// --- a non-answer is never grounds for a destructive action ----------------
+// getSession() resolves only after supabase-js finishes initialising, and that
+// initialisation refreshes an expired token over the network. On a device that
+// cannot reach the server it simply does not answer - which used to look
+// identical to "signed out" and triggered a purge of the stored tokens plus a
+// brand new anonymous user, quietly reassigning everything the person owned.
+{
+  eq('R23 a timed-out probe must not touch stored tokens',
+     sessionRecoveryPlan({ answered: false }), 'leave-alone');
+  eq('R24 a real session is used as-is',
+     sessionRecoveryPlan({ answered: true, hasSession: true }), 'use-existing');
+  eq('R25 a real "no session" answer may purge and start a guest session',
+     sessionRecoveryPlan({ answered: true, hasSession: false }), 'purge-and-sign-in-anonymously');
+
+  const destructive = ['purge-and-sign-in-anonymously'];
+  ok('R26 no unanswered probe reaches a destructive plan',
+     !destructive.includes(sessionRecoveryPlan({ answered: false })));
 }
 
 // ===========================================================================

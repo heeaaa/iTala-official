@@ -15,6 +15,36 @@ import {
 } from '../sync/pendingEvents';
 import { warn } from '../lib/log';
 
+/**
+ * Resolve once the client has a session, or once `ms` have passed.
+ *
+ * Event-driven: one getSession() read, then a subscription. Polling getSession()
+ * in a loop is both wasteful and actively harmful — every call goes through
+ * supabase-js's auth initialisation, so a stalled network turns a poll into a
+ * queue of stalled calls that starve the sign-in the loop is waiting for.
+ */
+async function waitForSession(sb: NonNullable<ReturnType<typeof getSupabase>>, ms: number): Promise<boolean> {
+  try {
+    const { data } = await sb.auth.getSession();
+    if (data.session) return true;
+  } catch {
+    // A failed read is not a failed wait: the subscription below may still fire.
+  }
+  return new Promise<boolean>(resolve => {
+    let done = false;
+    const finish = (got: boolean) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      sub?.unsubscribe();
+      resolve(got);
+    };
+    const timer = setTimeout(() => finish(false), ms);
+    const { data } = sb.auth.onAuthStateChange((_e, s) => { if (s) finish(true); });
+    const sub = data.subscription;
+  });
+}
+
 // gameId -> expiry timestamp. Lineups written locally are protected from being
 // overwritten by a lagging realtime echo until the expiry passes.
 const lineupGuard = new Map<string, number>();
@@ -702,16 +732,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         const sb = getSupabase();
         if (sb) {
           // Wait for a session (anonymous sign-in is kicked off by
-          // AdminProvider). Longer window than before — a cold first launch on
-          // a tablet or a weak connection can take several seconds to mint the
-          // anonymous token, and RLS reads return empty without one.
-          let session = (await sb.auth.getSession()).data.session;
-          let waited = 0;
-          while (!session && waited < 8000) {
-            await new Promise(r => setTimeout(r, 200));
-            session = (await sb.auth.getSession()).data.session;
-            waited += 200;
-          }
+          // AdminProvider), because an RLS read with no token returns an empty
+          // array rather than an error and the device just looks blank.
+          //
+          // This waits on the auth EVENT, not on a poll. It used to call
+          // getSession() every 200ms for up to eight seconds — up to forty
+          // calls, each of which supabase-js queues behind its own
+          // initialisation (which refreshes an expired token over the network),
+          // all racing AdminProvider's boot sequence for the same client. On a
+          // slow or unreachable connection that turned one stalled request into
+          // a pile-up of timeouts, which is what the reported launch logs show.
+          // One read, then listen.
+          await waitForSession(sb, 8000);
 
           // Pull the authoritative server state. CRUCIAL: if this first attempt
           // yields nothing (no session yet, or a slow/failed network call), we

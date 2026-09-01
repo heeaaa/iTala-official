@@ -18,7 +18,7 @@ interface TeamDraft { name: string; color: string; players: { id: string; name: 
 
 export default function RecGameScreen({ navigation }: ScreenProps<'RecGame'>) {
   const { state, dispatch, synced } = useStore();
-  const { role, userId, isOwner, signInWithGoogle, appleAvailable, signInWithApple, authBusy, lastError, reloadMemberships } = useAdmin();
+  const { role, userId, isOwner, signInWithGoogle, appleAvailable, signInWithApple, authBusy, errorFor, reloadMemberships } = useAdmin();
   const [location, setLocation] = useState('');
   const [makePublic, setMakePublic] = useState(false);
   const [trackMisses, setTrackMisses] = useState(true);
@@ -132,7 +132,7 @@ export default function RecGameScreen({ navigation }: ScreenProps<'RecGame'>) {
           </Txt>
           <GoogleButton onPress={() => { void onSignIn(signInWithGoogle); }} busy={signInBusy || authBusy} style={{ alignSelf: 'stretch' }} />
           {appleAvailable ? <AppleButton onPress={() => { void onSignIn(signInWithApple); }} busy={signInBusy || authBusy} style={{ alignSelf: 'stretch', marginTop: 10 }} /> : null}
-          {lastError ? <Txt k="body" color={colors.red} style={{ marginTop: 10, fontSize: 13 }}>{lastError}</Txt> : null}
+          {errorFor('signin') ? <Txt k="body" color={colors.red} style={{ marginTop: 10, fontSize: 13 }}>{errorFor('signin')}</Txt> : null}
           <Button title="Cancel" kind="ghost" onPress={() => navigation.goBack()} style={{ alignSelf: 'stretch', marginTop: 10 }} />
         </View>
       </Screen>

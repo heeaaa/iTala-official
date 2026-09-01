@@ -13,4 +13,7 @@ export * from '../src/lib/rosterParse';
 export * from '../src/lib/liveInput';
 export { gameCardOptions } from '../src/lib/cardSpecs';
 export { devLog, devWarn, warn as relWarn } from '../src/lib/log';
+export {
+  setScopedError, clearScopedError, errorForScope, describeAuthFailure, sessionRecoveryPlan,
+} from '../src/store/authErrors';
 export { uid } from '../src/lib/format';
