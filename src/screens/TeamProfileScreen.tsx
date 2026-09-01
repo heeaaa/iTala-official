@@ -16,17 +16,20 @@ export default function TeamProfileScreen({ route, navigation }: ScreenProps<'Te
   if (!league || !team) return <Screen><Txt k="body">Team not found.</Txt></Screen>;
 
   const row = standings(league).find(r => r.team.id === teamId);
-  // Ties count towards games played. Leaving them out while pf/pa still include
-  // the tied game's points inflated PPG and OPP PPG by dividing by too few games.
-  const gp = (row?.wins ?? 0) + (row?.losses ?? 0) + (row?.ties ?? 0);
-  const ppg = gp ? (row!.pf / gp) : 0;
-  const oppg = gp ? (row!.pa / gp) : 0;
 
-  // Last 5 finals involving this team, newest first
-  const last5 = league.games
+  // Every final this team played, newest first.
+  const finals = league.games
     .filter(g => g.status === 'final' && (g.homeTeamId === teamId || g.awayTeamId === teamId))
-    .sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0))
-    .slice(0, 5);
+    .sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0));
+  const last5 = finals.slice(0, 5);
+
+  // Games played is counted off the games themselves, not off the record.
+  // W + L is not the same number: a level final has no result and so appears in
+  // neither column, while its points still count towards pf/pa - deriving gp
+  // from the record would divide those points by too few games and inflate PPG.
+  const gp = finals.length;
+  const ppg = gp && row ? (row.pf / gp) : 0;
+  const oppg = gp && row ? (row.pa / gp) : 0;
 
   const roster = team.playerIds
     .map(pid => league.players.find(p => p.id === pid))
@@ -50,8 +53,8 @@ export default function TeamProfileScreen({ route, navigation }: ScreenProps<'Te
       <Card style={{ marginBottom: space(3) }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-around' }}>
           {([
-            ['RECORD', gp ? `${row!.wins}-${row!.losses}-${row!.ties}` : '—'],
-            ['WIN %', gp ? winPctOf(row!.wins, row!.losses, row!.ties).toFixed(3).replace(/^0/, '') : '—'],
+            ['RECORD', gp && row ? `${row.wins}-${row.losses}` : '—'],
+            ['WIN %', gp && row ? winPctOf(row.wins, row.losses).toFixed(3).replace(/^0/, '') : '—'],
             ['PPG', gp ? ppg.toFixed(1) : '—'],
             ['OPP PPG', gp ? oppg.toFixed(1) : '—'],
             ['STREAK', row?.streak ?? '—'],
@@ -75,14 +78,22 @@ export default function TeamProfileScreen({ route, navigation }: ScreenProps<'Te
           const us = isHome ? s.home : s.away;
           const them = isHome ? s.away : s.home;
           const opp = league.teams.find(t => t.id === (isHome ? g.awayTeamId : g.homeTeamId));
-          const won = us >= them;
+          // Three states, not two. `us >= them` gave a level game a green W here,
+          // which is the same F-11 mistake this screen's record no longer makes:
+          // a level game has no result, so it gets neither a W nor an L.
+          const level = us === them;
+          const won = us > them;
+          const resultColor = level ? colors.muted : won ? colors.green : colors.red;
           return (
             <Pressable key={g.id} onPress={() => navigation.navigate('BoxScore', { leagueId, gameId: g.id })}
               style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, borderTopWidth: i === 0 ? 0 : 1, borderTopColor: colors.line }}>
-              <Pill label={won ? 'W' : 'L'} color={won ? colors.greenDim : 'rgba(255,77,79,0.15)'} textColor={won ? colors.green : colors.red} />
+              <Pill
+                label={level ? '—' : won ? 'W' : 'L'}
+                color={level ? colors.surfaceHi : won ? colors.greenDim : 'rgba(255,77,79,0.15)'}
+                textColor={resultColor} />
               <TeamBadge logo={opp?.logo} color={opp?.color ?? colors.muted} size={13} />
               <Txt k="body" numberOfLines={1} style={{ flex: 1, fontSize: 14 }}>{isHome ? 'vs' : '@'} {opp?.name ?? '—'}</Txt>
-              <Txt k="stat" color={won ? colors.green : colors.red}>{us}–{them}</Txt>
+              <Txt k="stat" color={resultColor}>{us}–{them}</Txt>
               {g.finishedAt ? <Txt k="body" color={colors.muted} style={{ fontSize: 11 }}>{dayLabel(g.finishedAt)}</Txt> : null}
             </Pressable>
           );

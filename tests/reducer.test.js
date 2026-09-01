@@ -626,14 +626,20 @@ ok('N7 an ordinary action produces no settings key',
 // rather than inventing a value for it.
 eq('N8 trackTurnovers untouched by the legacy migration',
    L(nFalse, 'lgN1').trackTurnovers, undefined);
-// GROUP M — tied final scores (F-11). A level game used to resolve as a home
-// win, because every winner check was `home >= away`. That silently credited
-// the home side a win and the away side a loss, which then flowed into win%,
-// streaks, top-5 award eligibility and standings[0] as "Champion". A 0-0 game
-// marked final took the same path, so this was reachable without anybody
-// mis-tapping anything.
+// GROUP M — a level final score. Basketball has no draws: a tie at the end of
+// regulation goes to overtime, which in this app means the scorekeeper adds a
+// period. So the record is W-L, there is no T column, and a level final has NO
+// RESULT - it counts towards neither team's wins, losses or streak, while its
+// points still count towards pf/pa because they were really scored.
+//
+// A level final is still reachable and still must not be guessed at: a game
+// marked final with no events at all is 0-0, and the tracker lets a scorekeeper
+// finish level after warning them. What it must never do is resolve as a home
+// win - the original F-11 bug, where every winner check read `home >= away` and
+// silently credited the home side a win and the away side a loss, feeding win%,
+// streaks, top-5 award eligibility and standings[0] as "Champion".
 // ===========================================================================
-let mt = d(S0, { t: 'ADD_LEAGUE', id: 'lgT', name: 'Ties', season: 'S1' });
+let mt = d(S0, { t: 'ADD_LEAGUE', id: 'lgT', name: 'Level', season: 'S1' });
 mt = d(mt, { t: 'ADD_TEAM', leagueId: 'lgT', name: 'Home', id: 'mH' });
 mt = d(mt, { t: 'ADD_TEAM', leagueId: 'lgT', name: 'Away', id: 'mA' });
 mt = d(mt, { t: 'ADD_PLAYER', leagueId: 'lgT', teamId: 'mH', name: 'H1', number: '1', id: 'mp1' });
@@ -647,25 +653,26 @@ evT('mA', 'mp2', 'fg2_make'); evT('mA', 'mp2', 'fg2_make'); evT('mA', 'mp2', 'fg
 mt = d(mt, { t: 'SET_GAME_STATUS', leagueId: 'lgT', gameId: 'gT', status: 'final' });
 
 const tieScore = gameScore(L(mt, 'lgT'), L(mt, 'lgT').games[0]);
-eq('M1 fixture really is tied', [tieScore.home, tieScore.away], [6, 6]);
+eq('M1 fixture really is level', [tieScore.home, tieScore.away], [6, 6]);
 
 const tt = standings(L(mt, 'lgT'));
 const tH = tt.find(r => r.team.id === 'mH');
 const tA = tt.find(r => r.team.id === 'mA');
-eq('M2 tie credits the home team no win', [tH.wins, tH.losses], [0, 0]);
-eq('M3 tie credits the away team no loss', [tA.wins, tA.losses], [0, 0]);
-eq('M4 tie counted as a tie for both sides', [tH.ties, tA.ties], [1, 1]);
-eq('M5 tie shows as T in the streak', [tH.streak, tA.streak], ['T1', 'T1']);
-eq('M6 tie is half a win in win%', winPctOf(tH.wins, tH.losses, tH.ties), 0.5);
-eq('M7 points for/against still recorded on a tie', [tH.pf, tH.pa, tA.pf, tA.pa], [6, 6, 6, 6]);
+eq('M2 a level final credits the home team no win', [tH.wins, tH.losses], [0, 0]);
+eq('M3 a level final credits the away team no loss', [tA.wins, tA.losses], [0, 0]);
+ok('M4 the standings row carries no tie count', !('ties' in tH) && !('ties' in tA));
+eq('M5 a level final does not appear in either streak', [tH.streak, tA.streak], ['\u2014', '\u2014']);
+eq('M6 win% ignores a game with no result', [winPctOf(tH.wins, tH.losses), winPctOf(tA.wins, tA.losses)], [0, 0]);
+eq('M7 points for/against are still recorded', [tH.pf, tH.pa, tA.pf, tA.pa], [6, 6, 6, 6]);
 
-// The win% ordering a tie has to sit inside: better than a loss, worse than a win.
-eq('M8 win% orders win > tie > loss',
-   [winPctOf(1, 0, 0), winPctOf(0, 0, 1), winPctOf(0, 1, 0)], [1, 0.5, 0]);
-eq('M9 winPctOf stays backward compatible with two arguments', winPctOf(1, 1), 0.5);
-eq('M10 winPctOf with no games played is 0', winPctOf(0, 0, 0), 0);
+// win% is now wins over DECIDED games, with no tie term at all.
+eq('M8 win% is wins over decided games',
+   [winPctOf(1, 0), winPctOf(1, 1), winPctOf(0, 1)], [1, 0.5, 0]);
+eq('M9 winPctOf with no games played is 0', winPctOf(0, 0), 0);
+eq('M10 a level game does not dilute win%: 1-0 with a level game alongside is still 1.000',
+   winPctOf(1, 0), 1);
 
-// A 0-0 game marked final is the same bug reached with no events at all.
+// A 0-0 game marked final is the same case reached with no events at all.
 let mz = d(S0, { t: 'ADD_LEAGUE', id: 'lgZ', name: 'Zero', season: 'S1' });
 mz = d(mz, { t: 'ADD_TEAM', leagueId: 'lgZ', name: 'Home', id: 'zH' });
 mz = d(mz, { t: 'ADD_TEAM', leagueId: 'lgZ', name: 'Away', id: 'zA' });
@@ -674,7 +681,8 @@ mz = d(mz, { t: 'SET_GAME_STATUS', leagueId: 'lgZ', gameId: 'gZ', status: 'final
 const zt = standings(L(mz, 'lgZ'));
 eq('M11 0-0 final is not a home win',
    [zt.find(r => r.team.id === 'zH').wins, zt.find(r => r.team.id === 'zA').losses], [0, 0]);
-eq('M12 0-0 final counts as a tie', zt.find(r => r.team.id === 'zH').ties, 1);
+eq('M12 0-0 final is not a loss for the home side either',
+   [zt.find(r => r.team.id === 'zH').losses, zt.find(r => r.team.id === 'zA').wins], [0, 0]);
 
 // Characterisation: a decided game must behave exactly as it did before.
 let md = d(S0, { t: 'ADD_LEAGUE', id: 'lgD', name: 'Decided', season: 'S1' });
@@ -687,18 +695,45 @@ md = d(md, { t: 'SET_GAME_STATUS', leagueId: 'lgD', gameId: 'gD', status: 'final
 const dt = standings(L(md, 'lgD'));
 const dA = dt.find(r => r.team.id === 'dA');
 const dH = dt.find(r => r.team.id === 'dH');
-eq('M13 away win still recorded as a win', [dA.wins, dA.losses, dA.ties], [1, 0, 0]);
-eq('M14 home loss still recorded as a loss', [dH.wins, dH.losses, dH.ties], [0, 1, 0]);
+eq('M13 away win still recorded as a win', [dA.wins, dA.losses], [1, 0]);
+eq('M14 home loss still recorded as a loss', [dH.wins, dH.losses], [0, 1]);
 eq('M15 decided game still sorts the winner first', dt[0].team.id, 'dA');
 eq('M16 streaks unchanged for decided games', [dA.streak, dH.streak], ['W1', 'L1']);
 
-// outcomeOf is the single place the winner is decided, replacing the inline
-// `home >= away` that five call sites had each copied.
-eq('M17 outcomeOf reports a home win', outcomeOf(10, 5), 'home');
-eq('M18 outcomeOf reports an away win', outcomeOf(5, 10), 'away');
-eq('M19 outcomeOf reports a tie', outcomeOf(7, 7), 'tie');
-eq('M20 outcomeOf treats 0-0 as a tie, not a home win', outcomeOf(0, 0), 'tie');
-eq('M21 outcomeOf never reports a winner on equal scores',
+// A level game must not break a streak either: it is not a result, so the run of
+// wins on both sides of it is one streak, not two.
+let ms = d(S0, { t: 'ADD_LEAGUE', id: 'lgS', name: 'Streak', season: 'S1' });
+ms = d(ms, { t: 'ADD_TEAM', leagueId: 'lgS', name: 'Home', id: 'sH' });
+ms = d(ms, { t: 'ADD_TEAM', leagueId: 'lgS', name: 'Away', id: 'sA' });
+ms = d(ms, { t: 'ADD_PLAYER', leagueId: 'lgS', teamId: 'sH', name: 'H1', number: '1', id: 'sp1' });
+ms = d(ms, { t: 'ADD_PLAYER', leagueId: 'lgS', teamId: 'sA', name: 'A1', number: '2', id: 'sp2' });
+const sGame = (gid, homePts, awayPts) => {
+  ms = d(ms, { t: 'CREATE_GAME', id: gid, leagueId: 'lgS', homeTeamId: 'sH', awayTeamId: 'sA' });
+  for (let n = 0; n < homePts / 2; n++)
+    ms = d(ms, { t: 'ADD_EVENT', leagueId: 'lgS', gameId: gid, teamId: 'sH', playerId: 'sp1', type: 'fg2_make', period: 1 });
+  for (let n = 0; n < awayPts / 2; n++)
+    ms = d(ms, { t: 'ADD_EVENT', leagueId: 'lgS', gameId: gid, teamId: 'sA', playerId: 'sp2', type: 'fg2_make', period: 1 });
+  ms = d(ms, { t: 'SET_GAME_STATUS', leagueId: 'lgS', gameId: gid, status: 'final' });
+};
+sGame('s1', 10, 4);   // home win
+sGame('s2', 6, 6);    // level - no result
+sGame('s3', 8, 2);    // home win
+const streakRows = standings(L(ms, 'lgS'));
+const sHrow = streakRows.find(r => r.team.id === 'sH');
+eq('M17 two wins and a level game is a 2-0 record', [sHrow.wins, sHrow.losses], [2, 0]);
+eq('M18 the level game does not interrupt the streak', sHrow.streak, 'W2');
+eq('M19 all three games count towards points for', sHrow.pf, 10 + 6 + 8);
+
+// outcomeOf still reports a level score as 'tie'. It is kept BECAUSE ties are no
+// longer a record: the box score, the final-score screen and the share card all
+// have to render a level game without inventing a winner, and any level final
+// already stored by an older build must keep rendering honestly.
+eq('M20 outcomeOf reports a home win', outcomeOf(10, 5), 'home');
+eq('M21 outcomeOf reports an away win', outcomeOf(5, 10), 'away');
+eq('M22 outcomeOf still reports a level score, so no consumer invents a winner',
+   outcomeOf(7, 7), 'tie');
+eq('M23 outcomeOf treats 0-0 as level, not a home win', outcomeOf(0, 0), 'tie');
+eq('M24 outcomeOf never reports a winner on equal scores',
    [outcomeOf(1, 1), outcomeOf(99, 99)], ['tie', 'tie']);
 
 // ===========================================================================

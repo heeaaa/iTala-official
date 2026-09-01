@@ -485,29 +485,41 @@ scorekeeper who turned misses **off** finds them switched back **on**.
 
 ---
 
-## P8. Tied games (F-11) - re-test, replaces R134
+## P8. A level score - no draws (F-11, then the W-L change request)
 
 `R134` ("a tie score at finish, handled sensibly") was too vague to fail. A level score used to be
-recorded as a **home win**. It is now a draw, and a 0-0 game marked final takes the same path, so
-this is reachable without anyone mis-tapping.
+recorded as a **home win** (F-11); it then became a recorded draw; it is now **no result at all**.
+Basketball goes to overtime rather than drawing, so the record is W-L and a level final counts
+towards neither team's wins, losses or streak - while its points still count towards PF/PA, because
+they were really scored. A 0-0 game marked final takes the same path, so this is reachable without
+anyone mis-tapping.
 
-- [ ] **T1** Play a game to a level score and finish it. Check Standings.
-      *Expect:* **neither** team gains a win or a loss. Both show a tie.
-- [ ] **T2** The standings record column reads **W-L-T**, and the tied game shows in the T column.
-- [ ] **T3** The streak column shows `T1` for both teams, not `W1`/`L1`.
-- [ ] **T4** PCT treats the draw as half a win, and the value agrees with where the row sits in the
-      table. A PCT that contradicts the sort order is the bug.
-- [ ] **T5** Create a game and mark it **final with no stats at all** (0-0).
-      *Expect:* a tie, not a home win. This used to give home a win **and** away a loss.
-- [ ] **T6** Team profile for a team with a draw: RECORD reads W-L-T, and **PPG / OPP PPG are not
-      inflated**. Ties now count toward games played; they used to be excluded while the drawn
-      game's points still counted (N-03).
-- [ ] **T7** Box score of a tied game: **both** team names and both scores are highlighted, not
+- [ ] **T1** Play a game to a level score and tap FINISH.
+      *Expect:* the "Scores are level" prompt, naming both teams and the score, offering
+      **Add period N+1** and **Finish level**.
+- [ ] **T2** Choose **Add period**. *Expect:* the period advances, the tracker stays open, no game
+      is finished. This is the overtime path and should be the normal answer.
+- [ ] **T3** Finish level anyway, then check Standings. *Expect:* **neither** team gains a win or a
+      loss, and the record column reads **W-L** with no T column anywhere.
+- [ ] **T4** The streak column is unchanged by the level game - a team on `W2` before it still
+      reads `W2`, not `W2` reset or a `T`.
+- [ ] **T5** PCT is wins over decided games, and agrees with where the row sits in the table. A PCT
+      that contradicts the sort order is the bug.
+- [ ] **T6** PF / PA / Diff **do** include the level game's points.
+- [ ] **T7** Create a game and mark it **final with no stats at all** (0-0).
+      *Expect:* no result for either side. This used to give home a win **and** away a loss.
+- [ ] **T8** Team profile for a team with a level game: RECORD reads **W-L**, and **PPG / OPP PPG
+      are not inflated** - games played is counted off the games themselves, so the level game's
+      points are divided by a games count that includes it (N-03 was the inverse of this).
+- [ ] **T9** Box score of a level game: **both** team names and both scores are highlighted, not
       just the home side.
-- [ ] **T8** Games-on-date card for a tied game: both rows highlighted equally.
-- [ ] **T9** Final Score screen for a tie: the "It's a tie!" message, no trophy line.
-- [ ] **T10** Player of the Game on a tie is drawn from **both** teams, so the best performer on
-      the away side can win it. It used to silently come from the home team only (N-04).
+- [ ] **T10** Games-on-date card for a level game: both rows highlighted equally.
+- [ ] **T11** Final Score screen for a level game: reads **"Level at the final buzzer"** with the
+      "No result recorded" line, and shows no trophy line.
+- [ ] **T12** Player of the Game on a level game is drawn from **both** teams, so the best
+      performer on the away side can win it. It used to silently come from the home team only (N-04).
+- [ ] **T13** A level game already stored by an older build (one that recorded it as a draw) still
+      opens, still shows its box score, and now sits outside both records rather than showing a T.
 - [ ] **T11** Share an achievement card from a tied game and confirm Player of the Game agrees
       with T10.
 - [ ] **T12** **Regression guard:** a normally decided game is completely unaffected. Winner gets
