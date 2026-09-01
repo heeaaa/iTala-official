@@ -450,6 +450,38 @@ for (const f of srcFiles) {
 
 
 // ---------------------------------------------------------------------------
+// CHECK 23 - a horizontal ScrollView that says `flexGrow: 0` must also say
+// `flexShrink: 0`.
+//
+// React Native's ScrollView applies `flexGrow: 1, flexShrink: 1` of its own
+// (Libraries/Components/ScrollView/ScrollView.js, `baseHorizontal`), so
+// `flexGrow: 0` overrides the GROW half only and the element stays shrinkable.
+// The intent is always "size to content", and half of it silently did not hold:
+// Home's live carousel was squeezed to about 83pt for a card whose content needs
+// about 101, and `overflow: 'scroll'` sliced "LIVE NOW" along the card's top
+// border and the location along the bottom. Every other child of that column is
+// a plain View, which defaults to flexShrink: 0, which is why the live card was
+// the only thing that clipped.
+//
+// A rendering test would catch this and the project has no renderer, so the
+// invariant is enforced on the source instead.
+// ---------------------------------------------------------------------------
+{
+  for (const file of ['src/screens/LeaguesScreen.tsx', 'src/screens/LeagueDetailScreen.tsx']) {
+    const src = read(file);
+    // Every `flexGrow: 0` in a style object, with the surrounding braces, so the
+    // check reads the same object that would carry the flexShrink.
+    const objects = src.match(/\{[^{}]*flexGrow:\s*0[^{}]*\}/g) ?? [];
+    for (const obj of objects) {
+      ok(`${file.split('/').pop()} pairs flexGrow: 0 with flexShrink: 0`,
+         /flexShrink:\s*0/.test(obj),
+         `"${obj.trim().slice(0, 70)}" - RN's ScrollView sets flexShrink: 1 itself, so `
+         + 'grow: 0 alone leaves it shrinkable and its content gets clipped');
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // CHECK 15 - the privacy policy must keep covering what the store declarations
 // depend on. Three things describe the same behaviour and must not disagree:
 // what the code does, the policy in site/privacy/, and the Apple/Google tables

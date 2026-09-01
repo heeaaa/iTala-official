@@ -219,7 +219,24 @@ Share this with the organizer. It can create exactly one league, then expires.`)
           showsHorizontalScrollIndicator={false}
           snapToAlignment="start"
           decelerationRate="fast"
-          style={{ flexGrow: 0, marginBottom: space(3) }}
+          // flexShrink: 0 is the load-bearing half, and its absence was a real
+          // bug: "LIVE NOW" was sliced along the card's top border and the
+          // location along the bottom.
+          //
+          // React Native's ScrollView applies `flexGrow: 1, flexShrink: 1` of
+          // its own (Libraries/Components/ScrollView/ScrollView.js,
+          // `baseHorizontal`). `flexGrow: 0` overrides the GROW half only, so
+          // the carousel stayed shrinkable - and this column overflows, because
+          // the league FlatList below wants far more height than the screen
+          // has. Yoga therefore squeezed the carousel to roughly 83pt for a card
+          // whose content needs about 101, and `overflow: 'scroll'` clipped the
+          // 9pt that spilled above and the 9pt below. Everything else in this
+          // column is a plain View, which defaults to flexShrink: 0, which is
+          // why the live card was the only thing that clipped.
+          //
+          // The FlatList absorbs the overflow instead, which is where it belongs:
+          // it scrolls.
+          style={{ flexGrow: 0, flexShrink: 0, marginBottom: space(3) }}
           contentContainerStyle={{ paddingHorizontal: space(4), gap: 10 }}>
           {liveRefs.map(ref => (
             <Pressable
