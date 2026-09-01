@@ -524,7 +524,7 @@ this is reachable without anyone mis-tapping.
 - [ ] **S3** The contact address actually receives mail. It is the only route by which someone who
       never installed the app can have their name removed.
 - [ ] **S4** Policy URL pasted into **both** store listings.
-- [ ] **S5** Policy content read side by side with the two declaration tables in `DEPLOYMENT.md`
+- [ ] **S5** Policy content read side by side with the two declaration tables in `docs/DEPLOYMENT.md`
       and confirmed to agree.
 - [ ] **S6** Location **not** declared on either store form.
 - [ ] **S7** Sponsor promo taps **are** declared (Apple Usage Data, Google App activity).

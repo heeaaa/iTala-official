@@ -298,8 +298,8 @@ prerequisite gotcha #2: email, name, photos, roster content and venue text, user
 the user and all App Functionality; plus sponsor promo tap counts as Usage Data, not linked; no
 tracking), a **privacy policy URL** (required, and it has to cover roster data about people who
 are not app users, who can read a roster, and how to get a name removed - `site/privacy/` does,
-and is filled in and ready to publish; deploy it per `site/README.md` and paste the resulting
-`https://<project>.pages.dev/privacy/` URL here **and** in the Play listing),
+and is filled in and ready to publish; it deploys from this repo via `wrangler.jsonc` - see
+`site/README.md` - so paste the deployed `/privacy/` URL here **and** in the Play listing),
 age rating, and category (**Sports**). Attach the
 build, then **Submit for Review**.
 Apple review typically takes 1–3 days.
@@ -384,7 +384,7 @@ You can also combine build + submit in one step with `eas build --platform all -
 - [ ] **Location NOT declared** on either form: the venue is user-typed text, not device location, and the app has no location permission or dependency
 - [ ] Data safety: encrypted in transit **Yes**, deletion requests **Yes** (Settings → Delete account)
 - [ ] `microphonePermission: false` and `cameraPermission: false` on the `expo-image-picker` plugin in `app.json`, so `RECORD_AUDIO`/`CAMERA` are stripped from the manifest (`node tests/run.js` checks this; confirm with `npx expo config --type introspect`)
-- [ ] Privacy policy deployed and its URL pasted into **both** store listings. Source is `site/privacy/index.html`; Cloudflare Pages project → output directory `site`, no build command
+- [ ] Privacy policy deployed and its URL pasted into **both** store listings. Source is `site/privacy/index.html`, published by the Cloudflare Worker `itala` from `wrangler.jsonc` (assets directory `site`, no build step). Confirm the deployed URL actually loads - it is the one link a store reviewer will click
 - [ ] Privacy policy content re-checked against the declaration tables so the three cannot drift, and it states plainly that **any signed-in session, including anonymous spectators, can read every roster** (that is what the `read_all_*` RLS policies do)
 - [ ] Position taken on children's data (age rating + Play target audience + a policy section)
 - [ ] Admin password live on the production project — either `select public.set_admin_password('…')` on a new project, or re-run `schema.sql` on an existing one (which migrates the old plaintext to a hash and keeps the same password). Verify by actually unlocking on a build
@@ -392,7 +392,10 @@ You can also combine build + submit in one step with `eas build --platform all -
 - [ ] Apple provider enabled in Supabase (bundle ID `com.bpbl.itala` in Client IDs) — Sign in with Apple works on a device build
 - [ ] Remove `host.exp.Exponent` from the Apple provider's Client IDs — it's a dev-only entry that lets Apple sign-in work inside Expo Go; real builds present `com.bpbl.itala` and must not keep the Expo Go audience allowlisted
 - [ ] Settings → Delete account verified end-to-end on a build (schema re-run so `delete_own_account` exists)
-- [ ] Supabase Site URL set to `itala://auth-callback` (not a dev exp:// URL)
+- [ ] **`supabase/schema.sql` re-run against production.** Beyond the admin password and `delete_own_account`, `rec_setup_game` now admits a password-elevated Super Admin (its session is anonymous, which the old `is_authed_user()` gate refused). Without the re-run the backup admin can fill in two rosters and only then be told the game did not save
+- [ ] **Drop-in game started end-to-end on a build**, both as a signed-in user and as the backup admin. A failure here now rolls the local game back rather than leaving a half-created one in the list, so the symptom is an honest error rather than a game that opens and refuses every write
+- [ ] Supabase Site URL set to `itala://auth-callback` (not a dev exp:// URL). A build's redirect **is** this URL, so Google sign-in needs no allowlist entry; the `exp://*` entries are for Expo Go only and can stay
+- [ ] Google **and** Apple sign-in both completed on a real build, not in Expo Go. Expo Go cannot exercise either faithfully - see docs/TROUBLESHOOTING.md
 - [ ] Category set to **Sports**; age rating completed
 - [ ] (Google personal account) 12 testers recruited for the 14-day closed test
 

@@ -2,24 +2,46 @@
 
 Plain static HTML. No build step, no dependencies, no framework. Both stores require a publicly
 reachable privacy policy URL, and keeping the policy in this repo means it sits next to the
-declaration tables in `DEPLOYMENT.md` that it has to agree with. Those are what drift.
+declaration tables in `docs/DEPLOYMENT.md` that it has to agree with. Those are what drift.
 
 ```
 site/
   index.html          minimal landing page
   privacy/index.html  the privacy policy
   style.css           shared styles, light and dark
-  _headers            Cloudflare Pages security headers
+  _headers            security headers, applied by Cloudflare to every response
+  .assetsignore       files here that are repo documentation, not published pages
 ```
 
-## Deploying to Cloudflare Pages
+## Deploying
 
-1. Cloudflare dashboard, Workers & Pages, Create, Pages, Connect to Git.
-2. Pick the `heeaaa/iTala-official` repository.
-3. Framework preset **None**. Build command **empty**. Output directory **`site`**.
-4. Deploy. The policy is then at `https://<project>.pages.dev/privacy/`.
-5. Paste that URL into both store listings. A custom domain can be attached later without changing
-   the path.
+The pages are published by the Cloudflare **Worker** named `itala`, connected to
+this repository, on every push. There is no build step - the Worker serves
+`site/` as static assets.
+
+The configuration is [`../wrangler.jsonc`](../wrangler.jsonc), in the repo rather
+than only in the dashboard. It has to be: Cloudflare's deploy command
+(`npx wrangler versions upload`) cannot know what to upload without it, and every
+branch build failed with
+
+```
+✘ [ERROR] Missing entry-point to Worker script or to assets directory
+```
+
+until it was checked in. Keeping it here also means a change to how the site
+deploys shows up in a diff.
+
+To verify a change before pushing:
+
+```bash
+npx wrangler@4 deploy --dry-run     # should read the assets directory, not error
+```
+
+Paste the deployed `/privacy/` URL into both store listings. A custom domain can
+be attached later without changing the path.
+
+`site/README.md` itself is excluded from the upload by `.assetsignore` - without
+that it would be served at `/README.md`.
 
 ## Operator and contact details
 
@@ -42,7 +64,7 @@ thing and must not disagree. If any of these change, change all three:
 
 - what the app stores, in `src/` and `supabase/schema.sql`
 - `site/privacy/index.html`
-- the two tables in `DEPLOYMENT.md`, prerequisite gotcha #2
+- the two tables in `docs/DEPLOYMENT.md`, prerequisite gotcha #2
 
 `tests/static.test.js` CHECK 15 asserts the policy still covers the topics the declarations depend
 on, so deleting a section fails the build rather than going unnoticed.

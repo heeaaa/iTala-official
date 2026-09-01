@@ -781,7 +781,7 @@ eq('M21 outcomeOf never reports a winner on equal scores',
 // KNOWN LIMITATION, asserted so it stays visible and cannot regress silently.
 // "Team 2" is genuinely ambiguous - structurally identical to "Pedro Santos 9" -
 // so the parser keeps treating a 1-3 digit bare tail as a jersey number. A team
-// named "Team 2" still imports as a player. Flagged in CODE_REVIEW.md F-12.
+// named "Team 2" still imports as a player. Flagged in docs/CODE_REVIEW.md F-12.
 {
   const r = parseRoster('Team 2\n\nAna Lim-4');
   ok('O13 [known limitation] a short "Name N" team header is still read as a player',
