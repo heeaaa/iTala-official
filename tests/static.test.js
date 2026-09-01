@@ -230,6 +230,12 @@ ok('DEPLOYMENT.md keeps the zip-apply commands', read('DEPLOYMENT.md').includes(
   ok('the rethrow is keyed off the action, not the message text',
      /MUST_NOT_FAIL_SILENTLY\.has\(action\.t\)/.test(sync),
      'a network TypeError carries no label for a message test to match');
+  ok('a failed all-or-nothing bundle is rolled back locally',
+     /t: 'ROLLBACK_BUNDLE'/.test(store) && /reducer\(stateRef\.current, rollback\)/.test(store),
+     'a half-created drop-in game that only exists locally refuses every later write');
+  ok('the rollback only drops the league when this action created it',
+     /removeLeague: isGame && !!action\.ensureLeague/.test(store),
+     'otherwise a failed game takes an existing space and its history with it');
   ok('event pushes look their row up by id, never by position',
      !/events\[l\.events\.length - 1\]/.test(sync),
      'canonical ordering means the row an action created is not always last');

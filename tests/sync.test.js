@@ -89,6 +89,19 @@ class Device {
         failPending(touched);
         this.syncState = 'error';
         this.pushErrors.push(String(e && e.message ? e.message : e));
+        // All-or-nothing bundles roll their local half back, exactly as
+        // StoreProvider does. tests/static.test.js checks the app still does it.
+        if (action.t === 'REC_SETUP_GAME' || action.t === 'BULK_IMPORT_ROSTER') {
+          const isGame = action.t === 'REC_SETUP_GAME';
+          this.state = reducer(this.state, {
+            t: 'ROLLBACK_BUNDLE',
+            leagueId: action.leagueId,
+            gameIds: isGame ? [action.gameId] : [],
+            teamIds: action.teams.map(t => t.id),
+            playerIds: action.teams.flatMap(t => t.players.map(pl => pl.id)),
+            removeLeague: isGame && !!action.ensureLeague,
+          });
+        }
       },
     );
     this.inflight.push(p);
@@ -641,6 +654,80 @@ async function s15_ledger_retires_confirmed_writes() {
   eq('S15.3 without changing the score', A.points(), 10);
 }
 
+
+/* ==========================================================================
+   GROUP S16 - an all-or-nothing bundle that fails must not survive locally
+   ==========================================================================
+   Reported: the drop-in setup showed "Could not save ... REC_setup_game: Sign
+   in to start a drop-in game", and the game was in the list afterwards anyway.
+   Opening it worked; every write inside it then failed, because none of the
+   rows it referenced existed server-side. Cancelling the alert changed nothing,
+   because nothing ever undid the local half.
+
+   rec_setup_game and bulk_import_roster are each ONE server transaction, so a
+   failure means none of it was written. The local state has to match.
+*/
+
+async function s16_failed_drop_in_rolls_back() {
+  const server = new FakeServer();
+  const A = new Device('A', server);
+
+  server.failures['rpc:rec_setup_game'] = { message: 'Sign in to start a drop-in game.' };
+
+  A.dispatch({
+    t: 'REC_SETUP_GAME',
+    leagueId: 'rec-me', gameId: 'gRec', location: 'Gym',
+    ensureLeague: { name: 'Private Drop-In Games' },
+    teams: [
+      { id: 'tA', name: 'Alpha', color: '#111', players: [{ id: 'pa', name: 'A' }] },
+      { id: 'tB', name: 'Bravo', color: '#222', players: [{ id: 'pb', name: 'B' }] },
+    ],
+  });
+
+  // Before the push settles the game is on screen - that is the point of an
+  // optimistic write, and it is correct.
+  ok('S16.1 the game shows immediately', !!A.state.leagues.find(l => l.id === 'rec-me'));
+
+  await A.settle();
+
+  eq('S16.2 the failure is reported', A.syncState, 'error');
+  eq('S16.3 the server holds no game', server.count('games'), 0);
+  eq('S16.4 nor any teams or players', [server.count('teams'), server.count('players')], [0, 0]);
+  ok('S16.5 the half-created space is gone locally too',
+     !A.state.leagues.find(l => l.id === 'rec-me'),
+     JSON.stringify(A.state.leagues.map(l => l.id)));
+
+  // A pull must not resurrect it either.
+  await A.pull();
+  ok('S16.6 and a pull does not bring it back', !A.state.leagues.find(l => l.id === 'rec-me'));
+}
+
+/* The same failure inside a space that ALREADY existed must take only the
+   bundle's own rows, never the space or anything previously in it. */
+async function s17_rollback_spares_an_existing_space() {
+  const server = new FakeServer();
+  const A = await seed(server);
+
+  // A drop-in game added to the existing league, which then fails to save.
+  server.failures['rpc:rec_setup_game'] = { message: 'Scorekeeper access required.' };
+  A.dispatch({
+    t: 'REC_SETUP_GAME',
+    leagueId: 'lg1', gameId: 'gRec', location: 'Gym',
+    teams: [
+      { id: 'tNew1', name: 'Alpha', color: '#111', players: [{ id: 'pNew1', name: 'A' }] },
+      { id: 'tNew2', name: 'Bravo', color: '#222', players: [{ id: 'pNew2', name: 'B' }] },
+    ],
+  });
+  await A.settle();
+
+  const l = A.league();
+  ok('S17.1 the existing league survives', !!l);
+  eq('S17.2 its original teams are untouched', l.teams.map(t => t.id), ['tH', 'tA']);
+  eq('S17.3 its original players are untouched', l.players.map(p => p.id), ['p1', 'p2']);
+  eq('S17.4 its original game is untouched', l.games.map(g => g.id), ['g1']);
+  ok('S17.5 the failed bundle left no game behind', !l.games.some(g => g.id === 'gRec'));
+}
+
 /* --------------------------------------------------------------------------- */
 
 const TESTS = [
@@ -659,6 +746,8 @@ const TESTS = [
   ['S13 failed push pins the board', s13_failed_push_pins_the_local_value],
   ['S14 rapid undo/redo burst', s14_rapid_undo_redo_burst],
   ['S15 ledger retires confirmed writes', s15_ledger_retires_confirmed_writes],
+  ['S16 failed drop-in rolls back', s16_failed_drop_in_rolls_back],
+  ['S17 rollback spares an existing space', s17_rollback_spares_an_existing_space],
 ];
 
 (async () => {

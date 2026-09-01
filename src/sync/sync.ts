@@ -460,6 +460,14 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
       case 'HYDRATE':
         // Local hydrate only — no server write.
         return;
+
+      case 'ROLLBACK_BUNDLE':
+        // Local only, and deliberately so. This action exists BECAUSE the server
+        // write failed: rec_setup_game and bulk_import_roster are single
+        // transactions, so nothing was written and there is nothing to delete.
+        // Pushing anything here would risk removing rows a retry had since
+        // succeeded in creating.
+        return;
     }
   } catch (e: unknown) {
     // Network or auth errors should never crash the UI. They'll reconverge on

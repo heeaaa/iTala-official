@@ -157,6 +157,9 @@ function makeClient(server) {
     async rpc(name, args) {
       await wait(server.delayFor(`rpc:${name}`));
       server.log.push({ op: 'rpc', name, payload: clone(args) });
+      const f = server.failures[`rpc:${name}`];
+      if (f === 'network') throw new TypeError('Network request failed');
+      if (f) return { data: null, error: { message: f.message || String(f) } };
       switch (name) {
         case 'create_league':
           if (!server.has('leagues', args.p_id)) {

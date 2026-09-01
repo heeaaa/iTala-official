@@ -45,6 +45,21 @@ async function waitForSession(sb: NonNullable<ReturnType<typeof getSupabase>>, m
   });
 }
 
+/** A sync failure, said in a way that points at the right thing to check. */
+function describeSyncFailure(e: unknown): string {
+  const msg = (e as Error)?.message ?? String(e ?? '');
+  if (/network request failed|failed to fetch/i.test(msg)) {
+    return "The app couldn't reach the server. Check this device's connection and try again.";
+  }
+  if (/sign in to start a drop-in game/i.test(msg)) {
+    return 'Starting a drop-in game needs an account. Sign in and try again.';
+  }
+  if (/scorekeeper access required/i.test(msg)) {
+    return "You don't have scoring rights in that space.";
+  }
+  return msg;
+}
+
 // gameId -> expiry timestamp. Lineups written locally are protected from being
 // overwritten by a lagging realtime echo until the expiry passes.
 const lineupGuard = new Map<string, number>();
@@ -127,6 +142,10 @@ export type Action =
   | { t: 'DUPLICATE_LEAGUE'; sourceLeagueId: string; newLeagueId: string; name: string; season: string }
   | { t: 'SET_LEAGUE_SETTINGS'; leagueId: string; trackMisses?: boolean; trackTurnovers?: boolean; isClosed?: boolean; isArchived?: boolean }
   | { t: 'REC_SETUP_GAME'; leagueId: string; gameId: string; location?: string; trackMisses?: boolean; trackTurnovers?: boolean; createdBy?: string; ensureLeague?: { name: string; isShared?: boolean }; teams: [RecTeamInput, RecTeamInput] }
+  // Undo the local half of an all-or-nothing bundle whose server write failed.
+  // Local-only: the rows this removes never reached the server, so there is
+  // nothing to delete there and nothing to push. See the dispatch wrapper.
+  | { t: 'ROLLBACK_BUNDLE'; leagueId: string; gameIds: string[]; teamIds: string[]; playerIds: string[]; removeLeague?: boolean }
 
 const initial: AppState = { leagues: [] };
 
@@ -517,6 +536,32 @@ export function reducer(state: AppState, a: Action): AppState {
         }
         return { ...l, events, games };
       });
+
+    case 'ROLLBACK_BUNDLE': {
+      // A drop-in game or roster import is all-or-nothing: rec_setup_game and
+      // bulk_import_roster are single transactions, so a failure means the
+      // server has none of it. Leaving the local half behind is what produced
+      // the reported state - a game that appears in the list, opens, and then
+      // refuses every write because nothing it references exists server-side.
+      // Cancelling the alert did not undo it either, because nothing ever did.
+      if (a.removeLeague) {
+        return { ...state, leagues: state.leagues.filter(l => l.id !== a.leagueId) };
+      }
+      const games = new Set(a.gameIds);
+      const teams = new Set(a.teamIds);
+      const players = new Set(a.playerIds);
+      return mapLeague(state, a.leagueId, l => ({
+        ...l,
+        games: l.games.filter(g => !games.has(g.id)),
+        events: l.events.filter(e => !games.has(e.gameId)),
+        teams: l.teams
+          .filter(t => !teams.has(t.id))
+          .map(t => (t.playerIds.some(id => players.has(id))
+            ? { ...t, playerIds: t.playerIds.filter(id => !players.has(id)) }
+            : t)),
+        players: l.players.filter(pl => !players.has(pl.id)),
+      }));
+    }
 
     case 'DELETE_GAME':
       return mapLeague(state, a.leagueId, l => ({
@@ -944,13 +989,41 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             // badge stays red, rather than the board quietly reverting later.
             failPending(touchedEventIds);
             setSyncState('error');
-            // Setting up a drop-in game or importing a roster is all-or-nothing.
-            // If it didn't save, say so now rather than letting the user walk
-            // into a half-loaded game later.
+
+            // Setting up a drop-in game or importing a roster is all-or-nothing
+            // on the server: both are single transactions, so a failure means
+            // NONE of it was written. Keeping the local half is therefore not
+            // "offline-first", it is a lie - the reported symptom was a game
+            // that showed up in the list, opened, and then refused every write,
+            // with Cancel on the alert changing nothing because nothing ever
+            // undid it. Roll the local rows back so the app's state matches the
+            // server's, and say plainly that nothing was saved.
+            //
+            // If the write did land and only the reply was lost, the next pull
+            // brings it back - the wrong guess in this direction is recoverable
+            // and the wrong guess in the other is not.
             if (action.t === 'REC_SETUP_GAME' || action.t === 'BULK_IMPORT_ROSTER') {
+              const isGame = action.t === 'REC_SETUP_GAME';
+              const rollback: Action = {
+                t: 'ROLLBACK_BUNDLE',
+                leagueId: action.leagueId,
+                gameIds: isGame ? [action.gameId] : [],
+                teamIds: action.teams.map(t => t.id),
+                playerIds: action.teams.flatMap(t => t.players.map(p => p.id)),
+                // Only when THIS action created the league. Anything else would
+                // take an existing space (and its history) down with it.
+                removeLeague: isGame && !!action.ensureLeague,
+              };
+              // Keep the ref in step with the reducer, as the main dispatch path
+              // does: a write issued before the next render must not be computed
+              // against a state that still contains the rows just rolled back.
+              stateRef.current = reducer(stateRef.current, rollback);
+              baseDispatch(rollback);
               Alert.alert(
-                'Could not save',
-                `${action.t === 'REC_SETUP_GAME' ? "This drop-in game didn't save." : "The roster didn't import."} Check your connection and try again.\n\n${(e as Error)?.message ?? ''}`.trim(),
+                isGame ? "Drop-in game not started" : "Roster not imported",
+                `${isGame
+                  ? 'Nothing was saved, so the game has been removed rather than left half-created.'
+                  : 'Nothing was imported, so the partial roster has been removed.'}\n\n${describeSyncFailure(e)}`,
               );
             }
           });
