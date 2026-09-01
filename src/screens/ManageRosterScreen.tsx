@@ -62,11 +62,29 @@ export default function ManageRosterScreen({ route, navigation }: ScreenProps<'M
           />
           <Button title="Add" onPress={addTeam} style={{ paddingVertical: 12 }} />
         </View>
-        <Pressable onPress={() => setOpponentOnly(v => !v)} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
-          <View style={{ width: 20, height: 20, borderRadius: 5, borderWidth: 2, borderColor: opponentOnly ? colors.accent : colors.line, backgroundColor: opponentOnly ? colors.accent : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
-            {opponentOnly ? <Txt k="body" color="#FFFFFF">✓</Txt> : null}
+        {/* "Track as opponent only (score, no player stats)" named the setting
+            without saying what it gets you, so the only way to find out was to
+            create a team and see. Say what it is FOR - the visiting side whose
+            roster you do not have - and what changes: one tap logs the whole
+            team's basket, and there is no box score for them. */}
+        <Pressable
+          onPress={() => setOpponentOnly(v => !v)}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: opponentOnly }}
+          accessibilityLabel="Score only, no player stats"
+          accessibilityHint="For an opponent whose roster you do not have. Their points are logged as a team total instead of per player."
+          style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginTop: 12, paddingVertical: 4 }}>
+          <View style={{ width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: opponentOnly ? colors.accent : colors.line, backgroundColor: opponentOnly ? colors.accent : 'transparent', alignItems: 'center', justifyContent: 'center', marginTop: 1 }}>
+            {opponentOnly ? <Txt k="body" color={colors.bg}>✓</Txt> : null}
           </View>
-          <Txt k="body" color={colors.muted}>Track as opponent only (score, no player stats)</Txt>
+          <View style={{ flex: 1 }}>
+            <Txt k="body">Score only, no player stats</Txt>
+            <Txt k="body" color={colors.muted} style={{ fontSize: 13, marginTop: 2 }}>
+              For a visiting side whose roster you don&apos;t have. You add no players, and in the
+              live tracker one tap logs the whole team&apos;s basket. They get a score and a
+              W-L record, but no individual stats and no box score.
+            </Txt>
+          </View>
         </Pressable>
         </>)}
 

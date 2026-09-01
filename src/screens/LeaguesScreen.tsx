@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
-import { View, FlatList, Pressable, Alert, TextInput, ScrollView, Dimensions, RefreshControl, ActivityIndicator } from 'react-native';
+import { View, FlatList, Pressable, Alert, TextInput, ScrollView, useWindowDimensions, RefreshControl, ActivityIndicator } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Screen, Txt, Card, Button, Pill, Empty, Wordmark, PasswordModal, LivePip,
   ProfileButton, ProfileSheet, InviteCodeModal, SyncBadge, OnboardingSheet, PromoCard,
@@ -9,8 +10,6 @@ import { useStore } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
 import { colors, space, font, radius } from '../theme';
 import { ScreenProps } from '../navigation';
-
-const SCREEN_W = Dimensions.get('window').width;
 
 // Tap the wordmark this many times (with <1.5s between taps) to reveal the
 // hidden password lock — the emergency admin backup when Google sign-in or
@@ -33,6 +32,28 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
   const [codeOpen, setCodeOpen] = useState(false);
   const [codeBusy, setCodeBusy] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
+  // Measured height of the bottom action bar, so the list can reserve exactly
+  // that much room instead of a hard-coded guess. See the bar's own comment.
+  const [barHeight, setBarHeight] = useState(0);
+
+  // Live-card width from the CURRENT window, not from the width at launch.
+  //
+  // This was `const SCREEN_W = Dimensions.get('window').width` at module scope,
+  // read once when the bundle loaded and never again. `app.json` sets
+  // `supportsTablet: true`, and an iPad window is resized at runtime by Split
+  // View, Slide Over and Stage Manager - so the cards kept the width the app
+  // launched at and stopped matching the container they sit in. `orientation:
+  // "portrait"` does not save it either: that constrains rotation, not the
+  // multitasking window. useWindowDimensions re-renders on every resize.
+  const { width: windowW } = useWindowDimensions();
+
+  // The bar sits at the very bottom edge, so it owes the home indicator its
+  // room. `Screen` takes only the TOP safe-area edge (the nav header covers the
+  // notch elsewhere), which left the fixed space(6) = 24pt to stand in for a
+  // 34pt indicator inset. The floor keeps the old spacing on devices that
+  // report no inset at all.
+  const insets = useSafeAreaInsets();
+  const barBottomPad = Math.max(insets.bottom + space(3), space(6));
 
   // Hidden-gesture counter (10 quick taps on the iTala wordmark).
   const tapCount = useRef(0);
@@ -216,14 +237,31 @@ Share this with the organizer. It can create exactly one league, then expires.`)
           showsHorizontalScrollIndicator={false}
           snapToAlignment="start"
           decelerationRate="fast"
-          style={{ flexGrow: 0, marginBottom: space(3) }}
+          // flexShrink: 0 is the load-bearing half, and its absence was a real
+          // bug: "LIVE NOW" was sliced along the card's top border and the
+          // location along the bottom.
+          //
+          // React Native's ScrollView applies `flexGrow: 1, flexShrink: 1` of
+          // its own (Libraries/Components/ScrollView/ScrollView.js,
+          // `baseHorizontal`). `flexGrow: 0` overrides the GROW half only, so
+          // the carousel stayed shrinkable - and this column overflows, because
+          // the league FlatList below wants far more height than the screen
+          // has. Yoga therefore squeezed the carousel to roughly 83pt for a card
+          // whose content needs about 101, and `overflow: 'scroll'` clipped the
+          // 9pt that spilled above and the 9pt below. Everything else in this
+          // column is a plain View, which defaults to flexShrink: 0, which is
+          // why the live card was the only thing that clipped.
+          //
+          // The FlatList absorbs the overflow instead, which is where it belongs:
+          // it scrolls.
+          style={{ flexGrow: 0, flexShrink: 0, marginBottom: space(3) }}
           contentContainerStyle={{ paddingHorizontal: space(4), gap: 10 }}>
           {liveRefs.map(ref => (
             <Pressable
               key={ref.gameId}
               onPress={() => navigation.navigate('LiveGame', { leagueId: ref.leagueId, gameId: ref.gameId, spectator: !canScoreGame(ref.league, ref.game) })}
               style={{
-                width: liveRefs.length === 1 ? SCREEN_W - space(4) * 2 : SCREEN_W * 0.78,
+                width: liveRefs.length === 1 ? windowW - space(4) * 2 : windowW * 0.78,
                 backgroundColor: colors.surface, borderRadius: 14, padding: 14,
                 borderWidth: 1, borderColor: colors.brandTeal,
                 flexDirection: 'row', alignItems: 'center', gap: 12,
@@ -261,7 +299,11 @@ Share this with the organizer. It can create exactly one league, then expires.`)
       <FlatList
         data={leagueList}
         keyExtractor={l => l.id}
-        contentContainerStyle={{ flexGrow: 1, paddingHorizontal: space(4), paddingBottom: role === 'guest' ? space(10) : (isAdmin ? space(52) : space(36)) }}
+        // Measured, not guessed: `barHeight` comes from the action bar's own
+        // onLayout, plus a gap so the last row clears it rather than touching it.
+        // The space(52)/space(36) guesses this replaces were 50px short for a
+        // Super Admin, which is what buried the archived-leagues footer.
+        contentContainerStyle={{ flexGrow: 1, paddingHorizontal: space(4), paddingBottom: role === 'guest' ? space(10) : barHeight + space(4) }}
         refreshControl={synced ? <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.brandTeal} colors={[colors.brandTeal]} /> : undefined}
         ListHeaderComponent={(() => {
           const recs = visibleLeagues.filter(l =>
@@ -366,19 +408,35 @@ Share this with the organizer. It can create exactly one league, then expires.`)
       />
 
       {role !== 'guest' && (
-        <View style={{
-          position: 'absolute', left: 0, right: 0, bottom: 0,
-          paddingHorizontal: space(4), paddingTop: space(3), paddingBottom: space(6), gap: 10,
-          backgroundColor: colors.bg, borderTopWidth: 1, borderTopColor: colors.line,
-        }}>
-          {isAdmin && (
-            <Button title="🎟  Create league-creation code" kind="ghost" onPress={() => { void onMintCode(); }} />
-          )}
-          {isAdmin && (
-            <Button title="📣  Sponsor promos" kind="ghost" onPress={() => navigation.navigate('ManagePromos')} />
-          )}
-          <Button title="🏀  Recreational / Drop-In Game" kind="ghost" onPress={() => navigation.navigate('RecGame')} />
-          <Button title="+  New League" onPress={onNewLeague} />
+        // ONE row, the same for every role.
+        //
+        // This used to be a stack of full-width buttons that grew with the
+        // user's rights: two for a signed-in user, FOUR for a Super Admin. At
+        // four it stood 258px tall while the list below it reserved only
+        // space(52) = 208px, so the last 50px of the list - which is exactly
+        // where the "Archived leagues" footer sits - was permanently underneath
+        // the bar and could not be scrolled into view. A Super Admin could not
+        // reach their own archived leagues at all.
+        //
+        // Two fixes, because either alone would leave the trap in place:
+        //   * the two Super-Admin-only tools moved into the profile sheet,
+        //     where Settings and the invite code already live, so the bar is a
+        //     constant height for everyone and reads like a normal app;
+        //   * the list's bottom padding is now MEASURED off this bar rather
+        //     than guessed, so no future button can outgrow it again.
+        <View
+          onLayout={e => {
+            const h = Math.round(e.nativeEvent.layout.height);
+            setBarHeight(prev => (Math.abs(prev - h) > 1 ? h : prev));
+          }}
+          style={{
+            position: 'absolute', left: 0, right: 0, bottom: 0,
+            paddingHorizontal: space(4), paddingTop: space(3), paddingBottom: barBottomPad,
+            flexDirection: 'row', gap: 10,
+            backgroundColor: colors.bg, borderTopWidth: 1, borderTopColor: colors.line,
+          }}>
+          <Button title="🏀  Drop-In" kind="ghost" style={{ flex: 1 }} onPress={() => navigation.navigate('RecGame')} />
+          <Button title="+  New League" style={{ flex: 1 }} onPress={onNewLeague} />
         </View>
       )}
 
@@ -402,6 +460,12 @@ Share this with the organizer. It can create exactly one league, then expires.`)
         onSettings={() => { setSheetOpen(false); navigation.navigate('Settings'); }}
         onAbout={onAbout}
         onEnterCode={user ? () => { setSheetOpen(false); setCodeError(null); setCodeOpen(true); } : undefined}
+        // Super-Admin-only tools. They used to be two more full-width buttons in
+        // the bottom bar, which is what pushed it past the room the list
+        // reserved. They belong here with Settings and the invite code: rarely
+        // used, and nothing to do with starting a game.
+        onMintCode={isAdmin ? () => { void onMintCode(); } : undefined}
+        onPromos={isAdmin ? () => { setSheetOpen(false); navigation.navigate('ManagePromos'); } : undefined}
       />
 
       <InviteCodeModal

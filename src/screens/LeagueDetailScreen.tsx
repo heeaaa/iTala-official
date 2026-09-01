@@ -282,8 +282,15 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
                 return (
                   <>
                     {league.teams.length >= 3 && (
+                      // flexShrink: 0 alongside flexGrow: 0 - see the live
+                      // carousel in LeaguesScreen. RN's ScrollView sets
+                      // flexShrink: 1 itself, so "grow: 0" alone does not mean
+                      // "size to content". Harmless here (this row sits inside a
+                      // vertical ScrollView, which is unbounded in height, so
+                      // nothing squeezes it) and kept identical so the idiom is
+                      // one thing rather than two.
                       <ScrollView horizontal showsHorizontalScrollIndicator={false}
-                        style={{ marginBottom: space(3), flexGrow: 0 }} contentContainerStyle={{ gap: 8, paddingRight: space(2) }}>
+                        style={{ marginBottom: space(3), flexGrow: 0, flexShrink: 0 }} contentContainerStyle={{ gap: 8, paddingRight: space(2) }}>
                         <TeamChip label="All teams" selected={teamFilter === null} onPress={() => setTeamFilter(null)} />
                         {teamsFavFirst.map(t => (
                           <TeamChip key={t.id} label={t.name} logo={t.logo} color={t.color}
