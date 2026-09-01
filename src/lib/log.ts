@@ -39,6 +39,34 @@ export function devWarn(...args: unknown[]): void {
 }
 
 /**
+ * Development-only trace of the live game-state lifecycle.
+ *
+ * The bug class this app kept producing - a committed stat that reverts on its
+ * own seconds later - is invisible in a stack trace and almost invisible on
+ * screen: by the time anyone looks, the only evidence is a score that is wrong.
+ * What makes it diagnosable is a single ordered stream naming every point state
+ * can move: the action, the snapshot tick it was reconciled against, the push
+ * that settled, and above all the snapshot that was REFUSED.
+ *
+ * One line per event, fixed field order, so the sequence reads at a glance:
+ *
+ *   [state] ACTION   t=ADD_EVENT game=g1 tokens=add:mtik9wk
+ *   [state] PERSIST  ok t=ADD_EVENT tokens=add:mtik9wk
+ *   [state] SNAPSHOT accepted at=44 leagues=2 source=realtime
+ *   [state] PULL     queued source=realtime
+ *   [state] SNAPSHOT REJECTED at=41 applied=44 reason=stale-snapshot source=auth:SIGNED_IN
+ *
+ * That last line is the one worth knowing exists. It is what a reverting
+ * scoreboard used to look like from the inside, and it now names itself.
+ *
+ * Dev-only on purpose: it is one line per tap, which is noise a release build
+ * has no use for. A real failure still goes through `warn` and survives.
+ */
+export function trace(topic: string, ...args: unknown[]): void {
+  if (isDev()) console.log(`[state] ${topic}`, ...args);
+}
+
+/**
  * A real failure, kept in release builds on purpose.
  *
  * These are the lines that make a user's bug report actionable - a sign-in that

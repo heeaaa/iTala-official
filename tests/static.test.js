@@ -212,19 +212,88 @@ ok('docs/DEPLOYMENT.md keeps the zip-apply commands', read('docs/DEPLOYMENT.md')
      /stampActionIds\(\s*stateRef\.current/.test(store),
      'the reducer, the push and the ledger must all name the same row');
   ok('dispatch records the write in the pending ledger',
-     /recordPending\(action, next\)/.test(store),
+     /recordPending\(action, prev, next\)/.test(store),
      'without a ledger entry a snapshot older than the tap overwrites it');
+  ok('the ledger is given both sides of the change, not just the result',
+     /const prev = stateRef\.current;/.test(store) && /const next = reducer\(prev, action\)/.test(store),
+     'the game-row half of the ledger is found by diffing prev against next');
   ok('a settled push tells the ledger which way it went',
-     /confirmPending\(touchedEventIds\)/.test(store) && /failPending\(touchedEventIds\)/.test(store),
+     /confirmPending\(pushTokens\)/.test(store) && /failPending\(pushTokens\)/.test(store),
      'an entry that is never confirmed pins forever; one confirmed on failure loses the stat');
+  ok('the ledger settles by push token, not by bare event id',
+     /const pushTokens = recordPending\(/.test(store) &&
+     /eventToken = \(op: 'add' \| 'remove', eventId: string\)/.test(pend),
+     "an add and the undo of the same row shared one slot, so the INSERT's " +
+     "acknowledgement retired the UNDO and the basket came back");
   ok('every server hydrate carries the tick its fetch started at',
-     !/baseDispatch\(\{ t: 'HYDRATE', state: \{ leagues: remote\.leagues \} \}\)/.test(store),
+     !/baseDispatch\(\{ t: 'HYDRATE', state: \{ leagues: remote\.leagues \} \}\)/.test(store) &&
+     !/baseDispatch\(\{ t: 'HYDRATE', state: \{ leagues \} \}\)(?!.*snapshotAt)/.test(store),
      "a HYDRATE without snapshotAt skips reconciliation and clobbers pending writes");
   ok('the snapshot tick is taken before the fetch, not after',
      /const at = beginSnapshot\(\);\s*\n\s*const remote = await fetchAllState/.test(store),
      'a tick taken after the read would make a stale snapshot look current');
   ok('HYDRATE reconciles events against the ledger',
      /reconcileLeagueEvents\(l\.id, l\.events, a\.snapshotAt\)/.test(store));
+  ok('HYDRATE reconciles the game rows too',
+     /reconcileLeagueGames\(l\.id, migrated\.games, a\.snapshotAt, localLeagues\.get\(l\.id\)\?\.games\)/.test(store),
+     'lineups, substitutions and the period need the same ordering guarantee as a basket, '
+     + 'and the local rows are what stops a pinned write resurrecting a rolled-back game');
+  ok('the clock-based lineup guard is gone',
+     !/LINEUP_GUARD_MS|isLineupGuarded/.test(store),
+     'a timed tombstone is too short for a slow push and wrong once it expires');
+
+  // ---- one owner for every server pull -----------------------------------
+  // Five uncoordinated pull sites (boot, boot retry, post-auth re-pull, the
+  // realtime refetch, pull-to-refresh) is all it takes to lose a committed stat:
+  // the older reply wins by arriving last, after the newer one has legitimately
+  // retired the ledger entry protecting the write.
+  ok('there is exactly one place that fetches server state',
+     (store.match(/await fetchAllState\(/g) ?? []).length === 1,
+     'concurrent pulls deliver out of order and the older reply wins');
+  ok('every pull goes through the single owner',
+     /const pullState = useCallback\(/.test(store) &&
+     /pullState\('boot'\)/.test(store) && /pullState\('boot-retry'\)/.test(store) &&
+     /pullState\('realtime'\)/.test(store) && /pullState\('manual-refresh'\)/.test(store) &&
+     /pullState\(`auth:\$\{event\}`\)/.test(store));
+  ok('a pull requested while one is running queues a follow-up',
+     /gate\.trailing = true/.test(store) && /\} while \(gate\.trailing\)/.test(store),
+     'dropping it leaves the device holding a snapshot older than the change that asked for it');
+  ok('a snapshot older than one already applied is refused',
+     /if \(!acceptSnapshot\(at\)\)/.test(store) &&
+     /snapshotStarted <= appliedAt/.test(pend),
+     'this is the out-of-order revert the ledger alone cannot catch');
+  // The reducer body, from its declaration to the context type that follows it.
+  const reducerFrom = store.indexOf('export function reducer');
+  const reducerTo = store.indexOf('interface Ctx {');
+  const reducerBody = reducerFrom >= 0 && reducerTo > reducerFrom
+    ? store.slice(reducerFrom, reducerTo) : '';
+  ok('the reducer body was locatable', reducerBody.length > 0,
+     'the two checks below inspect it and would silently pass on an empty string');
+  ok('the watermark is claimed outside the reducer',
+     !/acceptSnapshot/.test(reducerBody),
+     'React may run a reducer more than once for the same action, and claiming '
+     + 'the watermark twice would reject the second run');
+  // Scoped to the EVENT timestamp on purpose. The reducer also reads the clock
+  // for `createdAt`, `scheduledAt` and `finishedAt`, which drift by a
+  // millisecond between the two runs in exactly the same way - but the server's
+  // value for those wins on the next hydrate and nothing compares them for
+  // equality, whereas `ts` is half of the (ts, id) key that decides which row
+  // Undo removes on each side. That one has to come off the action.
+  ok('no event timestamp comes from a bare clock read in the reducer',
+     !/ts: Date\.now\(\)/.test(reducerBody),
+     'the reducer runs twice per action, so the pushed row and the rendered row '
+     + 'would disagree on the key that defines "the last event of this game"');
+  ok('an empty read never wipes a device that has data',
+     /leagues\.length === 0 && stateRef\.current\.leagues\.length > 0/.test(store),
+     'an RLS read mid token-refresh returns [] rather than an error');
+  ok('a token refresh does not trigger a re-pull',
+     /event !== 'SIGNED_IN' && event !== 'USER_UPDATED'/.test(store),
+     'TOKEN_REFRESHED is periodic and says nothing about the data');
+  ok('ADD_EVENT is stamped once, at dispatch, not per reducer run',
+     /ts: action\.ts \?\? Math\.max\(Date\.now\(\)/.test(store) &&
+     /ts: a\.ts \?\? Date\.now\(\)/.test(store),
+     'the reducer runs twice per action, so Date.now() inside it gave the server '
+     + 'row and the on-screen row different timestamps');
   ok('the ledger retires an entry by ordering, not by a timeout',
      /confirmedAt !== null && e\.confirmedAt < snapshotStarted/.test(pend) &&
      !/GUARD_MS|Date\.now\(\) \+/.test(pend),
