@@ -267,6 +267,9 @@ docs/
 .github/workflows/
   ci.yml                 Types, reducer, sync, static and SQL suites + a Metro/Hermes bundle
   supabase-keepalive.yml Pings Supabase every 3 days to prevent the 7-day auto-pause
+.claude/
+  agents/pr-reviewer.md  Reviews a PR against the whole app, not the diff (read-only)
+  commands/review-pr.md  /review-pr - runs that agent on the current or a named PR
 ```
 
 **Key design decision (from the skill):** box scores and standings are **derived** from the

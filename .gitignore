@@ -6,7 +6,14 @@ dist/
 .env
 .env.local
 .env.*.local
-.claude/
+# Claude Code. The agents and commands are project tooling and belong to
+# everyone working on this repo; everything else under .claude/ is local
+# session state (and this directory was blanket-ignored during the
+# secrets scrub, which caught them by accident rather than by intent).
+.claude/*
+!.claude/agents/
+!.claude/commands/
+!.claude/settings.json
 
 # Mobile signing / service-account credentials - never commit these
 *.p8
