@@ -7,8 +7,14 @@ export {
   confirmPending, failPending, recordPending,
   reconcileLeagueEvents, reconcileLeagueGames,
   compareEvents, insertEvent, lastEventOf, sortEvents, pendingCount,
+  beginPush, drainableEntries, outboxSnapshot, pruneOutbox, restoreOutbox, unsyncedCount,
 } from '../src/sync/pendingEvents';
-export { pushAction, fetchAllState } from '../src/sync/sync';
+export { pushAction, fetchAllState, pushPendingEntry, pingServer } from '../src/sync/sync';
+export {
+  isKnownOffline, netStatus, noteReachable, noteUnreachable, probeDelay, subscribeNet,
+  __resetNet,
+} from '../src/sync/connectivity';
+export { describeSync } from '../src/sync/syncStatus';
 export { enqueuePush } from '../src/sync/pushQueue';
 export * from '../src/lib/stats';
 export * from '../src/lib/rosterParse';

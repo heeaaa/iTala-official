@@ -49,6 +49,11 @@
 // outcome: silently reverting someone's stat minutes later - what the old
 // timeout did - is the failure mode that made undo untrustworthy.
 //
+// That much was already true, and it was only half an answer: the entry was
+// pinned in a Map, nothing ever retried it, and the Map died with the process.
+// See "the outbox" near the bottom of this file for the durable half, which is
+// what makes a stat logged with no connection survive the app being closed.
+//
 // AND THE RULE THE LEDGER ALONE DOES NOT GIVE YOU
 //
 // The ledger answers "may this snapshot overwrite my pending write?". It does
@@ -83,8 +88,22 @@ interface Settled {
   confirmedAt: number | null;
   /** True once the push rejected. Such an entry is pinned, never retired. */
   failed: boolean;
-  /** Tick the entry was created at, used only for the safety cap below. */
+  /** Tick the entry was created at: the safety cap, and the replay order. */
   createdAt: number;
+  /**
+   * A push for this exact entry is on the wire right now.
+   *
+   * The difference between "waiting for an answer" and "nobody is asking" —
+   * which nothing here could tell apart while a failed write simply sat pinned
+   * forever. The drain needs it so a reconnect does not fire a second push for
+   * a write whose first one is still outstanding, which is the one way a
+   * retrying outbox could duplicate a stat.
+   */
+  inFlight: boolean;
+  /** How many pushes this entry has had rejected. Diagnostics and backoff. */
+  attempts: number;
+  /** Why the last one was rejected, in the server's words. Diagnostics only. */
+  lastError: string | null;
 }
 
 type PendingEntry =
@@ -194,7 +213,7 @@ export function pendingAdd(leagueId: string, event: GameEvent): string {
   const token = eventToken('add', event.id);
   pending.set(token, {
     kind: 'event', leagueId, op: 'add', eventId: event.id, event,
-    confirmedAt: null, failed: false, createdAt: tick(),
+    confirmedAt: null, failed: false, createdAt: tick(), inFlight: false, attempts: 0, lastError: null,
   });
   enforceCap();
   return token;
@@ -209,7 +228,7 @@ export function pendingRemove(leagueId: string, eventId: string): string {
   const token = eventToken('remove', eventId);
   pending.set(token, {
     kind: 'event', leagueId, op: 'remove', eventId,
-    confirmedAt: null, failed: false, createdAt: tick(),
+    confirmedAt: null, failed: false, createdAt: tick(), inFlight: false, attempts: 0, lastError: null,
   });
   enforceCap();
   return token;
@@ -234,7 +253,7 @@ export function pendingGameWrite(leagueId: string, game: Game): string {
   const token = gameToken(game.id);
   pending.set(token, {
     kind: 'game', leagueId, gameId: game.id, game,
-    confirmedAt: null, failed: false, createdAt: tick(),
+    confirmedAt: null, failed: false, createdAt: tick(), inFlight: false, attempts: 0, lastError: null,
   });
   enforceCap();
   return token;
@@ -253,15 +272,42 @@ export function confirmPending(tokens: readonly string[]): void {
   const at = tick();
   for (const token of tokens) {
     const e = pending.get(token);
-    if (e) { e.confirmedAt = at; e.failed = false; }
+    if (e) { e.confirmedAt = at; e.failed = false; e.inFlight = false; e.lastError = null; }
   }
 }
 
 /** The push for these tokens rejected. Pin them: local stays authoritative. */
-export function failPending(tokens: readonly string[]): void {
+export function failPending(tokens: readonly string[], reason?: unknown): void {
+  const detail = reason === undefined ? null : ((reason as Error)?.message ?? String(reason));
   for (const token of tokens) {
     const e = pending.get(token);
-    if (e) { e.confirmedAt = null; e.failed = true; }
+    if (e) {
+      e.confirmedAt = null;
+      e.failed = true;
+      e.inFlight = false;
+      e.attempts += 1;
+      e.lastError = detail;
+    }
+  }
+}
+
+/**
+ * A push for these tokens has just been handed to the queue.
+ *
+ * Marks them busy so the drain does not issue a SECOND push for a write whose
+ * first one has not answered yet. Without it, a reconnect that arrives while
+ * the original push is still stalled on a dying socket would replay the same
+ * row - and although every replay is an upsert by client-generated id and so
+ * cannot actually duplicate a stat, two writers on one row is a race nobody
+ * needs to reason about.
+ *
+ * A token with no entry is one that has been superseded; marking it is
+ * correctly a no-op.
+ */
+export function beginPush(tokens: readonly string[]): void {
+  for (const token of tokens) {
+    const e = pending.get(token);
+    if (e) e.inFlight = true;
   }
 }
 
@@ -365,6 +411,212 @@ export function __resetPending(): void {
   pending.clear();
   clock = 0;
   appliedAt = 0;
+}
+
+/* ------------------------------------------------------------- the outbox -- */
+//
+// THE HALF THAT WAS MISSING, AND THE STAT IT LOST
+//
+// Everything above is in memory. That was fine for the problem this module was
+// written for - two snapshots and a push racing each other over a few hundred
+// milliseconds - and it is the whole of the bug for the problem underneath it.
+//
+// A stat logged with no connection took this path: the local write landed, the
+// push rejected with `TypeError: Network request failed`, `failPending` pinned
+// the entry, and the board stayed correct. Nothing then retried it, ever - the
+// sync badge said so in as many words ("NOT 'will retry'. Nothing retries"). So
+// the entry sat pinned, doing the one job it could still do, which was to stop
+// server snapshots reverting the number on screen. Reconnecting changed
+// nothing: the next tap pushed itself and no more, which is exactly the
+// reported symptom - a new stat succeeds, the score on screen looks right, and
+// the earlier ones were never sent.
+//
+// Then the app closes. The Map goes with the process. The events themselves
+// survive, because AppState is written to AsyncStorage on every dispatch - but
+// on the next launch the boot pull hydrates the server's snapshot through
+// `reconcileLeagueEvents` with an EMPTY ledger, which returns the server's rows
+// verbatim, and the autosave immediately writes that back over the durable
+// copy. The offline stats are not "not synced" at that point. They are gone,
+// from the only two places they existed.
+//
+// Two things close it, and they are the same two things:
+//
+//   * the ledger is written to disk beside the state it protects, so a restart
+//     restores entries that are unconfirmed - and an unconfirmed entry is
+//     already, by the rule at the top of this file, one no snapshot may
+//     overwrite. The reconciliation that lost the stat now preserves it.
+//   * anything the server has not confirmed is replayed when it becomes
+//     reachable again. Replay is by ROW and by upsert on a client-generated id
+//     (see pushPendingEntry in sync.ts), so re-sending a write the server
+//     already has is a no-op rather than a duplicate stat.
+//
+// What is deliberately NOT here: a maximum age, or any rule that discards an
+// entry the server has not accepted. An outbox that throws work away to keep
+// itself tidy is the timeout bug in a different costume. `MAX_ENTRIES` above is
+// the only bound, it is a memory backstop at a thousand writes, and it drops
+// the OLDEST first - the ones a server snapshot is most likely to already
+// agree with.
+
+/**
+ * One outbox row, as it goes to disk.
+ *
+ * Ticks are deliberately absent. They are a monotonic counter for one run of
+ * the process and mean nothing across a restart; what has to survive is the
+ * ORDER, which the array itself carries, and whether the server has confirmed
+ * it, which it has not or the entry would have been retired.
+ */
+export interface OutboxEntry {
+  token: string;
+  kind: 'event' | 'game';
+  leagueId: string;
+  op?: 'add' | 'remove';
+  eventId?: string;
+  event?: GameEvent;
+  gameId?: string;
+  game?: Game;
+  attempts: number;
+  lastError: string | null;
+}
+
+const toOutbox = (token: string, e: PendingEntry): OutboxEntry => (
+  e.kind === 'event'
+    ? { token, kind: 'event', leagueId: e.leagueId, op: e.op, eventId: e.eventId, event: e.event, attempts: e.attempts, lastError: e.lastError }
+    : { token, kind: 'game', leagueId: e.leagueId, gameId: e.gameId, game: e.game, attempts: e.attempts, lastError: e.lastError }
+);
+
+/**
+ * Everything the server has not confirmed, oldest first.
+ *
+ * Confirmed-but-not-yet-retired entries are omitted: the server has those, and
+ * they exist only to stop an older snapshot contradicting them - a question
+ * that cannot outlive the process, because a snapshot in flight cannot either.
+ */
+export function outboxSnapshot(): OutboxEntry[] {
+  return [...pending.entries()]
+    .filter(([, e]) => e.confirmedAt === null)
+    .sort((a, b) => a[1].createdAt - b[1].createdAt)
+    .map(([token, e]) => toOutbox(token, e));
+}
+
+/**
+ * Entries that need a push started for them, oldest first.
+ *
+ * Unconfirmed and not already on the wire. Whether the last attempt FAILED is
+ * not part of the question: a failure is precisely the case worth retrying, and
+ * a write that has never been attempted (restored from disk) has no failure to
+ * its name and needs the push just as much.
+ */
+export function drainableEntries(): OutboxEntry[] {
+  return [...pending.entries()]
+    .filter(([, e]) => e.confirmedAt === null && !e.inFlight)
+    .sort((a, b) => a[1].createdAt - b[1].createdAt)
+    .map(([token, e]) => toOutbox(token, e));
+}
+
+/** How many local writes the server has not confirmed. What the UI counts. */
+export function unsyncedCount(): number {
+  let n = 0;
+  for (const e of pending.values()) if (e.confirmedAt === null) n++;
+  return n;
+}
+
+/**
+ * Drop queued writes for rows the device no longer has.
+ *
+ * A queue that only ever grew was safe while nothing replayed it: a pinned
+ * entry could not do anything except protect a local value that had already
+ * been deleted, which is a no-op. Replaying one is not a no-op. Two ways to
+ * reach it, both ordinary:
+ *
+ *   * a drop-in game whose transaction was refused is rolled back locally
+ *     (ROLLBACK_BUNDLE), and its lineup write would otherwise re-create a game
+ *     row pointing at teams and players the rollback also removed
+ *   * a lineup or period changed offline and then the game deleted - the delete
+ *     leaves no entry of its own (there is no row left to mirror), so the older
+ *     write would put the game back on the server
+ *
+ * This is the same test `reconcileLeagueGames` already applies to a game entry
+ * at hydrate time - "is there still a local write here to protect?" - moved
+ * where the drain can ask it too.
+ *
+ * GAME ROWS ONLY, and that restriction is deliberate rather than an omission.
+ *
+ * The obvious symmetry would be to drop an 'add' whose event is no longer in
+ * local state. It is unnecessary: the only ways an event leaves the device are
+ * an undo or a delete, and both record a REMOVAL whose token supersedes the
+ * insert's outright (see `pendingRemove`), or a hydrate - which is only allowed
+ * to drop the row once the entry has already been retired. There is no path
+ * that leaves a live 'add' entry for an absent event by way of the user doing
+ * something.
+ *
+ * There is one that has nothing to do with the user, and it is why the
+ * symmetric version would be worse than useless. The outbox is written before
+ * the state it belongs to (storage.ts explains the ordering), so a process
+ * killed between the two writes relaunches with the entry on disk and the event
+ * missing from the saved state. Reconciliation puts it back from the entry's
+ * own copy of the row - that is the whole point of keeping one - but only when
+ * a snapshot arrives, and on a device that is still offline none does. A prune
+ * that ran first would delete the entry, and with it the last copy of the stat.
+ *
+ * A pending REMOVAL is kept for a simpler reason: absent is what a removal is
+ * FOR, and the delete it carries is idempotent.
+ */
+export function pruneOutbox(localGameIds: ReadonlySet<string>): number {
+  const drop: string[] = [];
+  for (const [token, e] of pending) {
+    if (e.kind !== 'game') continue;
+    if (e.inFlight) continue; // not ours to remove while a push is on the wire
+    if (!localGameIds.has(e.gameId)) drop.push(token);
+  }
+  for (const token of drop) pending.delete(token);
+  return drop.length;
+}
+
+/**
+ * Put a persisted outbox back into the ledger at launch.
+ *
+ * Restored entries are unconfirmed and not in flight, which is exactly what
+ * they are: local writes with no evidence the server has them. That state makes
+ * them non-retirable by `retirable()` for free, so the boot pull - the snapshot
+ * that used to delete them - re-applies them instead.
+ *
+ * Additive, and it never overwrites a live entry. Restore runs before the first
+ * server pull, but a person can be tapping during it, and a fresh local write
+ * is always better evidence than a row read off disk.
+ *
+ * Malformed rows are skipped rather than trusted: this is JSON off a device's
+ * storage, and an entry with no id to write is a push that can only fail.
+ */
+export function restoreOutbox(entries: readonly OutboxEntry[]): number {
+  let restored = 0;
+  for (const raw of entries) {
+    if (!raw || typeof raw.token !== 'string' || typeof raw.leagueId !== 'string') continue;
+    if (pending.has(raw.token)) continue;
+    const base = {
+      leagueId: raw.leagueId,
+      confirmedAt: null,
+      // Honest: an entry that had already been rejected is still a failure, and
+      // one that never got a turn is not. Neither is retirable either way.
+      failed: (raw.attempts ?? 0) > 0,
+      createdAt: tick(),
+      inFlight: false,
+      attempts: raw.attempts ?? 0,
+      lastError: raw.lastError ?? null,
+    };
+    if (raw.kind === 'event') {
+      if (!raw.eventId || (raw.op !== 'add' && raw.op !== 'remove')) continue;
+      if (raw.op === 'add' && !raw.event) continue; // nothing to re-insert
+      pending.set(raw.token, { ...base, kind: 'event', op: raw.op, eventId: raw.eventId, event: raw.event });
+    } else if (raw.kind === 'game') {
+      if (!raw.gameId || !raw.game) continue;
+      pending.set(raw.token, { ...base, kind: 'game', gameId: raw.gameId, game: raw.game });
+    } else {
+      continue;
+    }
+    restored++;
+  }
+  enforceCap();
+  return restored;
 }
 
 /* --------------------------------------------------------- reconciliation -- */

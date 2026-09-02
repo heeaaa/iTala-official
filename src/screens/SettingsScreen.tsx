@@ -1,15 +1,23 @@
 import React, { useState } from 'react';
 import { View, Alert } from 'react-native';
-import { Screen, Txt, Card, Pill, Toggle, GoogleButton, AppleButton, Button } from '../components/ui';
+import { Screen, Txt, Card, Pill, Toggle, GoogleButton, AppleButton, Button, syncToneColor } from '../components/ui';
 import { useStore } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
 import { colors, space } from '../theme';
 import { ScreenProps } from '../navigation';
 
 export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) {
-  const { synced, prefs, setHaptics, setNotifs } = useStore();
+  const { synced, sync, refresh, prefs, setHaptics, setNotifs } = useStore();
   const { role, isAdmin, user, userId, signInWithGoogle, appleAvailable, signInWithApple, deleteAccount, signOut, authBusy, errorFor } = useAdmin();
   const [busy, setBusy] = useState(false);
+  // Manual sync retry. `refresh` drains the outbox before it reads, so this is
+  // "send what is waiting, then fetch", which is what somebody pressing a
+  // button called Try now means by it.
+  const [retrying, setRetrying] = useState(false);
+  const onRetry = async () => {
+    setRetrying(true);
+    try { await refresh(); } finally { setRetrying(false); }
+  };
 
   // Guests are prompted to sign in — Settings requires an account.
   if (role === 'guest') {
@@ -110,13 +118,45 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
         />
       </Card>
 
-      {/* Sync */}
+      {/* Sync
+
+          This card said "● Connected — changes sync across devices in real
+          time" whenever `synced` was true, and `synced` is SYNC_ENABLED: a
+          build-time constant, `!!(SUPABASE_URL && ANON_KEY)`, fixed when the
+          bundle was compiled. It could not tell you anything about a
+          connection, so it said Connected in aeroplane mode, said Connected
+          with a queue of unsent stats, and said Connected while every write was
+          being refused. The one screen a person opens to check on sync was the
+          one screen guaranteed to agree with them.
+
+          `sync` answers the question that was actually being asked, from
+          observed reachability and the depth of the outbox. It distinguishes
+          connected-and-synced, connected-and-sending, offline-with-changes-
+          waiting and connected-but-refused, because those need four different
+          reactions. The wording lives in sync/syncStatus.ts, with the other two
+          screens that show it. */}
       <Card style={{ marginBottom: space(4) }}>
         <Txt k="label" style={{ marginBottom: space(2) }}>Sync</Txt>
         {synced ? (
           <>
-            <Txt k="body" color={colors.green}>● Connected — changes sync across devices in real time.</Txt>
-            {userId ? <Txt k="body" color={colors.muted} style={{ fontSize: 11, marginTop: 4 }}>Device: {userId.slice(0, 8)}…</Txt> : null}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: syncToneColor[sync.tone] }} />
+              <Txt k="body" style={{ flex: 1 }}>{sync.label}</Txt>
+            </View>
+            <Txt k="body" color={colors.muted} style={{ fontSize: 13, marginTop: 6 }}>{sync.detail}</Txt>
+            {/* Only offered when it can do something. Retrying a connection
+                that is already working is a button that does nothing visible,
+                and this screen has had enough of those. */}
+            {sync.pending > 0 || sync.phase === 'offline' ? (
+              <Button
+                title={retrying ? 'Trying…' : 'Try now'}
+                kind="ghost"
+                disabled={retrying}
+                onPress={() => { void onRetry(); }}
+                style={{ marginTop: space(3) }}
+              />
+            ) : null}
+            {userId ? <Txt k="body" color={colors.muted} style={{ fontSize: 11, marginTop: 8 }}>Device: {userId.slice(0, 8)}…</Txt> : null}
           </>
         ) : (
           <>

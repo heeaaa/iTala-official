@@ -10,6 +10,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors, font, radius, space, brandGradient, wordmarkGradient } from '../theme';
 import { Promo } from '../types';
+import { SyncSummary, SyncTone } from '../sync/syncStatus';
 
 // Team logo if present, else a colored dot. Used everywhere a team name appears.
 export function TeamBadge({ logo, color, size = 12 }: { logo?: string; color: string; size?: number }) {
@@ -647,22 +648,154 @@ export function PromoStrip({ promo, onPress }: { promo: Promo; onPress: (p: Prom
   return tappable ? <Pressable onPress={() => onPress(promo)}>{Body}</Pressable> : Body;
 }
 
-export function SyncBadge({ state }: { state: 'idle' | 'saving' | 'saved' | 'error' }) {
-  if (state === 'idle') return null;
-  const cfg = {
-    saving: { text: 'Saving…', color: colors.muted, dot: colors.muted },
-    saved: { text: 'Saved', color: colors.green, dot: colors.green },
-    // NOT "will retry". Nothing retries: a failed push pins its value in the
-    // pending ledger so the local number stays put, and that is all. Promising a
-    // retry that never comes is how somebody ends up closing the app on unsaved
-    // stats. See LiveGameScreen for the version of this that says what to do.
-    error: { text: 'Not saved', color: colors.red, dot: colors.red },
-  }[state];
-  return (
+/** The colour a sync tone is drawn in. One mapping, so the badge on Home, the
+ *  chip in the live tracker and the line in Settings cannot drift apart. */
+export const syncToneColor: Record<SyncTone, string> = {
+  ok: colors.green,
+  warn: colors.yellow,
+  bad: colors.red,
+  muted: colors.muted,
+};
+
+/**
+ * The save indicator, from the derived summary rather than from the last
+ * push's outcome.
+ *
+ * It used to take `syncState` alone, which is the result of the LAST write and
+ * nothing else. Two consequences, both of them things people actually saw:
+ * 'error' latched as a permanent "Not saved" that no amount of reconnecting or
+ * refreshing cleared, because only a successful PUSH reset it and a pull is not
+ * a push; and 'saved' went green for one tap while nine earlier ones sat unsent
+ * behind it. `describeSync` weighs the outbox depth and reachability alongside
+ * it, so both now say what is true. See sync/syncStatus.ts.
+ *
+ * Still silent when there is nothing to say - 'synced' and 'idle' render
+ * nothing, so the quiet case stays quiet.
+ */
+export function SyncBadge({ sync, onPress }: { sync: SyncSummary; onPress?: () => void }) {
+  if (sync.phase === 'synced' || sync.phase === 'local-only') return null;
+  const color = syncToneColor[sync.tone];
+  const body = (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-      <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: cfg.dot }} />
-      <Text style={{ fontFamily: font.body, fontSize: 11, color: cfg.color }}>{cfg.text}</Text>
+      <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: color }} />
+      <Text numberOfLines={1} style={{ fontFamily: font.body, fontSize: 11, color }}>{sync.label}</Text>
     </View>
+  );
+  if (!onPress) return body;
+  return (
+    <Pressable onPress={onPress} hitSlop={10} accessibilityRole="button"
+      accessibilityLabel={`Sync status: ${sync.label}. Activate for detail.`}>
+      {body}
+    </Pressable>
+  );
+}
+
+/**
+ * The live tracker's sync state, sized for a row that already has a button on
+ * it.
+ *
+ * Two things it does that the block it replaces did not.
+ *
+ * It never reflows the screen. The old one was a conditional two-line
+ * Pressable in the vertical flow, so a failed write pushed the scoreboard, the
+ * controls and the on-court five down by its height — on the one screen where
+ * people tap without looking. This is a fixed-height chip in space that was
+ * already empty, and it renders in every state rather than appearing and
+ * disappearing, so the row's height never changes either.
+ *
+ * And it is always present, which is the half of the old block worth keeping:
+ * before it existed this screen said nothing at all about whether a stat had
+ * reached the server, so a stat that failed to save looked exactly like one
+ * that saved. A quiet "Synced" is the reassurance; the same chip in red is the
+ * warning; the detail is one tap away rather than occupying the court.
+ */
+export function SyncChip({ sync, onPress }: { sync: SyncSummary; onPress: () => void }) {
+  const color = syncToneColor[sync.tone];
+  const loud = sync.tone === 'bad' || sync.tone === 'warn';
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={`Sync status: ${sync.label}. Activate for detail.`}
+      accessibilityHint="Explains what is saved and what is still waiting to be sent."
+      style={{
+        alignSelf: 'flex-start',
+        flexDirection: 'row', alignItems: 'center', gap: 6,
+        paddingVertical: 6, paddingHorizontal: 12,
+        borderRadius: radius.pill, borderWidth: 1,
+        borderColor: loud ? color : colors.line,
+        backgroundColor: loud ? colors.surfaceHi : 'transparent',
+      }}>
+      <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: color }} />
+      <Text numberOfLines={1} style={{ fontFamily: loud ? font.bodyBold : font.body, fontSize: 12, color: loud ? color : colors.muted }}>
+        {sync.short}
+      </Text>
+    </Pressable>
+  );
+}
+
+/**
+ * A short message that appears, says one thing, and goes away.
+ *
+ * Added for the case that had no way to speak at all: pulling to refresh with
+ * no connection. The spinner appeared, the request failed inside a `warn`, and
+ * the spinner disappeared - indistinguishable from a refresh that found nothing
+ * new, which is why the report describes it as "nothing happens".
+ *
+ * An Alert would have been the smaller change and the wrong one: a modal for
+ * "you are offline" demands a tap to dismiss for information the person
+ * probably already has, on a gesture they may repeat. This is transient,
+ * non-blocking, and does not move the layout underneath it - it is positioned
+ * absolutely by its parent.
+ *
+ * Announced to screen readers via `accessibilityLiveRegion` (Android) and
+ * `accessibilityRole="alert"` (iOS), because a message that fades out is
+ * useless to somebody who cannot see it fade in.
+ */
+export function Toast({ message, tone = 'warn', onHide, durationMs = 2600 }: {
+  message: string | null;
+  tone?: SyncTone;
+  onHide: () => void;
+  durationMs?: number;
+}) {
+  const fade = useRef(new Animated.Value(0)).current;
+  // The dismiss timer, held so a message replaced mid-flight cancels the timer
+  // belonging to the one before it rather than being cut short by it.
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // `onHide` is usually an inline arrow, so it is a new function every render.
+  // In the dependency list it would restart the animation on every parent
+  // render; behind a ref, the effect depends only on the message.
+  const hideRef = useRef(onHide);
+  hideRef.current = onHide;
+
+  React.useEffect(() => {
+    if (!message) return;
+    fade.setValue(0);
+    Animated.timing(fade, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+    timer.current = setTimeout(() => {
+      Animated.timing(fade, { toValue: 0, duration: 220, useNativeDriver: true })
+        .start(() => hideRef.current());
+    }, durationMs);
+    return () => { if (timer.current) clearTimeout(timer.current); };
+  }, [message, durationMs, fade]);
+
+  if (!message) return null;
+  const color = syncToneColor[tone];
+  return (
+    <Animated.View
+      pointerEvents="none"
+      accessibilityRole="alert"
+      accessibilityLiveRegion="polite"
+      style={{
+        opacity: fade,
+        flexDirection: 'row', alignItems: 'center', gap: 8,
+        borderRadius: radius.md, borderWidth: 1, borderColor: color,
+        backgroundColor: colors.surfaceHi, paddingVertical: 10, paddingHorizontal: 14,
+      }}>
+      <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: color }} />
+      <Text style={{ flex: 1, fontFamily: font.body, fontSize: 13, color: colors.text }}>{message}</Text>
+    </Animated.View>
   );
 }
 

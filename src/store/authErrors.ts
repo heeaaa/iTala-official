@@ -57,9 +57,16 @@ export function errorForScope(errors: AuthErrors, scope: AuthScope): string | nu
  * further detail, which is the failure the reported logs are full of. Shared so
  * the auth layer and the sync layer classify it identically - they word the
  * advice differently, but they must not disagree about what happened.
+ *
+ * `fetch failed` is the SAME failure under Node's undici - which is what every
+ * test in this repository, and any script run against the installed client,
+ * actually sees. It was missing, so a transport failure reproduced on a laptop
+ * was classified as a row-level rejection: the device was recorded as online,
+ * the write was reported saved, and nothing that keys off this predicate fired.
+ * One transport, two spellings; both have to answer the same.
  */
 export function isNetworkFailure(raw: string | null | undefined): boolean {
-  return /network request failed|failed to fetch|network error/i.test(raw ?? '');
+  return /network request failed|failed to fetch|fetch failed|network error/i.test(raw ?? '');
 }
 
 // ---------------------------------------------------------------------------

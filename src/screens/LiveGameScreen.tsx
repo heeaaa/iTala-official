@@ -1,12 +1,13 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { useKeepAwake } from 'expo-keep-awake';
 import { View, Pressable, ScrollView, FlatList, Alert, Modal, TextInput, ActivityIndicator, AccessibilityInfo } from 'react-native';
-import { Screen, Txt, Button, Segmented, TeamBadge, LivePip, PromoStrip } from '../components/ui';
+import { Screen, Txt, Button, Segmented, TeamBadge, LivePip, PromoStrip, SyncChip, syncToneColor } from '../components/ui';
 import { useStore, useLeague } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
 import { colors, space, radius, font, statColors, MAX_PERIOD, LINEUP_SIZE } from '../theme';
 import { ScreenProps } from '../navigation';
 import { EventType, Team, Player } from '../types';
+import { SyncSummary } from '../sync/syncStatus';
 import {
   gameScore, teamBoxScore, teamPeriodFouls, fouledOutSet, playerFouls, effectiveFoulLimit,
   lineScore, perfRating, teamPeriodTimeouts,
@@ -61,10 +62,11 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   const { activePromos } = usePromos();
   // No `state` here on purpose: this screen derives everything from `league` and
   // `game`, so nothing on it re-runs because an unrelated league changed (F-14).
-  // `syncState` and `lastSyncError` only. Still no `state` here: this screen
-  // derives everything from `league` and `game` so nothing re-runs because an
-  // unrelated league changed (F-14).
-  const { dispatch, syncState, lastSyncError, lastSyncErrorDetail } = useStore();
+  // The derived sync summary only. Still no `state` here: this screen derives
+  // everything from `league` and `game` so nothing re-runs because an unrelated
+  // league changed (F-14). `sync` is memoised in the store on its four inputs,
+  // so it is a new object only when one of them actually moved.
+  const { dispatch, sync, lastSyncErrorDetail } = useStore();
   const { canScoreGame } = useAdmin();
   const league = useLeague(leagueId);
   const game = league?.games.find(g => g.id === gameId);
@@ -91,6 +93,40 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   const [subOpen, setSubOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [timeoutOpen, setTimeoutOpen] = useState(false);
+  // The chip in the Exit row is the whole indicator; this is the explanation
+  // behind it. A modal rather than an Alert so the count, the reassurance and
+  // the dev-only detail can be laid out and read, not crammed into one string.
+  const [syncDetailOpen, setSyncDetailOpen] = useState(false);
+  // SPEAK THE CHANGE, because the chip cannot.
+  //
+  // The block this chip replaced carried accessibilityRole="alert", so a screen
+  // reader spoke it the moment a write started failing. A chip is a button: it
+  // says nothing until somebody navigates to it. Moving the warning out of the
+  // vertical flow was right - it was pushing the scoreboard and the on-court
+  // five down the screen mid-game - but it must not cost a scorekeeper who
+  // cannot see the colour change the only notice they get, or they keep logging
+  // into a queue believing every stat has landed.
+  //
+  // On the TRANSITION only. Announcing per render would talk over the stat
+  // confirmations this screen already speaks on every tap, and `phase` does not
+  // move unless something really changed. Nothing is announced on mount: the
+  // chip is already on screen to be read, and arriving into a game should not
+  // open with a sync bulletin.
+  const spokenSync = useRef({ phase: sync.phase, tone: sync.tone });
+  useEffect(() => {
+    const prev = spokenSync.current;
+    spokenSync.current = { phase: sync.phase, tone: sync.tone };
+    if (readOnly || prev.phase === sync.phase) return;
+    const wrong = sync.tone === 'bad' || sync.tone === 'warn';
+    const wasWrong = prev.tone === 'bad' || prev.tone === 'warn';
+    if (wrong) announce(`${sync.label}. ${sync.detail}`);
+    // Only once it is genuinely settled. 'syncing' on the way back up is not
+    // yet good news, and saying so would be the same false reassurance in a
+    // different voice.
+    else if (wasWrong && (sync.phase === 'synced' || sync.phase === 'saved')) {
+      announce('Back online. Everything is saved to the server.');
+    }
+  }, [sync.phase, sync.tone, sync.label, sync.detail, readOnly]);
   const [flash, setFlash] = useState<string | null>(null); // brief "logged" confirmation
   const [milestone, setMilestone] = useState<string | null>(null); // celebratory banner
   useKeepAwake(); // screen never sleeps mid-game
@@ -497,9 +533,23 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
       )}
       <View style={{ flex: 1, paddingHorizontal: space(3), paddingTop: space(1) }}>
         {/* Top row: Exit sits here, away from the stat controls, so it's never
-            confused with a logging action. Scorekeepers only. */}
+            confused with a logging action. Scorekeepers only.
+
+            The sync chip shares the row, in the space to its left that was
+            empty. That placement is the fix, not a preference: the warning it
+            replaces was a full-width two-line block further down the column, so
+            the moment a write failed it INSERTED itself into the flow and
+            pushed the scoreboard, the controls and the on-court five down by
+            its own height. People tap this screen without looking at it. Moving
+            the targets to announce a problem is a worse problem.
+
+            Nothing here can reflow: the row already existed, already had this
+            height, and the chip is one line inside it. */}
         {!readOnly && (
-          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: space(1) }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: space(1) }}>
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <SyncChip sync={sync} onPress={() => setSyncDetailOpen(true)} />
+            </View>
             <Pressable onPress={confirmExit}
               accessibilityRole="button"
               accessibilityLabel="Exit game tracker"
@@ -558,43 +608,9 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
           </Txt>
         </View>
 
-        {/* SAVE FAILURE. Unmissable, and it stays until a write succeeds.
-
-            This screen showed NOTHING about whether a stat reached the server.
-            The sync badge lives on Home only, so the one screen where a failed
-            write costs somebody their work was the one screen with no feedback:
-            a stat that failed to save looked exactly like a stat that saved, and
-            the difference only showed up later as a number that had quietly
-            changed. Diagnosing "my stats disappear" without this is guesswork.
-
-            The local value is kept either way - the pending ledger pins a failed
-            write so nothing vanishes mid-game (see sync/pendingEvents.ts). What
-            it cannot survive is the app being closed, which is exactly why this
-            has to be visible while there is still time to act on it. */}
-        {!readOnly && syncState === 'error' && (
-          <Pressable
-            onPress={() => Alert.alert(
-              'Stats are not saving',
-              `${lastSyncError ?? 'The app could not save to the server.'}\n\n`
-              + 'Everything you have logged is safe on this device and still counting. '
-              + 'Keep the app open until the warning clears — closing it now loses anything unsaved.'
-              // Dev builds only. A scorekeeper cannot act on a policy name, and
-              // it is not ours to put in front of them; it is exactly what a
-              // developer needs, so it lives behind this and nothing else.
-              + (lastSyncErrorDetail ? `\n\nTechnical detail (development build):\n${lastSyncErrorDetail}` : ''),
-            )}
-            accessibilityRole="alert"
-            accessibilityLabel={`Stats are not saving. ${lastSyncError ?? ''} They are safe on this device. Keep the app open. Activate for more.`}
-            style={{ marginTop: space(2), borderRadius: radius.md, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: 'rgba(255,77,79,0.15)', borderWidth: 1, borderColor: colors.red }}>
-            <Txt k="body" color={colors.red} style={{ fontFamily: font.bodyBold, fontSize: 13 }}>
-              ⚠  Stats are not saving — tap to find out more
-            </Txt>
-            <Txt k="body" color={colors.red} numberOfLines={3} style={{ fontSize: 12, marginTop: 2 }}>
-              {lastSyncError ?? 'The app could not save to the server.'} Your stats are safe on
-              this device and still counting — keep the app open.
-            </Txt>
-          </Pressable>
-        )}
+        {/* The save-failure block that used to sit here is now the chip in the
+            Exit row above, and its detail is the modal at the bottom of this
+            screen. Same information, none of the reflow — see the Exit row. */}
 
         {/* Roster: the 5 on court — fills available space, no scroll needed */}
         {!readOnly && <View style={{ flex: 1, marginTop: space(2) }}>
@@ -718,7 +734,58 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
           onSubmit={logTimeout}
         />
       )}
+
+      {/* What the chip in the Exit row means, on demand. */}
+      {syncDetailOpen && (
+        <SyncDetailModal sync={sync} technical={lastSyncErrorDetail} onClose={() => setSyncDetailOpen(false)} />
+      )}
     </Screen>
+  );
+}
+
+/**
+ * The explanation behind the sync chip.
+ *
+ * Every state gets an answer, not just the failing one, because "is this
+ * saving?" is a question a scorekeeper asks when nothing is visibly wrong just
+ * as often as when something is. The reassurance is the same sentence in each
+ * case and it is the true one: what has been logged is on this device, it
+ * survives the app being closed, and it goes up on its own when the server can
+ * be reached. That is now a description of what the code does rather than a
+ * promise it cannot keep - see the outbox in sync/pendingEvents.ts.
+ */
+function SyncDetailModal({ sync, technical, onClose }:
+  { sync: SyncSummary; technical: string | null; onClose: () => void }) {
+  const color = syncToneColor[sync.tone];
+  const waiting = sync.pending > 0;
+  return (
+    <Modal transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable onPress={onClose} style={{ flex: 1, backgroundColor: '#000B', alignItems: 'center', justifyContent: 'center', padding: space(6) }}>
+        <Pressable onPress={() => {}} style={{ width: '100%', maxWidth: 360, backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, padding: space(5) }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: color }} />
+            <Txt k="h2">{sync.label}</Txt>
+          </View>
+          <Txt k="body" color={colors.muted} style={{ marginTop: space(2) }}>{sync.detail}</Txt>
+          {waiting ? (
+            <Txt k="body" color={colors.muted} style={{ marginTop: space(2), fontSize: 13 }}>
+              Nothing is lost if you close the app. Whatever has not been sent is stored on this
+              device and goes up automatically the next time the server can be reached.
+            </Txt>
+          ) : null}
+          {/* Dev builds only. A scorekeeper cannot act on a policy name, and it
+              is not ours to put in front of them; it is exactly what a developer
+              needs, so it lives behind this and nothing else. */}
+          {technical ? (
+            <View style={{ marginTop: space(3) }}>
+              <Txt k="body" color={colors.muted} style={{ fontSize: 11 }}>Technical detail (development build):</Txt>
+              <Txt k="body" color={colors.muted} style={{ fontSize: 11 }}>{technical}</Txt>
+            </View>
+          ) : null}
+          <Button title="Close" kind="ghost" onPress={onClose} style={{ marginTop: space(4) }} />
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
