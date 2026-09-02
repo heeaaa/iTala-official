@@ -34,7 +34,7 @@ const {
   beginPush, drainableEntries, outboxSnapshot, pruneOutbox, restoreOutbox, unsyncedCount,
   pushPendingEntry, pingServer,
   isKnownOffline, netStatus, noteReachable, noteUnreachable, probeDelay,
-  describeSync,
+  describeSync, isNetworkFailure,
 } = M;
 
 for (const [name, fn] of Object.entries({
@@ -45,6 +45,7 @@ for (const [name, fn] of Object.entries({
   beginPush, drainableEntries, outboxSnapshot, pruneOutbox, restoreOutbox, unsyncedCount,
   pushPendingEntry, pingServer,
   isKnownOffline, netStatus, noteReachable, noteUnreachable, probeDelay, describeSync,
+  isNetworkFailure,
 })) {
   if (typeof fn !== 'function') {
     console.error(`✗ sync suite cannot run: '${name}' is not exported by the app bundle`);
@@ -1714,6 +1715,203 @@ async function o13_a_malformed_outbox_never_breaks_a_launch() {
   eq('O13.2 and it is the one that can actually be pushed', unsyncedCount(), 1);
 }
 
+
+/* ==========================================================================
+   GROUP O2 - the failure the emulator was hiding
+   ==========================================================================
+
+   Everything above this point ran against a harness that THREW when the
+   connection was gone. The installed @supabase/postgrest-js does not throw: it
+   catches the fetch rejection and RESOLVES with { data: null, error, status: 0 }.
+   Verified against this repository's own node_modules - a select and an upsert
+   against an unreachable host both come back that way, with an error message of
+   'TypeError: fetch failed'.
+
+   That one difference is why this suite was green on code that could not work.
+   `check` inspected .error, logged it and returned, so `pushAction` resolved,
+   the ledger was told the server had the write, and the entry was confirmed -
+   never queued, never persisted, never retried. Every action that pushes
+   through `check` was affected: SET_LINEUP, SET_LINEUPS, SUBSTITUTE,
+   SET_ATTENDANCE, SET_GAME_STATUS, SET_PERIOD and CREATE_GAME.
+
+   `server.offline()` now defaults to the resolving shape, so the groups above
+   run against it too. O19 keeps the rejecting one honest.
+   ========================================================================== */
+
+async function o14_an_offline_game_write_is_queued_not_confirmed() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.persist();
+  server.offline(true);
+
+  // A substitution: the scorekeeper's five changes on the board, and the push
+  // for it resolves with an error nobody looked at.
+  A.dispatch({ t: 'SET_LINEUP', leagueId: 'lg1', gameId: 'g1', side: 'home', playerIds: ['p1'] });
+  await A.settle();
+  eq('O14.1 the lineup is on the board', A.game().homeOnCourt, ['p1']);
+  ok('O14.2 the push reported the failure instead of a save',
+     A.pushErrors.some(m => /Network request failed/.test(m)), A.pushErrors.join(' | '));
+  eq('O14.3 so the write is QUEUED, not confirmed', unsyncedCount(), 1);
+  ok('O14.4 and it reached the disk, where a relaunch can find it',
+     A.disk.outbox.some(e => e.kind === 'game' && e.gameId === 'g1'));
+  eq('O14.5 the device knows it is offline', netStatus(), 'offline');
+
+  // The period and the status push through the same helper. One entry holds
+  // the latest row, because the push writes the whole row.
+  A.dispatch({ t: 'SET_PERIOD', leagueId: 'lg1', gameId: 'g1', period: 3 });
+  await A.settle();
+  A.dispatch({ t: 'SET_GAME_STATUS', leagueId: 'lg1', gameId: 'g1', status: 'final' });
+  await A.settle();
+  eq('O14.6 consecutive edits supersede each other in one entry', unsyncedCount(), 1);
+
+  // The reported ending: reconnect, and the first snapshot used to win.
+  server.offline(false);
+  noteReachable();
+  await A.pull();
+  eq('O14.7 the pull does not revert the period', A.game().period, 3);
+  eq('O14.8 nor the status', A.game().status, 'final');
+  eq('O14.9 nor the on-court five', A.game().homeOnCourt, ['p1']);
+
+  const sent = await A.drain();
+  eq('O14.10 the queued row is replayed on reconnect', sent, 1);
+  eq('O14.11 the server holds the period', server.find('games', 'g1').period, 3);
+  eq('O14.12 the status', server.find('games', 'g1').status, 'final');
+  eq('O14.13 and the five', server.find('games', 'g1').home_on_court, ['p1']);
+  eq('O14.14 nothing is left waiting', unsyncedCount(), 0);
+
+  // And it survives being closed, which is the half the ledger alone never had.
+  const B = relaunch(A);
+  await B.pull();
+  eq('O14.15 reopening agrees', B.game().homeOnCourt, ['p1']);
+}
+
+async function o15_a_substitution_survives_a_relaunch() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.dispatch({ t: 'SET_LINEUPS', leagueId: 'lg1', gameId: 'g1', home: ['p1'], away: ['p2'] });
+  await A.settle();
+  A.persist();
+  eq('O15.1 the server has the starting five', server.find('games', 'g1').home_on_court, ['p1']);
+
+  // Add a second home player to substitute in.
+  A.dispatch({ t: 'ADD_PLAYER', leagueId: 'lg1', teamId: 'tH', name: 'Juan B', number: '9', id: 'p3' });
+  await A.settle();
+  A.persist();
+
+  server.offline(true);
+  A.dispatch({ t: 'SUBSTITUTE', leagueId: 'lg1', gameId: 'g1', side: 'home', outId: 'p1', inId: 'p3' });
+  await A.settle();
+  eq('O15.2 the substitution is on the board', A.game().homeOnCourt, ['p3']);
+  eq('O15.3 and queued rather than reported saved', unsyncedCount(), 1);
+
+  // Close the app mid-outage. This is where an unqueued substitution was lost:
+  // the boot pull hydrated the server's older row and the autosave kept it.
+  const B = relaunch(A);
+  B.server.offline(false);
+  await B.pull();
+  eq('O15.4 the boot pull does not put the old five back', B.game().homeOnCourt, ['p3']);
+  eq('O15.5 and the durable copy agrees', B.disk.state.leagues[0].games[0].homeOnCourt, ['p3']);
+
+  noteReachable();
+  await B.drain();
+  eq('O15.6 the substitution reaches the server on reconnect',
+     server.find('games', 'g1').home_on_court, ['p3']);
+  eq('O15.7 nothing is left waiting', unsyncedCount(), 0);
+}
+
+async function o16_the_probe_reads_the_response_not_a_throw() {
+  const server = new FakeServer();
+  const sb = makeClient(server);
+  eq('O16.1 a server that answers is reachable', await pingServer(sb), true);
+
+  // The shape the installed client actually produces.
+  server.offline(true);
+  eq('O16.2 a RESOLVED transport failure is not reachable', await pingServer(sb), false);
+
+  // And the rejecting one, which is all this harness used to model.
+  server.offline(false);
+  server.offline(true, 'throw');
+  eq('O16.3 a rejected transport failure is not reachable either', await pingServer(sb), false);
+
+  // A refusal is a server that answered, and the probe asks nothing about data.
+  server.offline(false);
+  server.failures['select:leagues'] = { message: 'permission denied for table leagues' };
+  eq('O16.4 a row-level refusal still proves the host answered', await pingServer(sb), true);
+}
+
+async function o17_a_dead_read_is_not_a_bad_read() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.persist();
+
+  server.offline(true);
+  let thrown = null;
+  try { await fetchAllState(A.client); } catch (e) { thrown = e && e.message; }
+  ok('O17.1 a read that never left the device REJECTS', thrown !== null, String(thrown));
+  ok('O17.2 in words the connectivity layer classifies as offline',
+     isNetworkFailure(thrown || ''), String(thrown));
+
+  // A row-level problem still resolves null. The host answered; the caller's
+  // existing 'no snapshot this time' handling is the right response.
+  server.offline(false);
+  server.failures['select:leagues'] = { message: 'permission denied for table leagues' };
+  eq('O17.3 a row-level read problem still resolves', await fetchAllState(A.client), null);
+  delete server.failures['select:leagues'];
+
+  // And the pull path draws the right conclusion from each.
+  noteReachable();
+  eq('O17.4 the device believes it is online', netStatus(), 'online');
+  server.offline(true);
+  await A.pull();
+  eq('O17.5 a failed five-table read means offline', netStatus(), 'offline');
+  ok('O17.6 which is what makes pull-to-refresh say so', isKnownOffline());
+  eq('O17.7 and nothing local was disturbed', A.league().games.length, 1);
+}
+
+async function o18_one_transport_two_spellings() {
+  // React Native and Node word the same failure differently. Only the first was
+  // matched, so every offline check run on a laptop classified a dead request
+  // as a row-level rejection - and marked the device online.
+  ok('O18.1 React Native', isNetworkFailure('TypeError: Network request failed'));
+  ok('O18.2 Node and undici', isNetworkFailure('TypeError: fetch failed'));
+  ok('O18.3 the browser', isNetworkFailure('TypeError: Failed to fetch'));
+  ok('O18.4 but a refusal is still a refusal',
+     !isNetworkFailure('new row violates row-level security policy for table "events"'));
+  ok('O18.5 and so is a duplicate key',
+     !isNetworkFailure('duplicate key value violates unique constraint "events_pkey"'));
+
+  noteUnreachable(new TypeError('fetch failed'));
+  eq('O18.6 the reachability signal agrees with both', netStatus(), 'offline');
+}
+
+async function o19_both_transports_leave_the_same_ledger() {
+  // The rejecting mode is kept, and this is what it is for: whichever way the
+  // client reports a lost connection, the ledger, the outbox and the
+  // reachability signal must end up in the same place.
+  const seen = [];
+  for (const mode of ['resolve', 'throw']) {
+    resetSyncPrimitives();
+    const server = new FakeServer();
+    const A = await seed(server);
+    A.persist();
+    server.offline(true, mode);
+    A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg3_make', 1));
+    A.dispatch({ t: 'SET_LINEUP', leagueId: 'lg1', gameId: 'g1', side: 'home', playerIds: ['p1'] });
+    await A.settle();
+    seen.push({
+      mode,
+      unsynced: unsyncedCount(),
+      net: netStatus(),
+      points: A.points(),
+      kinds: outboxSnapshot().map(e => e.kind).sort().join(','),
+      onCourt: A.game().homeOnCourt.join(','),
+    });
+  }
+  eq('O19.1 the resolving transport queues the stat AND the lineup', seen[0].unsynced, 2);
+  eq('O19.2 both kinds are in the outbox', seen[0].kinds, 'event,game');
+  eq('O19.3 the rejecting transport agrees, field for field',
+     { ...seen[1], mode: 'resolve' }, seen[0]);
+}
 const TESTS = [
   ['S1 resurrection is real', s1_resurrection_is_real],
   ['S2 undo deletes server-side', s2_head_deletes_the_row],
@@ -1759,6 +1957,12 @@ const TESTS = [
   ['O11 the summary says what is true', o11_the_summary_says_what_is_true],
   ['O12 a pull alone clears a stale Not saved', o12_a_pull_alone_clears_a_stale_not_saved],
   ['O13 a malformed outbox never breaks a launch', o13_a_malformed_outbox_never_breaks_a_launch],
+  ['O14 an offline game write is queued, not confirmed', o14_an_offline_game_write_is_queued_not_confirmed],
+  ['O15 a substitution survives a relaunch', o15_a_substitution_survives_a_relaunch],
+  ['O16 the probe reads the response, not a throw', o16_the_probe_reads_the_response_not_a_throw],
+  ['O17 a dead read is not a bad read', o17_a_dead_read_is_not_a_bad_read],
+  ['O18 one transport, two spellings', o18_one_transport_two_spellings],
+  ['O19 both transports leave the same ledger', o19_both_transports_leave_the_same_ledger],
 ];
 
 (async () => {

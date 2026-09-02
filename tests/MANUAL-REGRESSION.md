@@ -286,7 +286,10 @@ Highest probability of defects. Each of these was a real bug at some point.
 
 Needs two devices, or one device plus airplane mode.
 
-- [ ] **R113** Settings → Sync card reads "● Connected".
+- [ ] **R113** Settings → Sync card, online with nothing queued, reads
+      "Connected" with a green dot. It is now DERIVED from observed
+      reachability and the outbox depth, not from a build-time constant, so it
+      must also change: see R150-R153.
 - [ ] **R114** Score on device A. *Expect:* device B updates within a second or two.
 - [ ] **R115** Create a team on A. *Expect:* appears on B.
 - [ ] **R116** Spectator on B watches A's live game: score, play-by-play, fan
@@ -300,6 +303,58 @@ Needs two devices, or one device plus airplane mode.
 - [ ] **R121** Sync badge shows saving → saved, and shows an **error** state if
       a write genuinely fails (do not skip: silent failure is what hid several
       earlier bugs).
+
+### Offline durability
+
+The reported failure these exist for: stats entered offline were still on
+screen after reconnecting, and gone after the app was closed and reopened. The
+ledger holding them lived only in memory. **R146 is the one that would have
+caught it — do not skip it.**
+
+- [ ] **R146** Airplane mode. Log at least five stats across two players.
+      Force-quit the app from the app switcher (not just background it).
+      Reopen it, still in airplane mode. *Expect:* every stat is still there,
+      and the sync indicator says how many are waiting. Now turn the network
+      back on and wait. *Expect:* the count falls to zero, nothing is lost, and
+      nothing is doubled — check the box score totals against what you logged.
+- [ ] **R147** Airplane mode during a live game: make a **substitution**, change
+      the **period**, then tap FINISH. Reconnect and wait for the queue to
+      drain, then force-quit and reopen. *Expect:* the on-court five, the period
+      and the final status are the ones you set. (These push through a different
+      path from stat events and used to report a false success offline, then
+      silently revert to the server's older row on reconnect.)
+- [ ] **R148** Offline, log a stat then **undo** it. Reconnect. *Expect:* the
+      stat does not come back when the queue drains or on a later refresh.
+- [ ] **R149** With stats queued offline, pull to refresh on Home.
+      *Expect:* a toast reading "No internet connection. Please try again." and
+      no spinner that ends in silence. Reconnect and pull again. *Expect:* the
+      queue sends, and the toast does not appear.
+
+### Sync status honesty
+
+Each of these showed "Connected" before, in states where it was not true.
+
+- [ ] **R150** Airplane mode, nothing queued → Settings reads "Offline".
+- [ ] **R151** Airplane mode with queued changes → "Offline · N changes
+      waiting", and the same count on the Home badge and the live tracker chip.
+      All three must agree.
+- [ ] **R152** Reconnect while the queue drains → "Syncing · N changes", then
+      "Connected". *Expect:* the "Try now" button appears only while there is
+      something to try.
+- [ ] **R153** Leave the device in airplane mode for several minutes with
+      something queued. *Expect:* the chip does NOT flicker between states every
+      couple of seconds — the recovery probe backs off to 30s. A visible flicker
+      means the backoff is resetting.
+- [ ] **R154** Home: the "Not saved"/offline badge sits under the profile photo
+      and never overlaps "Record. Track. Elevate.", including at the largest
+      dynamic text size. Once a refresh succeeds, it disappears.
+- [ ] **R155** Live tracker: the sync chip sits on the same row as **Exit** and
+      the player names, scoreboard and stat controls do NOT move when a write
+      starts or stops failing. Tap the chip. *Expect:* a modal with the
+      explanation. Check on a narrow phone.
+- [ ] **R156** With a screen reader on (VoiceOver/TalkBack), start a live game
+      and drop the connection. *Expect:* the change is spoken without having to
+      navigate to the chip, and spoken again when it recovers.
 
 ---
 

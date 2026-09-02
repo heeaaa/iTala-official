@@ -87,6 +87,28 @@ export async function fetchAllState(sb: SupabaseClient): Promise<Partial<AppStat
     sb.from('events').select('*').order('ts').order('id'),
   ]);
 
+  // TRANSPORT FIRST, and it REJECTS rather than returning null.
+  //
+  // `null` cannot say which of two very different things happened. "The host
+  // answered and something was wrong with the read" is one; "nothing came back
+  // at all" is the other, and only the second means the device is offline. The
+  // caller could not tell them apart, so `pullState` called `noteReachable()`
+  // on the line after this returned - recording a five-table read that never
+  // left the device as proof the server was up. That is what kept Settings
+  // showing "Connected" in aeroplane mode and made pull-to-refresh answer
+  // 'refreshed' with nothing fetched.
+  //
+  // Row-level problems still return null, unchanged: those did reach the
+  // server, and the caller's existing "no snapshot this time" handling is the
+  // right response to them.
+  const reads = [
+    ['leagues', lr], ['teams', tr], ['players', pr], ['games', gr], ['events', er],
+  ] as const;
+  for (const [what, res] of reads) {
+    const transport = transportFailure(res);
+    if (transport !== null) throw new Error(`fetch ${what}: ${transport}`);
+  }
+
   if (lr.error) { warn('[sync] fetch leagues error:', lr.error.message); return null; }
   if (tr.error || pr.error || gr.error || er.error) {
     warn('[sync] fetch error:', tr.error?.message ?? pr.error?.message ?? gr.error?.message ?? er.error?.message);
@@ -111,23 +133,75 @@ export async function fetchAllState(sb: SupabaseClient): Promise<Partial<AppStat
 // reducer `state` is passed in so we can look up the new shape of things (e.g.
 // after ADD_PLAYER we read the team's updated playerIds and upsert the team).
 
-// Logs PostgREST/RLS-style errors from a Supabase response. Network failures
-// throw and are caught below; row-level rejections come back in .error.
+/**
+ * Did this response come back from the host at all?
+ *
+ * THE ASSUMPTION THIS REPLACES, AND WHY IT COST DATA.
+ *
+ * Every comment in this file used to say that a network failure "arrives as a
+ * throw". It does not. The installed @supabase/postgrest-js catches the fetch
+ * rejection and RESOLVES with `{ data: null, error, status: 0 }` - nothing here
+ * calls `throwOnError()` and `getSupabase()` installs no custom fetch, so that
+ * is the shape the app really sees. Verified against this repository's own
+ * node_modules: a select and an upsert against an unreachable host both resolve
+ * with status 0 and `error.message` of `TypeError: fetch failed`.
+ *
+ * So `check` swallowed it, `pushAction` returned normally, and the ledger was
+ * told the server had a write that never left the device. Every action that
+ * pushes through `check` - a lineup, a substitution, attendance, the period,
+ * the game status - reported success with the connection down, was marked
+ * confirmed, and was therefore never queued, never persisted and never retried.
+ * The next snapshot after reconnect handed back the stale server row.
+ *
+ * `status === 0` is the primary signal because postgrest-js sets it in exactly
+ * one place: the branch that catches the fetch rejection. It is also the only
+ * one that catches a TIMEOUT, whose message is `AbortError: ...` and reads like
+ * nothing at all. The message test stays as well, because it is what the test
+ * harness and any client that does not carry a status can offer.
+ *
+ * Returns the message to report, worded so that `isNetworkFailure` still
+ * recognises it after it has been through an Error - `noteUnreachable` and
+ * `pushAction`'s own guard both classify by message, and a status cannot be
+ * carried on a throw.
+ */
+function transportFailure(res: { error?: any; status?: number } | null | undefined): string | null {
+  if (!res?.error) return null;
+  const msg = res.error.message ?? String(res.error);
+  if (isNetworkFailure(msg)) return msg;
+  if (res.status === 0) return `Network request failed - ${msg}`;
+  return null;
+}
+
+// Logs PostgREST/RLS-style errors from a Supabase response, and rethrows the
+// ones that mean the request never arrived.
+//
+// A ROW-LEVEL rejection keeps the old behaviour deliberately: the server was
+// reached, it made a decision, and a non-critical write can reconverge on the
+// next pull rather than interrupting a live game. A TRANSPORT failure cannot -
+// it wrote nothing, for any action, so resolving it is always a false 'saved'.
+// The fix lives here rather than in the list of critical actions because the
+// mechanism is the response, not the action: fixing it at the call sites would
+// leave every helper that inspects a response free to swallow it again.
+//
 // `any` is deliberate: this only ever reads .error off an arbitrary PostgREST
 // response shape, and narrowing it would mean restating every response type.
-function check(label: string, res: { error: any }): void {
-  if (res?.error) {
-    warn(`[sync] ${label} rejected:`, res.error.message ?? res.error);
+function check(label: string, res: { error: any; status?: number }): void {
+  if (!res?.error) return;
+  const transport = transportFailure(res);
+  if (transport !== null) {
+    warn(`[sync] ${label} FAILED:`, transport);
+    throw new Error(`${label}: ${transport}`);
   }
+  warn(`[sync] ${label} rejected:`, res.error.message ?? res.error);
 }
 
 // For writes where a silent failure means the user LOSES data they can see on
 // screen (creating a drop-in game, importing a roster). These rethrow so the
 // sync badge shows 'error' instead of falsely reporting 'saved' while the
 // server has nothing — the failure mode that hid the drop-in game bugs.
-function checkCritical(label: string, res: { error: any }): void {
+function checkCritical(label: string, res: { error: any; status?: number }): void {
   if (res?.error) {
-    const msg = res.error.message ?? String(res.error);
+    const msg = transportFailure(res) ?? (res.error.message ?? String(res.error));
     warn(`[sync] ${label} FAILED:`, msg);
     throw new Error(`${label}: ${msg}`);
   }
@@ -506,21 +580,23 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
     // rethrown so the caller can show a real error instead of a false 'saved'.
     const msg = (e as Error)?.message ?? String(e);
     warn('sync push failed:', msg);
-    // Keyed off the action, not off how the message happens to be worded. A
-    // network TypeError carries no label at all, so a message test could never
-    // have classified the case that matters most.
-    //
-    // ...and off the TRANSPORT, which is the second half and was missing.
+    // Keyed off the action, and off the TRANSPORT.
     //
     // A request that never reached the host wrote nothing, for any action, so
     // resolving it is always a false 'saved'. That mattered little while a
     // resolved push only meant "stop showing the spinner"; it matters a great
     // deal now that it also means "the outbox may let this go". A lineup, a
-    // substitution, the period and the game status all push through `check`,
-    // which swallows failures - so with the connection down every one of them
-    // reported success, was marked confirmed, and was never queued or retried.
-    // An offline substitution simply did not exist as far as the server was
-    // ever concerned.
+    // substitution, the period and the game status all push through `check`.
+    //
+    // This clause was DEAD until `check` was fixed: it lives in a catch, and
+    // nothing ever threw, because the transport failure resolved into `.error`
+    // where `check` logged it and returned. So with the connection down every
+    // one of those writes reported success, was marked confirmed, and was never
+    // queued or retried - an offline substitution simply did not exist as far
+    // as the server was ever concerned. `check` now rethrows a transport
+    // failure, which is what reaches this line. The clause stays because it is
+    // the layer that decides, and because a client that REJECTS rather than
+    // resolving lands here without passing through `check` at all.
     //
     // Row-level rejections keep the old behaviour: those DID reach the server,
     // the server made a decision, and a non-critical one can still reconverge
@@ -595,12 +671,17 @@ export async function pushPendingEntry(sb: SupabaseClient, entry: OutboxEntry): 
  * came back at all, which is the entire question `connectivity.ts` needs.
  *
  * A row-level rejection resolves `true` for the same reason: something answered.
- * Only a transport failure means unreachable, and that arrives as a throw.
+ * Only a transport failure means unreachable - and it does NOT arrive as a
+ * throw, which is what this function used to be built on. postgrest-js resolves
+ * it with `status: 0` and an error object, so the old `catch` never ran and the
+ * probe answered "reachable" in aeroplane mode. It therefore decides from the
+ * RESPONSE. The `catch` is kept for a client that does reject (an older
+ * transport, a custom fetch): nothing came back there either.
  */
 export async function pingServer(sb: SupabaseClient): Promise<boolean> {
   try {
-    await sb.from('leagues').select('id').limit(1);
-    return true;
+    const res = await sb.from('leagues').select('id').limit(1);
+    return transportFailure(res) === null;
   } catch {
     return false;
   }

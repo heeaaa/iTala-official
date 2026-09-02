@@ -97,6 +97,36 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   // behind it. A modal rather than an Alert so the count, the reassurance and
   // the dev-only detail can be laid out and read, not crammed into one string.
   const [syncDetailOpen, setSyncDetailOpen] = useState(false);
+  // SPEAK THE CHANGE, because the chip cannot.
+  //
+  // The block this chip replaced carried accessibilityRole="alert", so a screen
+  // reader spoke it the moment a write started failing. A chip is a button: it
+  // says nothing until somebody navigates to it. Moving the warning out of the
+  // vertical flow was right - it was pushing the scoreboard and the on-court
+  // five down the screen mid-game - but it must not cost a scorekeeper who
+  // cannot see the colour change the only notice they get, or they keep logging
+  // into a queue believing every stat has landed.
+  //
+  // On the TRANSITION only. Announcing per render would talk over the stat
+  // confirmations this screen already speaks on every tap, and `phase` does not
+  // move unless something really changed. Nothing is announced on mount: the
+  // chip is already on screen to be read, and arriving into a game should not
+  // open with a sync bulletin.
+  const spokenSync = useRef({ phase: sync.phase, tone: sync.tone });
+  useEffect(() => {
+    const prev = spokenSync.current;
+    spokenSync.current = { phase: sync.phase, tone: sync.tone };
+    if (readOnly || prev.phase === sync.phase) return;
+    const wrong = sync.tone === 'bad' || sync.tone === 'warn';
+    const wasWrong = prev.tone === 'bad' || prev.tone === 'warn';
+    if (wrong) announce(`${sync.label}. ${sync.detail}`);
+    // Only once it is genuinely settled. 'syncing' on the way back up is not
+    // yet good news, and saying so would be the same false reassurance in a
+    // different voice.
+    else if (wasWrong && (sync.phase === 'synced' || sync.phase === 'saved')) {
+      announce('Back online. Everything is saved to the server.');
+    }
+  }, [sync.phase, sync.tone, sync.label, sync.detail, readOnly]);
   const [flash, setFlash] = useState<string | null>(null); // brief "logged" confirmation
   const [milestone, setMilestone] = useState<string | null>(null); // celebratory banner
   useKeepAwake(); // screen never sleeps mid-game

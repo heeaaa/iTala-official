@@ -1019,7 +1019,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       // runs on the very next render wrote that back over the only durable copy
       // of them. That is the reported "scores are missing after reopening the
       // app", and it happened before anything the person could see or do.
-      if (!cancelled) {
+      //
+      // Gated for the same reason the recording side is: nothing in a build
+      // without credentials can confirm, retire or send these. Restoring them
+      // would only pin writes forever and report a queue depth nobody can act
+      // on. The key on disk is left untouched, so a build that does have a
+      // server still picks them up.
+      if (!cancelled && SYNC_ENABLED) {
         const restored = restoreOutbox(await loadOutbox());
         if (restored > 0) trace('OUTBOX', `restored ${restored} unsent write(s) from disk`);
         setPendingWrites(unsyncedCount());
@@ -1274,9 +1280,40 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
    *                                             an overnight reconnect is
    *                                             actually noticed.
    */
+  /**
+   * How many probe CYCLES this outage has spent - not this effect instance,
+   * and not how many pings were refused.
+   *
+   * Both of those distinctions are the bug. The counter has to outlive the
+   * effect, because the probe answering flips the status to 'online' and
+   * unmounts the effect below; on a connection that answers reads but drops
+   * writes - a captive portal, a proxy, a link that comes and goes - the very
+   * next replay fails at the transport, flips it back to 'offline', and the
+   * effect remounts with a fresh zero. And it has to count the CYCLE rather
+   * than a refused ping, because in exactly that case the ping is not refused:
+   * it is the write that fails, so a counter incremented only on a failed ping
+   * would sit at zero for ever.
+   *
+   * Either way round, `probeDelay` never gets past its first step and the
+   * documented 2s/4s/8s/15s/30s schedule degrades into a ping plus a failed
+   * push every two seconds, indefinitely - two outbox writes per cycle and a
+   * re-render of every screen showing the sync chip, while somebody is
+   * scoring. Measured at 30 probes per minute, against both a dead host (with
+   * the old pingServer) and a half-dead one (with the new one).
+   */
+  const probeAttempts = useRef(0);
+
   useEffect(() => {
     if (!SYNC_ENABLED || !ready || net !== 'online') return;
-    void drainOutbox('reconnect');
+    void (async () => {
+      await drainOutbox('reconnect');
+      // The outage is over only if it is STILL over after the queue has been
+      // through the connection. A drain that failed at the transport has
+      // already put the status back to 'offline', and that is precisely the
+      // case whose backoff must not be reset - it is the same outage, one
+      // step further in.
+      if (!isKnownOffline()) probeAttempts.current = 0;
+    })();
   }, [net, ready, drainOutbox]);
 
   useEffect(() => {
@@ -1284,19 +1321,22 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const sb = getSupabase();
     if (!sb) return;
     let cancelled = false;
-    let attempt = 0;
     let timer: ReturnType<typeof setTimeout>;
     const probe = async () => {
       if (cancelled) return;
+      // Counted before the answer, because the cycle is what costs: this one
+      // has now been spent whichever way it goes.
+      probeAttempts.current++;
       const answered = await pingServer(sb);
       if (cancelled) return;
       // Flipping the status re-runs this effect's cleanup and starts the drain
-      // above, so there is nothing else to do here on success.
+      // above, so there is nothing else to do here on success. The count is
+      // NOT cleared here: an answer to one cheap read is not yet evidence the
+      // connection carries a write. The drain above clears it.
       if (answered) { noteReachable(); return; }
-      attempt++;
-      timer = setTimeout(() => { void probe(); }, probeDelay(attempt));
+      timer = setTimeout(() => { void probe(); }, probeDelay(probeAttempts.current));
     };
-    timer = setTimeout(() => { void probe(); }, probeDelay(0));
+    timer = setTimeout(() => { void probe(); }, probeDelay(probeAttempts.current));
     return () => { cancelled = true; clearTimeout(timer); };
   }, [net, ready]);
 
@@ -1339,7 +1379,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // silently overwriting it. Both halves of the state a live game can move -
     // the events and the game row - go in, and the ledger works out which by
     // diffing prev against next. See sync/pendingEvents.ts.
-    const pushTokens = recordPending(action, prev, next);
+    //
+    // ONLY when there is a server. The ledger and the outbox exist to hold a
+    // write open until a SERVER confirms it, and a build with no Supabase
+    // credentials - the documented default, per the README - has no server, no
+    // push, no pull and no drain. Every entry it recorded therefore stayed
+    // unconfirmed forever: the ledger filled to MAX_ENTRIES (1000), and from
+    // then on every single stat tap sorted a thousand entries and serialised
+    // roughly 250 KB to AsyncStorage, on the live-scoring tap path, for a queue
+    // that could never drain. Measured, not assumed - see the offline suite.
+    const pushTokens = SYNC_ENABLED ? recordPending(action, prev, next) : [];
     trace('ACTION', `t=${action.t} game=${'gameId' in action ? action.gameId : '-'} tokens=${pushTokens.join(',') || 'none'}`);
     // On disk before the request goes out, so a write that is interrupted
     // between the tap and the reply - the app killed, the battery gone - is

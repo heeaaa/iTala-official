@@ -29,11 +29,27 @@ class FakeServer {
     this.log = [];
     // op -> ms. op looks like 'insert:events' or 'delete:events'.
     this.latency = {};
-    // op -> 'network' | { message }. 'network' throws the TypeError React
-    // Native's fetch throws when it cannot reach the host, which is what a
-    // scorekeeper on a dropped gym connection actually gets; an object comes
-    // back as a PostgREST error instead. Needed because a push that REJECTS and
-    // a push that succeeds must leave the ledger in different states.
+    // op -> 'network' | 'network-resolved' | { message }.
+    //
+    // THE TWO SHAPES A LOST CONNECTION CAN TAKE, AND WHY BOTH ARE HERE.
+    //
+    // 'network-resolved' is what the INSTALLED client does, and it is the one
+    // that matters. @supabase/postgrest-js catches the fetch rejection and
+    // RESOLVES with `{ data: null, error, status: 0 }`; nothing in src/ calls
+    // throwOnError() and getSupabase() installs no custom fetch, so this is the
+    // shape the app really sees. Verified against this repository's own
+    // node_modules: a select and an upsert against an unreachable host both
+    // resolve with status 0 and `error.message` of 'TypeError: fetch failed'.
+    //
+    // 'network' THROWS instead. That is what this harness did for every offline
+    // test, and it is why the suite was green on code that could not work: the
+    // emulator rejected where production resolves, so `check`'s swallow - the
+    // actual defect - was never exercised. It is kept because a rejection is
+    // still reachable (a client with a custom fetch, an older transport), and
+    // because the two must leave the ledger in the same state.
+    //
+    // An object comes back as an ordinary PostgREST row-level error, with no
+    // status, so nothing classifies it as a transport failure.
     this.failures = {};
     // table -> predicate(row, op). Return false to hide the row from writes,
     // emulating RLS. Hidden rows are silently skipped, never an error.
@@ -57,16 +73,20 @@ class FakeServer {
   //
   // Deliberately leaves any per-op failure already set: a suite that combines
   // an RLS rejection with a connection drop is testing something real.
-  offline(on = true) {
+  //
+  // `mode` DEFAULTS TO 'resolve', because that is what the installed client
+  // does. A test that wants the rejecting transport asks for it by name.
+  offline(on = true, mode = 'resolve') {
     const ops = ['select', 'insert', 'upsert', 'delete'];
     const rpcs = ['create_league', 'add_player', 'rec_setup_game', 'bulk_import_roster'];
     const keys = [
       ...TABLES.flatMap(t => ops.map(op => `${op}:${t}`)),
       ...rpcs.map(r => `rpc:${r}`),
     ];
+    const want = mode === 'throw' ? 'network' : 'network-resolved';
     for (const k of keys) {
-      if (on) this.failures[k] = 'network';
-      else if (this.failures[k] === 'network') delete this.failures[k];
+      if (on) this.failures[k] = want;
+      else if (this.failures[k] === 'network' || this.failures[k] === 'network-resolved') delete this.failures[k];
     }
   }
 
@@ -76,6 +96,18 @@ class FakeServer {
 }
 
 const wait = ms => (ms > 0 ? new Promise(r => setTimeout(r, ms)) : Promise.resolve());
+
+// What the INSTALLED client hands back when the request never left the device:
+// resolved, not rejected. `status: 0` is the discriminator - postgrest-js sets
+// it in exactly one place, the branch that catches the fetch rejection, so it
+// is the one field that cannot be confused with a row-level rejection.
+const transportResolved = () => ({
+  data: null,
+  error: { message: 'TypeError: Network request failed', details: '', hint: '', code: '' },
+  count: null,
+  status: 0,
+  statusText: '',
+});
 
 // A thenable query builder. Every terminal await goes through `settle`, which
 // applies the operation's latency first so ordering can be manipulated.
@@ -149,6 +181,7 @@ function makeBuilder(server, table, op, payload) {
     await wait(server.delayFor(`${op}:${table}`));
     const f = server.failures[`${op}:${table}`];
     if (f === 'network') throw new TypeError('Network request failed');
+    if (f === 'network-resolved') return transportResolved();
     if (f) return { data: null, error: { message: f.message || String(f) } };
     return apply();
   };
@@ -186,6 +219,7 @@ function makeClient(server) {
       server.log.push({ op: 'rpc', name, payload: clone(args) });
       const f = server.failures[`rpc:${name}`];
       if (f === 'network') throw new TypeError('Network request failed');
+      if (f === 'network-resolved') return transportResolved();
       if (f) return { data: null, error: { message: f.message || String(f) } };
       switch (name) {
         case 'create_league':

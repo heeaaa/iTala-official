@@ -225,7 +225,7 @@ ok('docs/DEPLOYMENT.md keeps the zip-apply commands', read('docs/DEPLOYMENT.md')
      /confirmPending\(pushTokens\)/.test(store) && /failPending\(pushTokens\b/.test(store),
      'an entry that is never confirmed pins forever; one confirmed on failure loses the stat');
   ok('the ledger settles by push token, not by bare event id',
-     /const pushTokens = recordPending\(/.test(store) &&
+     /const pushTokens = (SYNC_ENABLED \? )?recordPending\(/.test(store) &&
      /eventToken = \(op: 'add' \| 'remove', eventId: string\)/.test(pend),
      "an add and the undo of the same row shared one slot, so the INSERT's " +
      "acknowledgement retired the UNDO and the basket came back");
@@ -287,7 +287,7 @@ ok('docs/DEPLOYMENT.md keeps the zip-apply commands', read('docs/DEPLOYMENT.md')
      'the whole point of restoring is to make reconciliation keep the local rows');
   ok('reconnecting drains the outbox',
      /const drainOutbox = useCallback\(/.test(store) &&
-     /net !== 'online'\) return;\s*\n\s*void drainOutbox\('reconnect'\)/.test(store),
+     /net !== 'online'\) return;[\s\S]{0,140}?drainOutbox\('reconnect'\)/.test(store),
      'without a drain, reconnecting sends nothing and only the NEXT tap reaches the server');
   ok('replay is idempotent, so a retry cannot duplicate a stat',
      /export async function pushPendingEntry\(/.test(sync) &&
@@ -322,8 +322,61 @@ ok('docs/DEPLOYMENT.md keeps the zip-apply commands', read('docs/DEPLOYMENT.md')
      /if \(isKnownOffline\(\)\)/.test(store),
      'the request cannot succeed and its failure is what the user already reported');
   ok('a dead connection is probed until it answers',
-     /pingServer\(sb\)/.test(store) && /probeDelay\(attempt\)/.test(store),
+     /pingServer\(sb\)/.test(store) && /probeDelay\(probeAttempts\.current\)/.test(store),
      'a device with nothing to send generates no evidence of its own recovery');
+
+  // ---- the three ways a lost connection was reported as a healthy one ----
+  // Every one of these was green in this suite while the app did the opposite,
+  // because the emulator THREW where @supabase/postgrest-js RESOLVES. Verified
+  // against the installed client: a select and an upsert against an unreachable
+  // host both come back as { data: null, error, status: 0 }, with no throw.
+  ok('a transport failure is classified from the response, not from a throw',
+     /function transportFailure\(/.test(sync) && /res\.status === 0/.test(sync),
+     'the client resolves a dead request, so a catch block never sees it');
+  ok('the swallowing helper rethrows a transport failure',
+     /function check\(label: string, res: \{ error: any; status\?: number \}\): void \{[\s\S]{0,400}?const transport = transportFailure\(res\);[\s\S]{0,200}?throw new Error/.test(sync),
+     'SET_LINEUP, SUBSTITUTE, SET_PERIOD, SET_GAME_STATUS and SET_ATTENDANCE all '
+     + 'push through check, so a swallowed transport failure reported them saved');
+  ok('a row-level rejection still reconverges rather than interrupting a game',
+     /warn\(`\[sync\] \$\{label\} rejected:`/.test(sync),
+     'only the transport changed behaviour; RLS refusals keep the old path');
+  ok('pingServer decides from the response it got back',
+     /const res = await sb\.from\('leagues'\)\.select\('id'\)\.limit\(1\);/.test(sync) &&
+     /return transportFailure\(res\) === null;/.test(sync),
+     'the old catch answered true in aeroplane mode, so Settings said Connected');
+  ok('fetchAllState tells a dead request apart from a bad read',
+     /throw new Error\(`fetch \$\{what\}: \$\{transport\}`\)/.test(sync) &&
+     /if \(lr\.error\) \{ warn\('\[sync\] fetch leagues error:'[\s\S]{0,60}?return null; \}/.test(sync),
+     'null for both made pullState record a read that never left the device as reachable');
+  ok('the pull records reachability only after a read genuinely came back',
+     /const remote = await fetchAllState\(sb\);[\s\S]{0,600}?noteReachable\(\);/.test(store) &&
+     /noteUnreachable\(e\);/.test(store),
+     'a throw from fetchAllState has to reach the catch, not the reachable line');
+  ok('both spellings of the transport failure classify the same',
+     /network request failed\|failed to fetch\|fetch failed\|network error/.test(read('src/store/authErrors.ts')),
+     'React Native says Network request failed; Node and undici say fetch failed');
+  ok('the probe backoff outlives the effect that runs it',
+     /const probeAttempts = useRef\(0\)/.test(store) &&
+     /probeAttempts\.current\+\+;\s*\n\s*const answered = await pingServer/.test(store),
+     'a counter inside the effect body restarts at zero on every status flip, so '
+     + 'the schedule never leaves its first step');
+  ok('the backoff is cleared only once the connection carried the queue',
+     /await drainOutbox\('reconnect'\);[\s\S]{0,400}?if \(!isKnownOffline\(\)\) probeAttempts\.current = 0;/.test(store),
+     'clearing it on the ping alone re-opens the two-second loop on a host that '
+     + 'answers reads and drops writes');
+
+  // ---- a build with no server must not keep a queue it can never drain ---
+  // SYNC_ENABLED is !!(URL && ANON_KEY), and the README documents running with
+  // neither. Nothing in such a build confirms, pulls, retires or sends, so every
+  // recorded entry stayed unconfirmed: the ledger filled to MAX_ENTRIES and each
+  // stat tap after that sorted 1000 entries and serialised ~250 KB to storage,
+  // on the live-scoring tap path, for a queue with nowhere to go.
+  ok('the pending ledger is only built when there is a server to confirm it',
+     /const pushTokens = SYNC_ENABLED \? recordPending\(action, prev, next\) : \[\];/.test(store),
+     'a local-only build recorded a write nothing could ever confirm or drain');
+  ok('and a persisted outbox is not restored into a build that cannot drain it',
+     /if \(!cancelled && SYNC_ENABLED\) \{\s*\n\s*const restored = restoreOutbox\(/.test(store),
+     'restoring pins writes forever and reports a queue depth nobody can act on');
   // The reducer body, from its declaration to the context type that follows it.
   const reducerFrom = store.indexOf('export function reducer');
   const reducerTo = store.indexOf('interface Ctx {');
