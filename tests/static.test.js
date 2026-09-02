@@ -840,6 +840,10 @@ for (const f of srcFiles) {
     'tests/README.md', 'tests/MANUAL-REGRESSION.md',
     'tests/static.test.js', 'tests/reducer.test.js', 'tests/sync.test.js',
     '.github/workflows/ci.yml', 'site/README.md',
+    // The PR-review agent sends a reviewer to specific docs by path. A doc that
+    // moves without it would send them somewhere that no longer exists, which
+    // is the exact failure this check was written for.
+    '.claude/agents/pr-reviewer.md', '.claude/commands/review-pr.md',
   ];
   // A repo-relative path ending in .md, as a markdown link, in backticks, or
   // bare in prose. Deliberately not matching bare filenames with no directory

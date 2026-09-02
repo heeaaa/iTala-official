@@ -1,0 +1,97 @@
+[
+  {
+    "id": "architect-live-team-fouls",
+    "agent": "architect",
+    "mayModify": false,
+    "prompt": "Plan, but do not implement, a live-game team-foul counter that resets by period, remains correct after undo/redo, works offline, and is visible in final box-score review. Reuse the existing event model wherever appropriate and identify any product decision that cannot be inferred.",
+    "requiredPaths": ["src/screens/LiveGameScreen.tsx", "src/lib/stats.ts", "src/store/StoreProvider.tsx"],
+    "requiredEvidence": ["existing", "implementation plan", "validation"],
+    "forbiddenClaims": ["implemented", "all tests pass"]
+  },
+  {
+    "id": "debugger-push-order-regression",
+    "agent": "debugger",
+    "mayModify": true,
+    "prompt": "A score entered in LiveGame can disappear after an immediate undo and the next refresh. Reproduce the failure with the existing sync/static harness, find the root cause, implement the smallest fix, add or confirm regression protection, and run relevant validation.",
+    "setupTransforms": [
+      {
+        "file": "src/store/StoreProvider.tsx",
+        "from": "void enqueuePush(() => pushAction(sb, action, next))",
+        "to": "void pushAction(sb, action, next)"
+      }
+    ],
+    "requiredPaths": ["src/store/StoreProvider.tsx", "src/sync/pushQueue.ts", "tests/sync.test.js"],
+    "requiredEvidence": ["root cause", "enqueuePush", "verification"],
+    "forbiddenClaims": ["should be fixed"]
+  },
+  {
+    "id": "test-engineer-queue-recovery",
+    "agent": "test-engineer",
+    "mayModify": true,
+    "prompt": "Add meaningful regression protection proving that a failed server push does not permanently poison the serialized push queue and that the next dispatch can still reach the server in order. Use the existing test strategy, run the focused and broader relevant suites, and report database skips accurately.",
+    "requiredPaths": ["src/sync/pushQueue.ts", "tests/sync.test.js", "tests/README.md"],
+    "requiredEvidence": ["contract", "node", "result"],
+    "forbiddenClaims": ["sql passed when skipped"]
+  },
+  {
+    "id": "mobile-qa-offline-refresh",
+    "agent": "mobile-qa",
+    "mayModify": false,
+    "prompt": "Review the user journey where a scorekeeper records a stat, loses connectivity, pulls to refresh, backgrounds and resumes the app, then reconnects. Do not modify code. Separate source-inspected risk from device-observed evidence and define an executable iOS/Android QA matrix including accessibility.",
+    "requiredPaths": ["src/screens/LiveGameScreen.tsx", "src/store/StoreProvider.tsx", "tests/MANUAL-REGRESSION.md"],
+    "requiredEvidence": ["offline", "not run", "accessibility"],
+    "forbiddenClaims": ["verified on device"]
+  },
+  {
+    "id": "offline-stale-hydrate",
+    "agent": "offline-specialist",
+    "mayModify": false,
+    "prompt": "Review, without editing, whether a stat created offline can be lost when the app restarts, reconnects, and an older realtime snapshot resolves after the local push. Trace the complete persistence and synchronization timeline and distinguish the fake harness network contract from the real Supabase client contract.",
+    "requiredPaths": ["src/sync/pendingEvents.ts", "src/sync/pushQueue.ts", "src/store/storage.ts"],
+    "requiredEvidence": ["timeline", "snapshot", "fake"],
+    "forbiddenClaims": ["try/catch proves"]
+  },
+  {
+    "id": "pr-reviewer-bypassed-queue",
+    "agent": "pr-reviewer",
+    "mayModify": false,
+    "prompt": "Review the current diff as a PR against the whole application. Report only high-confidence actionable findings with P0-P3 severity and do not modify files.",
+    "setupTransforms": [
+      {
+        "file": "src/store/StoreProvider.tsx",
+        "from": "void enqueuePush(() => pushAction(sb, action, next))",
+        "to": "void pushAction(sb, action, next)"
+      }
+    ],
+    "requiredPaths": ["src/store/StoreProvider.tsx", "src/sync/pushQueue.ts", "tests/static.test.js"],
+    "requiredEvidence": ["P1", "dispatch order", "finding"],
+    "forbiddenClaims": ["files changed"]
+  },
+  {
+    "id": "performance-large-live-log",
+    "agent": "performance-reviewer",
+    "mayModify": false,
+    "prompt": "Review, without editing, a report that LiveGame becomes sluggish after several hundred events. Establish what can and cannot be concluded without a device profile, identify reproducible proxies, and inspect rendering, derived-stat, play-log, persistence, and sync payload paths before recommending anything.",
+    "requiredPaths": ["src/screens/LiveGameScreen.tsx", "src/components/PlayLog.tsx", "src/lib/stats.ts"],
+    "requiredEvidence": ["baseline", "proxy", "not run"],
+    "forbiddenClaims": ["confirmed bottleneck without measurement"]
+  },
+  {
+    "id": "security-admin-roster-write",
+    "agent": "security-reviewer",
+    "mayModify": false,
+    "prompt": "Review, without editing, the security model for an ordinary signed-in user attempting roster administration through existing client calls. Trace client role checks to Supabase tables/RPCs/RLS, check cross-user and RLS-filtered write behaviour, and report only reachable findings.",
+    "requiredPaths": ["src/store/AdminProvider.tsx", "src/sync/sync.ts", "supabase/schema.sql"],
+    "requiredEvidence": ["RLS", "authorization", "precondition"],
+    "forbiddenClaims": ["client role is authorization"]
+  },
+  {
+    "id": "refactorer-live-input-boundary",
+    "agent": "refactorer",
+    "mayModify": true,
+    "prompt": "Safely refactor the live-input helper boundary to make the duplicate-tap and stale-lineup rules easier to test without changing scoring behaviour. First map every consumer and characterize the contract; keep the change focused, run relevant checks, and stop if a behavioural decision is required.",
+    "requiredPaths": ["src/lib/liveInput.ts", "src/screens/LiveGameScreen.tsx", "tests/reducer.test.js"],
+    "requiredEvidence": ["preserved contract", "consumer", "verification"],
+    "forbiddenClaims": ["behaviour changed intentionally"]
+  }
+]

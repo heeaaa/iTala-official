@@ -6,7 +6,19 @@ dist/
 .env
 .env.local
 .env.*.local
-.claude/
+# Claude Code. The agent definitions, workflows, shared context and validators
+# are project tooling and belong to everyone working on this repo. Everything
+# else under .claude/ remains local session state (this directory was
+# blanket-ignored during the secrets scrub, which caught the tooling by
+# accident rather than by intent).
+.claude/*
+!.claude/README.md
+!.claude/PROJECT-CONTEXT.md
+!.claude/agents/
+!.claude/commands/
+!.claude/scripts/
+!.claude/validation/
+!.claude/settings.json
 
 # Mobile signing / service-account credentials - never commit these
 *.p8

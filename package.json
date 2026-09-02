@@ -10,6 +10,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
+    "agents:validate": "node .claude/scripts/validate-agent-system.mjs",
     "test": "node tests/run.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
