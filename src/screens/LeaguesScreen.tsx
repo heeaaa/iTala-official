@@ -17,7 +17,7 @@ import { ScreenProps } from '../navigation';
 const HIDDEN_LOCK_TAPS = 10;
 
 export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
-  const { state, ready, prefs, toggleFavLeague, dispatch, refresh, synced, sync, prefsReady, initialSyncDone, dismissOnboarding } = useStore();
+  const { state, ready, prefs, toggleFavLeague, dispatch, refresh, synced, sync, prefsReady, initialSyncDone, dismissOnboarding, liveElsewhere } = useStore();
   const [refreshing, setRefreshing] = useState(false);
   const [onboardingClosed, setOnboardingClosed] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -101,7 +101,7 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
   // Favourite leagues' live games come first, then the rest — a fan's own
   // league surfaces at the front of the carousel.
   const favSet = new Set(prefs.favLeagueIds);
-  const liveRefs = [...visibleLeagues]
+  const loadedRefs = [...visibleLeagues]
     .sort((a, b) => (favSet.has(b.id) ? 1 : 0) - (favSet.has(a.id) ? 1 : 0))
     .flatMap(l =>
       l.games.filter(g => g.status === 'live')
@@ -109,12 +109,41 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
           const home = l.teams.find(t => t.id === g.homeTeamId);
           const away = l.teams.find(t => t.id === g.awayTeamId);
           return {
-            leagueId: l.id, gameId: g.id, leagueName: l.name, league: l, game: g,
+            leagueId: l.id, gameId: g.id, leagueName: l.name,
             matchup: home && away ? `${home.name} vs ${away.name}` : null,
             location: g.location ?? null,
+            // Known here, because this league's rows are on the device.
+            spectator: !canScoreGame(l, g) as boolean | undefined,
           };
         })
     );
+
+  // Live games in leagues this device has NOT loaded. The pull is scoped to the
+  // leagues in use, so without this the banner would quietly narrow to those -
+  // and a fan browsing for something to watch is the whole point of it. Comes
+  // from one narrow live-games-only read (see fetchLiveGames).
+  const visibleIds = new Set(visibleLeagues.map(l => l.id));
+  const liveGameIds = new Set(loadedRefs.map(r => r.gameId));
+  const elsewhereRefs = liveElsewhere
+    // Same visibility rules as everything else on this screen: archived
+    // leagues and other people's private drop-in spaces stay out of sight.
+    .filter(x => visibleIds.has(x.leagueId) && !liveGameIds.has(x.gameId))
+    .map(x => ({
+      leagueId: x.leagueId,
+      gameId: x.gameId,
+      leagueName: state.leagues.find(l => l.id === x.leagueId)?.name ?? '',
+      matchup: x.homeName && x.awayName ? `${x.homeName} vs ${x.awayName}` : null,
+      location: x.location,
+      // NOT known here, and deliberately left undefined rather than guessed.
+      // `true` would lock a scorekeeper out of their own game whenever their
+      // memberships had not been read yet; LiveGameScreen recomputes the answer
+      // from the league once its detail arrives, and treats "cannot tell yet"
+      // as read-only in the meantime.
+      spectator: undefined as boolean | undefined,
+    }));
+
+  const liveRefs = [...loadedRefs, ...elsewhereRefs]
+    .sort((a, b) => (favSet.has(b.leagueId) ? 1 : 0) - (favSet.has(a.leagueId) ? 1 : 0));
 
   // Search + favorites. Favorites float to the top (stable within groups so
   // the newest-first creation order is otherwise preserved).
@@ -313,7 +342,7 @@ Share this with the organizer. It can create exactly one league, then expires.`)
           {liveRefs.map(ref => (
             <Pressable
               key={ref.gameId}
-              onPress={() => navigation.navigate('LiveGame', { leagueId: ref.leagueId, gameId: ref.gameId, spectator: !canScoreGame(ref.league, ref.game) })}
+              onPress={() => navigation.navigate('LiveGame', { leagueId: ref.leagueId, gameId: ref.gameId, spectator: ref.spectator })}
               style={{
                 width: liveRefs.length === 1 ? windowW - space(4) * 2 : windowW * 0.78,
                 backgroundColor: colors.surface, borderRadius: 14, padding: 14,

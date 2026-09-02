@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, Pressable, TextInput, Alert, Share } from 'react-native';
+import { View, ScrollView, Pressable, TextInput, Alert, Share, ActivityIndicator } from 'react-native';
 import { Screen, Txt, Card, Button, Pill, Segmented, Empty, TeamBadge, LivePip, Toggle } from '../components/ui';
 import { useStore, useLeague } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
@@ -11,7 +11,7 @@ import { dayKey, dayLabel, uid } from '../lib/format';
 export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'LeagueDetail'>) {
   const { leagueId } = route.params;
   const league = useLeague(leagueId);
-  const { dispatch, prefs, toggleFavTeam } = useStore();
+  const { dispatch, prefs, toggleFavTeam, loadLeagueDetail, leaguesLoading, noteLeagueOpened } = useStore();
   const { canScore, isOwner, isAdmin, getLeagueCodes, regenerateLeagueCode, listMembers, removeMember, user, canScoreGame } = useAdmin();
   const [tab, setTab] = useState(0);
   const [rosterQuery, setRosterQuery] = useState('');
@@ -20,7 +20,63 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
   const [showSettings, setShowSettings] = useState(false);
   const [dupOpen, setDupOpen] = useState(false);
   const [dupSeason, setDupSeason] = useState('');
+
+  // This league's games and stats may not be on the device: the catalogue
+  // carries every league's name, but the heavy tables are only fetched for the
+  // ones that are used. Asking is idempotent and de-duplicated, so this is safe
+  // to run on every render pass that finds the detail missing.
+  const needsDetail = !!league && !league.detailLoaded;
+  useEffect(() => {
+    if (needsDetail) void loadLeagueDetail(leagueId);
+  }, [needsDetail, leagueId, loadLeagueDetail]);
+
+  // Opening a league is what makes it recent, and recency is what keeps later
+  // pulls reading it. Without this, coming back to a league you were just in
+  // would fetch it again every time.
+  useEffect(() => { noteLeagueOpened(leagueId); }, [leagueId, noteLeagueOpened]);
+
   if (!league) return <Screen><Txt k="body">League not found.</Txt></Screen>;
+
+  // NOT the same as "this league has no games", and the difference is the whole
+  // point: standings, leaders and the box score would all render as zeros off
+  // empty arrays, which is indistinguishable from a league whose season has not
+  // started - and it is exactly what the N-39 data loss looked like. The
+  // catalogue fields are shown, because they ARE known.
+  if (needsDetail) {
+    const loading = leaguesLoading.includes(leagueId);
+    return (
+      <Screen>
+        <View style={{ paddingHorizontal: space(4), paddingTop: space(2) }}>
+          <Txt k="h1">{league.name}</Txt>
+          <Txt k="body" color={colors.muted}>{league.season}</Txt>
+        </View>
+        <View style={{ paddingHorizontal: space(4), paddingTop: space(8), alignItems: 'center' }}>
+          {loading ? (
+            <>
+              <ActivityIndicator accessibilityLabel="Loading this league" />
+              <Txt k="body" color={colors.muted} style={{ marginTop: space(3), textAlign: 'center' }}>
+                Loading this league…
+              </Txt>
+            </>
+          ) : (
+            <>
+              <Txt k="body" style={{ textAlign: 'center' }}>
+                Couldn&apos;t load this league.
+              </Txt>
+              <Txt k="body" color={colors.muted} style={{ marginTop: space(2), textAlign: 'center' }}>
+                Check your connection and try again. Nothing has been lost.
+              </Txt>
+              <Button
+                title="Try again"
+                onPress={() => void loadLeagueDetail(leagueId)}
+                style={{ marginTop: space(4) }}
+              />
+            </>
+          )}
+        </View>
+      </Screen>
+    );
+  }
 
   const scorer = canScore(league);  // owner, co-owner, scorekeeper, super, or shared rec
   const owner = isOwner(league);    // owner / co-owner / super

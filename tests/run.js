@@ -23,6 +23,13 @@ const fs = require('fs');
 const ROOT = path.join(__dirname, '..');
 const H = path.join(__dirname, 'harness');
 const BUNDLE = path.join(__dirname, '.test-bundle.js');
+// A SECOND bundle, for the provider suite. It cannot share the first one: that
+// one aliases react to a stub whose hooks are constants, which is the right
+// trade for importing pure functions out of the app and makes running a
+// component impossible. This one carries a real (tiny) hook runtime, a
+// react-native shim whose AppState actually emits, and a Supabase handle that
+// forwards to the emulator - so StoreProvider itself runs.
+const PROVIDER_BUNDLE = path.join(__dirname, '.provider-bundle.js');
 
 function run(cmd, args, opts = {}) {
   return execFileSync(cmd, args, { stdio: 'inherit', cwd: ROOT, ...opts });
@@ -82,6 +89,29 @@ try {
 }
 if (!fs.existsSync(BUNDLE)) { console.error('✗ bundle not produced'); process.exit(2); }
 
+console.log('• bundling StoreProvider with a live hook runtime…');
+try {
+  npx([
+    '--yes', 'esbuild@0.24.0',
+    path.join('tests', 'provider-entry.ts'),
+    '--bundle', '--platform=node', '--format=cjs',
+    `--outfile=${path.relative(ROOT, PROVIDER_BUNDLE)}`,
+    `--alias:react=${path.join(H, 'pkg', 'react-live')}`,
+    `--alias:react-native=${path.join(H, 'pkg', 'rn-live')}`,
+    `--alias:@react-native-async-storage/async-storage=${path.join(H, 'stubs', 'asyncstorage-live.js')}`,
+    `--alias:@supabase/supabase-js=${path.join(H, 'stubs', 'supabase-live.js')}`,
+    `--alias:expo-haptics=${path.join(H, 'stubs', 'haptics.js')}`,
+    `--alias:expo-notifications=${path.join(H, 'stubs', 'notifications.js')}`,
+    `--alias:expo-device=${path.join(H, 'stubs', 'empty.js')}`,
+    `--alias:expo-constants=${path.join(H, 'stubs', 'empty.js')}`,
+    '--log-level=error',
+  ]);
+} catch (e) {
+  console.error('\n✗ provider bundling failed:', e.message);
+  process.exit(2);
+}
+if (!fs.existsSync(PROVIDER_BUNDLE)) { console.error('✗ provider bundle not produced'); process.exit(2); }
+
 const env = { ...process.env, ITALA_BUNDLE: BUNDLE, ITALA_ROOT: ROOT };
 let failed = 0;
 
@@ -97,6 +127,23 @@ console.log('\n• two-device sync suite');
 try { run('node', [path.join('tests', 'sync.test.js')], { env }); }
 catch { failed++; }
 
+console.log('\n• provider suite (StoreProvider boot ordering and autosave)');
+try {
+  run('node', [path.join('tests', 'provider.test.js')], {
+    env: {
+      ...env,
+      ITALA_PROVIDER_BUNDLE: PROVIDER_BUNDLE,
+      // SYNC_ENABLED is `!!(URL && KEY)`, read once when the module loads, so a
+      // suite whose whole subject is the boot pull has to be given
+      // credential-SHAPED values. Nothing here reaches a network: getSupabase's
+      // client is the emulator (see stubs/supabase-live.js) and the host is
+      // .invalid, which is reserved and unresolvable by definition.
+      EXPO_PUBLIC_SUPABASE_URL: 'https://provider-suite.invalid',
+      EXPO_PUBLIC_SUPABASE_ANON_KEY: 'provider-suite-not-a-real-key',
+    },
+  });
+} catch { failed++; }
+
 console.log('\n• static structural checks');
 try { run('node', [path.join('tests', 'static.test.js')], { env }); }
 catch { failed++; }
@@ -109,6 +156,7 @@ try { run('node', [path.join('tests', 'sql', 'run.js')], { env }); }
 catch { failed++; }
 
 try { fs.unlinkSync(BUNDLE); } catch {}
+try { fs.unlinkSync(PROVIDER_BUNDLE); } catch {}
 
 console.log(failed ? `\n✗ ${failed} suite(s) reported problems` : '\n✓ all suites passed');
 process.exit(failed ? 1 : 0);

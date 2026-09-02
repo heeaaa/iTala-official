@@ -66,10 +66,22 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   // everything from `league` and `game` so nothing re-runs because an unrelated
   // league changed (F-14). `sync` is memoised in the store on its four inputs,
   // so it is a new object only when one of them actually moved.
-  const { dispatch, sync, lastSyncErrorDetail } = useStore();
+  const { dispatch, sync, lastSyncErrorDetail, loadLeagueDetail, noteLeagueOpened } = useStore();
   const { canScoreGame } = useAdmin();
   const league = useLeague(leagueId);
   const game = league?.games.find(g => g.id === gameId);
+
+  // This screen can be entered without ever visiting the league - the live
+  // banner on Home links straight to a game in ANY league, including one whose
+  // heavy tables this device has never read. Without the fetch the tracker
+  // would open on a game it cannot find, with no roster and no score. Both
+  // calls are idempotent, and marking the league recent keeps later pulls
+  // reading it, which is what makes the game work offline afterwards.
+  const needsDetail = !!league && !league.detailLoaded;
+  useEffect(() => {
+    if (needsDetail) void loadLeagueDetail(leagueId);
+  }, [needsDetail, leagueId, loadLeagueDetail]);
+  useEffect(() => { noteLeagueOpened(leagueId); }, [leagueId, noteLeagueOpened]);
   // Defence in depth: honour the route param, but never allow scoring the
   // screen's own rules forbid (e.g. someone else's community drop-in game).
   const readOnly = !!spectator || !(league && canScoreGame(league, game));

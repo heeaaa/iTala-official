@@ -9,7 +9,7 @@ export {
   compareEvents, insertEvent, lastEventOf, sortEvents, pendingCount,
   beginPush, drainableEntries, outboxSnapshot, pruneOutbox, restoreOutbox, unsyncedCount,
 } from '../src/sync/pendingEvents';
-export { pushAction, fetchAllState, pushPendingEntry, pingServer } from '../src/sync/sync';
+export { pushAction, fetchAllState, fetchLeagueDetail, fetchLiveGames, fetchMemberships, pushPendingEntry, pingServer } from '../src/sync/sync';
 export {
   isKnownOffline, netStatus, noteReachable, noteUnreachable, probeDelay, subscribeNet,
   __resetNet,

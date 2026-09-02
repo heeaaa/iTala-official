@@ -32,7 +32,7 @@ const {
   // everything above - a suite that reimplemented these would keep passing
   // after the app stopped calling them.
   beginPush, drainableEntries, outboxSnapshot, pruneOutbox, restoreOutbox, unsyncedCount,
-  pushPendingEntry, pingServer,
+  pushPendingEntry, pingServer, fetchLeagueDetail, fetchMemberships, fetchLiveGames,
   isKnownOffline, netStatus, noteReachable, noteUnreachable, probeDelay,
   describeSync, isNetworkFailure,
 } = M;
@@ -215,9 +215,9 @@ class Device {
   // which is what a slow refetch that overlaps an undo actually does. The tick
   // is taken BEFORE the read, exactly as StoreProvider does it: that is what
   // makes "this snapshot predates that confirmation" decidable.
-  async snapshot() {
+  async snapshot(scope = null) {
     const at = beginSnapshot();
-    const remote = await fetchAllState(this.client);
+    const remote = await fetchAllState(this.client, scope);
     return { at, remote };
   }
   // The same two gates StoreProvider.applySnapshot puts in front of HYDRATE:
@@ -228,7 +228,10 @@ class Device {
     if (!leagues) return false;
     if (leagues.length === 0 && this.state.leagues.length > 0) { this.refused = 'empty'; return false; }
     if (!acceptSnapshot(snap.at)) { this.refused = 'stale'; return false; }
-    this.dispatch({ t: 'HYDRATE', state: { leagues }, snapshotAt: snap.at });
+    // The scope rides with the snapshot, as it does in StoreProvider: null (or
+    // absent) means the snapshot speaks for every league.
+    const covered = snap.remote.covered === undefined ? null : snap.remote.covered;
+    this.dispatch({ t: 'HYDRATE', state: { leagues }, snapshotAt: snap.at, covered });
     return true;
   }
 
@@ -241,8 +244,10 @@ class Device {
     const l = this.league();
     return (l ? l.events : []).filter(e => e.gameId === gameId).map(e => e.id);
   }
-  points(gameId = 'g1') {
-    const l = this.league();
+  // leagueId defaults to lg1, which is what every group before the scoping
+  // work used; GROUP U needs a second league, so it may name one.
+  points(gameId = 'g1', leagueId = 'lg1') {
+    const l = this.league(leagueId);
     // The short names are this suite's own shorthand, kept because every group
     // below already reads in them; the fg2_make/fg3_make/ft_make spellings are
     // the app's real EventType values, used by the groups added for the
@@ -1912,6 +1917,782 @@ async function o19_both_transports_leave_the_same_ledger() {
   eq('O19.3 the rejecting transport agrees, field for field',
      { ...seen[1], mode: 'resolve' }, seen[0]);
 }
+
+/* ==========================================================================
+   GROUP T - the read that was not the whole table
+   ==========================================================================
+
+   Nothing offline here, nothing refused, nothing racing. Every write in this
+   group is inserted, acknowledged and confirmed. The only thing wrong is that
+   the SERVER will not return the whole table in one reply and does not say so.
+
+   PostgREST caps a response at db-max-rows (1000 on a default Supabase
+   project) and reports an ordinary success carrying a short array. fetchAllState
+   had no pagination, so past that many rows a pull returned a PREFIX - and
+   because the events query is ordered ascending, the rows it dropped were the
+   newest ones. A snapshot is applied wholesale, so the game being scored was
+   deleted locally as though another device had removed it, and the autosave
+   wrote that over the last durable copy of it.
+
+   T1 reproduces the loss end to end. T2 and T3 pin the properties of the fix
+   that a naive version would get wrong: paging has to be cap-agnostic (a
+   project whose cap is BELOW the client's page size must not look like a table
+   that ends early), and a read that cannot be completed has to fail rather than
+   hand back a prefix.
+   ========================================================================== */
+
+// Four baskets in an earlier game and three in tonight's, with explicit ids and
+// timestamps so which rows are "newest" is decided here rather than by the
+// clock. Everything is on the server before the cap is applied.
+async function seedTwoGames(server) {
+  const A = await seed(server);
+  A.dispatch({ t: 'CREATE_GAME', id: 'g0', leagueId: 'lg1', homeTeamId: 'tH', awayTeamId: 'tA' });
+  for (let i = 0; i < 4; i++) {
+    A.dispatch({ ...score('lg1', 'g0', 'tH', 'p1', 'fg2_make', 1), id: 'old' + i, ts: 1000 + i });
+  }
+  for (let i = 0; i < 3; i++) {
+    A.dispatch({ ...score('lg1', 'g1', 'tH', 'p1', 'fg3_make', 1), id: 'new' + i, ts: 5000 + i });
+  }
+  await A.settle();
+  return A;
+}
+
+async function t1_a_capped_reply_is_not_the_whole_table() {
+  const server = new FakeServer();
+  const A = await seedTwoGames(server);
+  eq('T1.1 every basket reached the server', server.count('events'), 7);
+  eq('T1.2 tonight is 9 on the device', A.points('g1'), 9);
+  eq('T1.3 nothing is queued and nothing failed', unsyncedCount(), 0);
+  eq('T1.4 no push reported a failure', A.pushErrors, []);
+
+  // The server will not return more than four event rows per reply. It says
+  // nothing about it: no error, no status, just a short array.
+  server.maxRows = 4;
+
+  const snap = await fetchAllState(A.client);
+  const lg = snap.leagues.find(l => l.id === 'lg1');
+  eq('T1.5 the read still returns every event', lg.events.length, 7);
+  ok('T1.6 including the newest three', ['new0', 'new1', 'new2'].every(id => lg.events.some(e => e.id === id)),
+     lg.events.map(e => e.id).join(','));
+
+  // And the whole point: hydrating that snapshot must not delete tonight.
+  const B = new Device('B', server);
+  B.state = JSON.parse(JSON.stringify(A.state));
+  await B.pull();
+  eq('T1.7 the earlier game survives the pull', B.points('g0'), 8);
+  eq('T1.8 tonight survives the pull', B.points('g1'), 9);
+}
+
+async function t2_paging_does_not_assume_the_servers_cap() {
+  const server = new FakeServer();
+  const A = await seedTwoGames(server);
+
+  // A cap of one row per reply is the adversarial case for any client that
+  // pages by its OWN page size and stops on a short page: every reply is short,
+  // so such a client would read exactly one event and call it the table.
+  server.maxRows = 1;
+  const snap = await fetchAllState(A.client);
+  const lg = snap.leagues.find(l => l.id === 'lg1');
+  eq('T2.1 a one-row cap still yields all seven events', lg.events.length, 7);
+  eq('T2.2 and both teams', lg.teams.length, 2);
+  eq('T2.3 and both games', lg.games.length, 2);
+  eq('T2.4 and both players', lg.players.length, 2);
+
+  // The league read is capped too, so the loop has to page the table it takes
+  // its own iteration order from.
+  const server2 = new FakeServer();
+  const C = await seed(server2);
+  C.dispatch({ t: 'ADD_LEAGUE', id: 'lg2', name: 'Second', season: 'S1' });
+  await C.settle();
+  server2.maxRows = 1;
+  const snap2 = await fetchAllState(C.client);
+  eq('T2.5 both leagues come back under a one-row cap', snap2.leagues.length, 2);
+}
+
+async function t3_an_unfinishable_read_fails_rather_than_truncating() {
+  const server = new FakeServer();
+  const A = await seedTwoGames(server);
+
+  // A server that answers with rows but never advances the cursor: every reply
+  // carries the same first row whatever id it was asked to read past. A client
+  // that trusted the walk to terminate would loop for ever; one that gave up
+  // quietly would hand back a prefix, which is the bug. It has to be an error.
+  const client = makeClient(server);
+  const realFrom = client.from.bind(client);
+  client.from = (table) => {
+    const t = realFrom(table);
+    if (table !== 'events') return t;
+    return {
+      ...t,
+      select: (cols, opts) => {
+        void t.select(cols, opts);
+        const stuck = {
+          order: () => stuck,
+          limit: () => stuck,
+          gt: () => stuck,
+          range: () => stuck,
+          then: (res, rej) => Promise.resolve({
+            data: server.rows.events.slice(0, 1).map(r => ({ ...r })), error: null, status: 200,
+          }).then(res, rej),
+          catch: (rej) => Promise.resolve({ data: [], error: null }).catch(rej),
+        };
+        return stuck;
+      },
+    };
+  };
+
+  let threw = null;
+  let out;
+  try { out = await fetchAllState(client); } catch (e) { threw = e; }
+  ok('T3.1 an unfinishable read does not resolve as a snapshot', out === null || threw !== null,
+     JSON.stringify(out && out.leagues && out.leagues.length));
+  ok('T3.2 and it never returns a prefix of the events',
+     !(out && out.leagues && out.leagues.some(l => l.events.length > 0 && l.events.length < 7)),
+     JSON.stringify(out && out.leagues && out.leagues.map(l => l.events.length)));
+
+  // A device holding the full game is untouched by it.
+  const B = new Device('B', server);
+  B.state = JSON.parse(JSON.stringify(A.state));
+  B.client = client;
+  await B.pull();
+  eq('T3.3 the device keeps tonight', B.points('g1'), 9);
+}
+
+/* THE RACES OFFSET PAGING LOST, AND KEYSET DOES NOT.
+
+   Every case below is a read taken while somebody else writes. They are the
+   reason the pull walks id instead of asking for OFFSET windows: OFFSET is
+   defined against a result set that is moving, so a delete behind the cursor
+   makes the next window step over a surviving row - and the exact count shrinks
+   by the same one, so the completeness check cannot see it. Undo issues a real
+   DELETE, and because the read is global, the undo does not even have to be in
+   your league. All of these were demonstrated against the offset version before
+   it was replaced. */
+
+// A page of two, so paging is genuinely multi-request, with an Undo landing
+// between the first reply and the second. `beforeRead` is used rather than a
+// wrapped builder because a wrapped builder does not survive .order()/.limit().
+async function pagedServerWithDeleteMidRead(deleteId) {
+  const server = new FakeServer();
+  const A = await seedTwoGames(server);
+  server.maxRows = 2;
+  server.readCounts = {};
+  server.beforeRead = (table, n) => {
+    // Somebody, anywhere, taps Undo once we are past the first page of events.
+    if (table === 'events' && n === 1) {
+      server.rows.events = server.rows.events.filter(r => r.id !== deleteId);
+    }
+  };
+  return { server, A, client: A.client };
+}
+
+async function t6_a_delete_mid_read_cannot_skip_a_surviving_row() {
+  // Delete one of the OLD events: a row the first page already returned, which
+  // is what shifts every later row down one offset.
+  const { server, client } = await pagedServerWithDeleteMidRead('old0');
+  const snap = await fetchAllState(client);
+  const surviving = server.rows.events.map(r => r.id).sort();
+
+  ok('T6.1 the read either completes or refuses, never half-completes',
+     snap === null || snap.leagues !== undefined, JSON.stringify(snap));
+  if (snap !== null) {
+    const got = snap.leagues.flatMap(l => l.events.map(e => e.id)).sort();
+    // Whether the deleted row is still in hand depends on when it went, and
+    // either answer is defensible. What must never happen is a row that STILL
+    // EXISTS going missing, or any row arriving twice - one deletes a stat, the
+    // other doubles a score.
+    eq('T6.2 no surviving event is skipped', surviving.filter(id => !got.includes(id)), []);
+    eq('T6.3 and no event is duplicated', got.length, new Set(got).size);
+  }
+}
+
+async function t7_a_delete_mid_read_does_not_cost_the_game_on_relaunch() {
+  // The same race, ending the way the reporter's did: a relaunch with an empty
+  // ledger, where nothing local is pinned and the snapshot is believed in full.
+  // The consequence a running device is spared - it still has the row in the
+  // ledger - is the one a restarted device takes permanently, because the boot
+  // autosave writes whatever the snapshot said over the last durable copy.
+  const { server, A } = await pagedServerWithDeleteMidRead('old0');
+  A.persist();
+  const B = relaunch(A);
+  server.readCounts = {};
+  eq('T7.1 the relaunch starts from disk with every event intact', B.league().events.length, 7);
+  eq('T7.2 and with an empty ledger, as a new process has', pendingCount(), 0);
+
+  await B.pull();
+  const surviving = server.rows.events.map(r => r.id).sort();
+  const onBoard = B.league().events.map(e => e.id);
+  const onDisk = B.disk.state.leagues.find(l => l.id === 'lg1').events.map(e => e.id);
+
+  // Every row the server still holds has to be on the board AND on the disk.
+  // The pre-keyset read stepped over one, and this is where that becomes
+  // permanent: absent from the snapshot, absent from state, absent from disk.
+  eq('T7.3 no surviving event is missing from the board',
+     surviving.filter(id => !onBoard.includes(id)), []);
+  eq('T7.4 and none is missing from the durable copy',
+     surviving.filter(id => !onDisk.includes(id)), []);
+  eq('T7.5 tonight is still nine points', B.points('g1'), 9);
+  eq('T7.6 and the durable copy agrees', diskPoints(B, 'g1'), 9);
+}
+
+async function t8_only_an_empty_page_proves_the_walk_finished() {
+  // The offset version took the count from the NEWEST page and treated an empty
+  // batch as end-of-table unconditionally, so a page answering
+  // { data: [], count: 0 } made it accept 1000 of 2500 rows as the whole table.
+  // This repo documents that exact reply shape at StoreProvider.tsx - an RLS
+  // read taken while the access token is mid-refresh. Keyset keeps no count to
+  // be fooled about; what must never happen is a SHORT page read as the end.
+  const server = new FakeServer();
+  await seedTwoGames(server);
+  server.maxRows = 1; // every page is short; none is empty until the walk ends
+  const snap = await fetchAllState(makeClient(server));
+  ok('T8.1 a short page is not mistaken for the end', snap !== null, 'the snapshot was refused');
+  const lg = snap.leagues.find(l => l.id === 'lg1');
+  eq('T8.2 all seven events came back, one row per reply', lg.events.length, 7);
+  eq('T8.3 and in canonical (ts, id) order', lg.events.map(e => e.id),
+     ['old0', 'old1', 'old2', 'old3', 'new0', 'new1', 'new2']);
+}
+
+/* What the saved AppState on disk says the score is. `points()` reads the
+   RUNNING copy; this reads the only copy that survives a force-quit, and the
+   one the reported bug ends up destroying. */
+function diskPoints(device, gameId, leagueId = 'lg1') {
+  const val = { fg3_make: 3, fg2_make: 2, ft_make: 1 };
+  const lg = device.disk.state.leagues.find(l => l.id === leagueId);
+  return (lg ? lg.events : []).filter(e => e.gameId === gameId).reduce((n, e) => n + (val[e.type] || 0), 0);
+}
+
+/* THE REPORTED BUG, WITH THE PROCESS ACTUALLY RESTARTED.
+
+   T1.7/T1.8 above hydrate the truncated snapshot into a second `Device`, and
+   every Device shares the MODULE-LEVEL pending ledger. Device A's confirmed
+   writes are therefore still in memory, and the ledger's "the server disagrees
+   with a write I know about" guard keeps the events alive - so T1.7/T1.8 pass
+   even with `readAll` reverted. They are kept because they say something true
+   (a live second device is not corrupted either), but they are NOT evidence
+   about the reported bug.
+
+   The report is a force-quit: exit the game, kill the app, reopen it. `relaunch`
+   reproduces that honestly - `resetSyncPrimitives()` drops the ledger, the push
+   chain and the snapshot watermark exactly as ending the process does, and the
+   new device starts from what reached the disk. Confirmed writes are excluded
+   from the persisted outbox, so the ledger comes back EMPTY: there is nothing
+   left to object with, the truncated snapshot is believed in full, HYDRATE
+   removes tonight's events as though another device had deleted them, and the
+   boot autosave writes that over the last durable copy.
+
+   With `src/sync/sync.ts` at HEAD this fails at T4.7 with 0 points, which is
+   the reporter's 0-0 exactly, while T4.8 still passes - the older stats are
+   what the truncated read DID return, which is also what the reporter saw. */
+async function t4_a_truncated_read_survives_a_force_quit() {
+  const server = new FakeServer();
+  const A = await seedTwoGames(server);
+  A.persist();
+
+  eq('T4.1 tonight is 9 before the restart', A.points('g1'), 9);
+  eq('T4.2 and the disk copy holds it', diskPoints(A, 'g1'), 9);
+  eq('T4.3 nothing is queued to replay', unsyncedCount(), 0);
+  eq('T4.4 no push reported a failure', A.pushErrors, []);
+
+  // The cap, and nothing else: no outage, no refused write, no racing pull.
+  server.maxRows = 4;
+
+  const B = relaunch(A);
+  eq('T4.5 the relaunch starts from disk with tonight intact', B.points('g1'), 9);
+  // This is the whole difference from T1: the server confirmed every one of
+  // these writes, so a new process has nothing pinned and believes the snapshot.
+  eq('T4.6 and with an empty ledger, as a new process has', pendingCount(), 0);
+
+  await B.pull();
+  eq('T4.7 tonight is still on the board after the boot pull', B.points('g1'), 9);
+  eq('T4.8 the earlier game is intact too', B.points('g0'), 8);
+  eq('T4.9 and the boot autosave did not overwrite the durable copy', diskPoints(B, 'g1'), 9);
+  eq('T4.10 every event came back', B.league().events.length, 7);
+
+  // Not a lucky refusal. A pull that threw, or one the empty/stale gates
+  // dropped, would leave the local copy standing and pass T4.7 having proved
+  // nothing about the read - which is how the pre-fix suite stayed green.
+  ok('T4.11 the snapshot was actually applied, not skipped', appliedSnapshotAt() > 0,
+     `appliedSnapshotAt=${appliedSnapshotAt()}`);
+  eq('T4.12 and it was not refused', B.refused, null);
+}
+
+/* AN EMPTY PROJECT IS NOT A FAILED READ.
+
+   `readAll` refuses rather than truncating, and the easy way to write that
+   refusal is to treat "fewer rows than I expected" as an error - which turns a
+   first launch, or any account with no leagues yet, into a permanent sync
+   error. It also has to make a request before it can decide anything: skipping
+   the first page for a table believed empty would report success having read
+   nothing.
+
+   nothing. */
+async function t5_an_empty_project_reads_as_empty_not_as_an_error() {
+  const server = new FakeServer();
+  const client = makeClient(server);
+
+  let threw = null, snap;
+  try { snap = await fetchAllState(client); } catch (e) { threw = e; }
+  ok('T5.1 a read of an empty project does not throw', threw === null, threw && threw.message);
+  eq('T5.2 and it is a snapshot of no leagues, not "no snapshot"', snap && snap.leagues, []);
+  ok('T5.3 it did ask all five tables', server.log.filter(x => x.op === 'select').length >= 5,
+     String(server.log.filter(x => x.op === 'select').length));
+}
+
+/* ==========================================================================
+   GROUP U - a snapshot that does not speak for every league
+   ==========================================================================
+
+   Scoping the pull introduces a state this app has never had: a league row
+   present in the catalogue whose games and events were never requested. In a
+   result set that is indistinguishable from a league that HAS no games, and
+   treating the second as the first is precisely how N-39 deleted a
+   scorekeeper's game - HYDRATE drops the events, the autosave makes it
+   permanent, and the tracker reopens at 0-0.
+
+   So the snapshot declares what it was asked about (`covered`), and everything
+   that would otherwise read absence as deletion has to consult it. These pin
+   the two places that do. `covered: null` is "every league, in full", which is
+   what an unscoped pull sends and what every caller sent before scoping
+   existed - so U3 is the proof that none of this changed the old behaviour.
+   ========================================================================== */
+
+// Two leagues, both with a game and stats, both fully on the device.
+async function twoLeaguesBothScored(server) {
+  const A = await seed(server);
+  A.dispatch({ t: 'ADD_LEAGUE', id: 'lg2', name: 'Other', season: 'S1' });
+  A.dispatch({ t: 'ADD_TEAM', leagueId: 'lg2', name: 'Hawks', id: 'tH2' });
+  A.dispatch({ t: 'ADD_TEAM', leagueId: 'lg2', name: 'Kings', id: 'tA2' });
+  A.dispatch({ t: 'ADD_PLAYER', leagueId: 'lg2', teamId: 'tH2', name: 'Mika', number: '4', id: 'p3' });
+  A.dispatch({ t: 'CREATE_GAME', id: 'g2', leagueId: 'lg2', homeTeamId: 'tH2', awayTeamId: 'tA2' });
+  A.dispatch({ t: 'SET_GAME_STATUS', leagueId: 'lg2', gameId: 'g2', status: 'live' });
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg3_make', 1));
+  A.dispatch({ ...score('lg2', 'g2', 'tH2', 'p3', 'fg3_make', 1), id: 'e-lg2', ts: 4000 });
+  await A.settle();
+  return A;
+}
+
+// The catalogue row for a league whose heavy tables were not requested: the
+// scalars the leagues table carries, and nothing else. This is the shape a
+// scoped pull produces, and the shape that used to mean "everything was
+// deleted".
+const catalogueOnly = (league) => ({
+  id: league.id, name: league.name, season: league.season, kind: league.kind,
+  createdAt: league.createdAt,
+  teams: [], players: [], games: [], events: [],
+});
+
+async function u1_a_scoped_snapshot_does_not_delete_what_it_never_read() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+  eq('U1.1 both leagues are scored to begin with', [A.points('g1'), A.points('g2', 'lg2')], [3, 3]);
+
+  // A pull that asked about lg1 only. lg2 comes back as a catalogue row.
+  const at = beginSnapshot();
+  const remote = {
+    leagues: [
+      A.state.leagues.find(l => l.id === 'lg1'),
+      catalogueOnly(A.state.leagues.find(l => l.id === 'lg2')),
+    ],
+    covered: ['lg1'],
+  };
+  ok('U1.2 the snapshot was applied', A.applySnapshot({ at, remote }), `refused=${A.refused}`);
+
+  eq('U1.3 the in-scope league is intact', A.points('g1'), 3);
+  eq('U1.4 the out-of-scope league keeps its stats', A.points('g2', 'lg2'), 3);
+  eq('U1.5 and its game', A.game('g2', 'lg2') !== undefined, true);
+  eq('U1.6 and its roster', A.league('lg2').players.length, 1);
+  eq('U1.7 and its teams', A.league('lg2').teams.length, 2);
+  // The catalogue fields still update - that is the whole point of sending them.
+  eq('U1.8 while the catalogue row is still applied', A.league('lg2').name, 'Other');
+}
+
+async function u2_a_scoped_snapshot_does_not_prune_a_queued_write_it_never_read() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+
+  // A lineup change on the out-of-scope league, queued but unconfirmed - the
+  // shape N-38 exists to protect.
+  server.offline(true);
+  A.dispatch({ t: 'SET_LINEUP', leagueId: 'lg2', gameId: 'g2', side: 'home', playerIds: ['p3'] });
+  await A.settle();
+  ok('U2.1 the lineup change is queued', unsyncedCount() > 0, `unsynced=${unsyncedCount()}`);
+  const queued = unsyncedCount();
+
+  // lg2 is no longer loaded, so it contributes no game ids at all - which is
+  // exactly what "the game was deleted" used to look like.
+  const localGameIds = new Set(['g1']);
+
+  eq('U2.2 an unscoped prune still drops it, as it always did',
+     pruneOutbox(localGameIds, null) > 0, true);
+
+  // Rebuild and repeat with the scope declared.
+  resetSyncPrimitives();
+  const B = await twoLeaguesBothScored(new FakeServer());
+  B.server.offline(true);
+  B.dispatch({ t: 'SET_LINEUP', leagueId: 'lg2', gameId: 'g2', side: 'home', playerIds: ['p3'] });
+  await B.settle();
+  eq('U2.3 the same write is queued again', unsyncedCount(), queued);
+
+  eq('U2.4 a scoped prune drops nothing for a league it did not read',
+     pruneOutbox(new Set(['g1']), new Set(['lg1'])), 0);
+  eq('U2.5 so the queued lineup change survives', unsyncedCount(), queued);
+}
+
+/* U1 asserts the roster and the game survive, and those are the load-bearing
+   assertions: teams and players are in NO ledger, so the scope gate is the only
+   thing standing between them and deletion. U1's EVENTS assertion is weaker
+   than it looks - with the gate removed it still passes, because the ledger's
+   "the server acknowledged this and the snapshot does not have it" branch
+   re-adds them from its own copy.
+
+   That protection expires. A confirmed entry is excluded from the persisted
+   outbox, so the next launch starts with an empty ledger and nothing to object
+   with - which is exactly the sequence that made N-39 permanent. So the events
+   have to be asserted where the ledger cannot help them. */
+async function u4_a_relaunch_with_an_empty_ledger_still_keeps_what_was_not_read() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+  A.persist();
+
+  const B = relaunch(A);
+  eq('U4.1 the relaunch has both leagues from disk', [B.points('g1'), B.points('g2', 'lg2')], [3, 3]);
+  eq('U4.2 and an empty ledger, as a new process has', pendingCount(), 0);
+
+  const at = beginSnapshot();
+  const remote = {
+    leagues: [
+      B.state.leagues.find(l => l.id === 'lg1'),
+      catalogueOnly(B.state.leagues.find(l => l.id === 'lg2')),
+    ],
+    covered: ['lg1'],
+  };
+  ok('U4.3 the scoped snapshot was applied', B.applySnapshot({ at, remote }), `refused=${B.refused}`);
+
+  eq('U4.4 the out-of-scope stats survive with nothing pinning them', B.points('g2', 'lg2'), 3);
+  eq('U4.5 and the durable copy is not overwritten with less', diskPoints(B, 'g2', 'lg2'), 3);
+  eq('U4.6 the in-scope league is still correct', B.points('g1'), 3);
+}
+
+async function u3_an_unscoped_snapshot_behaves_exactly_as_before() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+
+  // Undo lg2's basket on the server ONLY, then pull unscoped. The old
+  // behaviour - a snapshot that speaks for everything is believed about
+  // everything - has to be untouched, or "covered" would have made local rows
+  // permanently sticky and broken every cross-device delete.
+  server.rows.events = server.rows.events.filter(r => r.id !== 'e-lg2');
+  resetSyncPrimitives();
+  await A.pull();
+
+  eq('U3.1 lg1 is untouched', A.points('g1'), 3);
+  eq('U3.2 and the server-side undo still lands on lg2', A.points('g2', 'lg2'), 0);
+}
+
+/* ==========================================================================
+   GROUP V - one league, fetched because someone opened it
+   ==========================================================================
+
+   Phase 1 of bounding the pull. HYDRATE replaces the league list with the
+   snapshot's, which is right for a full pull and would be catastrophic for a
+   single-league read - it would delete every other league on the device. So
+   HYDRATE_LEAGUE merges instead, and these pin that it merges rather than
+   replaces, that it reconciles against the ledger like every other snapshot,
+   and that `detailLoaded` tells "not fetched" apart from "empty".
+
+   The last one matters more than it looks: every screen computing standings,
+   leaders or a box score off empty arrays renders ZEROS, which is
+   indistinguishable from a season that has not started - and is exactly what
+   the N-39 data loss looked like to the person holding the phone.
+   ========================================================================== */
+
+const twoLeagueState = () => ({
+  leagues: [
+    { id: 'lg1', name: 'BPBL', season: 'S3', teams: [], players: [], games: [], events: [], createdAt: 1, detailLoaded: true },
+    { id: 'lg2', name: 'Other', season: 'S1', teams: [], players: [], games: [], events: [], createdAt: 2, detailLoaded: false },
+  ],
+});
+
+const detailFor = (gameId, eventId) => ({
+  teams: [{ id: 'tX', name: 'Hawks', color: '#fff', playerIds: ['pX'] }],
+  players: [{ id: 'pX', name: 'Mika' }],
+  games: [{ id: gameId, homeTeamId: 'tX', awayTeamId: 'tX', status: 'live', homeOnCourt: [], awayOnCourt: [] }],
+  events: [{ id: eventId, gameId, teamId: 'tX', playerId: 'pX', type: 'fg3_make', period: 1, ts: 100 }],
+});
+
+function v1_a_league_fetch_merges_and_never_replaces() {
+  resetSyncPrimitives();
+  const before = twoLeagueState();
+  const at = beginSnapshot();
+  const after = reducer(before, {
+    t: 'HYDRATE_LEAGUE', leagueId: 'lg2', detail: detailFor('g2', 'e2'), snapshotAt: at,
+  });
+
+  eq('V1.1 both leagues are still there', after.leagues.map(l => l.id), ['lg1', 'lg2']);
+  eq('V1.2 the fetched league has its detail', after.leagues[1].events.map(e => e.id), ['e2']);
+  eq('V1.3 and its roster', after.leagues[1].players.length, 1);
+  eq('V1.4 and is marked loaded', after.leagues[1].detailLoaded, true);
+  eq('V1.5 the other league is untouched', after.leagues[0], before.leagues[0]);
+}
+
+function v2_a_league_fetch_does_not_revert_a_write_it_raced() {
+  resetSyncPrimitives();
+  const before = twoLeagueState();
+
+  // The read starts...
+  const at = beginSnapshot();
+  // ...and while it is in flight, a basket is tapped in that league and queued.
+  const withLocal = reducer(before, {
+    t: 'ADD_EVENT', leagueId: 'lg2', gameId: 'g2', teamId: 'tX', playerId: 'pX',
+    type: 'fg2_make', period: 1, id: 'e-local', ts: 500,
+  });
+  recordPending(
+    { t: 'ADD_EVENT', leagueId: 'lg2', gameId: 'g2', teamId: 'tX', playerId: 'pX', type: 'fg2_make', period: 1, id: 'e-local', ts: 500 },
+    before, withLocal,
+  );
+  ok('V2.1 the tap is in the ledger', pendingCount() > 0, `pending=${pendingCount()}`);
+
+  // The read lands. It predates the tap, so it cannot know about it.
+  const after = reducer(withLocal, {
+    t: 'HYDRATE_LEAGUE', leagueId: 'lg2', detail: detailFor('g2', 'e2'), snapshotAt: at,
+  });
+
+  const ids = after.leagues[1].events.map(e => e.id).sort();
+  eq('V2.2 the fetched event is there', ids.includes('e2'), true);
+  eq('V2.3 and the tap it raced survives', ids.includes('e-local'), true);
+}
+
+function v3_an_unknown_league_is_not_invented() {
+  resetSyncPrimitives();
+  const before = twoLeagueState();
+  const after = reducer(before, {
+    t: 'HYDRATE_LEAGUE', leagueId: 'lg-nope', detail: detailFor('gX', 'eX'), snapshotAt: beginSnapshot(),
+  });
+  // The catalogue is the only thing that introduces a league. A detail read for
+  // one this device has never heard of is a race with a delete, not a new
+  // league, and re-adding it would resurrect what someone removed.
+  eq('V3.1 state is unchanged', after, before);
+}
+
+function v4_a_saved_state_from_before_this_field_reads_as_loaded() {
+  resetSyncPrimitives();
+  // Every pull used to be global, so every league in a saved state written by
+  // an older build genuinely WAS complete. Reading the missing field as "not
+  // loaded" would put a spinner over every league on the first launch after
+  // upgrading - and in a local-only build, with no server to fetch from, it
+  // would never clear.
+  const legacy = {
+    leagues: [{ id: 'lg1', name: 'BPBL', season: 'S3', teams: [], players: [], games: [], events: [], createdAt: 1 }],
+  };
+  const hydrated = reducer({ leagues: [] }, { t: 'HYDRATE', state: legacy });
+  eq('V4.1 a legacy saved league counts as loaded', hydrated.leagues[0].detailLoaded, true);
+
+  // But a catalogue row that arrived from a scoped SERVER snapshot must not.
+  const at = beginSnapshot();
+  const scoped = reducer(hydrated, {
+    t: 'HYDRATE',
+    state: { leagues: [
+      hydrated.leagues[0],
+      { id: 'lg9', name: 'New', season: 'S1', teams: [], players: [], games: [], events: [], createdAt: 9 },
+    ] },
+    snapshotAt: at,
+    covered: ['lg1'],
+  });
+  eq('V4.2 the in-scope league is loaded', scoped.leagues[0].detailLoaded, true);
+  eq('V4.3 a catalogue row the snapshot did not read is NOT loaded', scoped.leagues[1].detailLoaded, false);
+  // Explicit false, not undefined: undefined would be read as "legacy, assume
+  // loaded" the next time this state came back off disk.
+  ok('V4.4 and says so explicitly, so a save round trip cannot promote it',
+     scoped.leagues[1].detailLoaded === false, JSON.stringify(scoped.leagues[1].detailLoaded));
+}
+
+/* ==========================================================================
+   GROUP W - the pull reads only the leagues this device uses
+   ==========================================================================
+
+   Phase 2. Before this, every device downloaded every league's every event on
+   every pull - boot, realtime refetch, pull-to-refresh and the reconnect drain.
+   Measured at roughly 124 MB across twenty leagues of history, and large enough
+   at around 150 that the device cannot serialise its own state. The row cap
+   used to hide that by silently truncating the read, which is the N-39 bug; now
+   that the read is faithful, the ceiling is real.
+
+   The catalogue stays whole, because browsing every league IS the product. Only
+   the four heavy tables are narrowed, and the snapshot says so, so HYDRATE
+   leaves everything it did not read alone (GROUP U).
+   ========================================================================== */
+
+async function w1_a_scoped_pull_reads_the_catalogue_whole_and_the_rest_narrowly() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+
+  const snap = await fetchAllState(A.client, ['lg1']);
+  eq('W1.1 the snapshot declares what it read', snap.covered, ['lg1']);
+  eq('W1.2 the catalogue carries BOTH leagues', snap.leagues.map(l => l.id).sort(), ['lg1', 'lg2']);
+
+  const lg1 = snap.leagues.find(l => l.id === 'lg1');
+  const lg2 = snap.leagues.find(l => l.id === 'lg2');
+  eq('W1.3 the scoped league has its events', lg1.events.length > 0, true);
+  eq('W1.4 and its roster', lg1.players.length > 0, true);
+  // Not "this league is empty" - this snapshot was never asked about it. The
+  // `covered` field above is the only thing that distinguishes the two, which
+  // is why it exists.
+  eq('W1.5 the unscoped league carries no heavy rows', [lg2.events.length, lg2.games.length, lg2.players.length], [0, 0, 0]);
+  eq('W1.6 but its catalogue fields are there', lg2.name, 'Other');
+}
+
+async function w2_an_empty_scope_asks_the_server_nothing_it_already_knows() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+  server.log.length = 0;
+
+  const snap = await fetchAllState(A.client, []);
+  eq('W2.1 the catalogue still comes back', snap.leagues.length, 2);
+  eq('W2.2 and the scope is honestly empty, not "everything"', snap.covered, []);
+
+  // `.in('league_id', [])` is a request whose answer is already known. A device
+  // with no leagues of its own - a first launch, a spectator who has favourited
+  // nothing - should not spend four round trips being told nothing.
+  const heavy = server.log.filter(r => r.op === 'select' && r.table !== 'leagues');
+  eq('W2.3 no heavy table was read at all', heavy.length, 0);
+  ok('W2.4 while the catalogue was', server.log.some(r => r.op === 'select' && r.table === 'leagues'),
+     JSON.stringify(server.log.map(r => r.table)));
+}
+
+async function w3_a_scoped_pull_does_not_cost_an_unscoped_league_its_data() {
+  // The end-to-end version of GROUP U, driven through the real scoped read
+  // rather than a hand-built snapshot, and across a relaunch so the ledger is
+  // empty and nothing local is pinned.
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+  A.persist();
+
+  const B = relaunch(A);
+  eq('W3.1 the relaunch has both leagues from disk', [B.points('g1'), B.points('g2', 'lg2')], [3, 3]);
+  eq('W3.2 and an empty ledger', pendingCount(), 0);
+
+  B.applySnapshot(await B.snapshot(['lg1']));
+  eq('W3.3 the scoped league is correct', B.points('g1'), 3);
+  eq('W3.4 the unscoped league keeps its stats', B.points('g2', 'lg2'), 3);
+  eq('W3.5 and its roster', B.league('lg2').players.length, 1);
+  eq('W3.6 while still being listed', B.state.leagues.map(l => l.id).sort(), ['lg1', 'lg2']);
+}
+
+async function w4_one_league_can_be_fetched_on_its_own() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+
+  const detail = await fetchLeagueDetail(A.client, 'lg2');
+  ok('W4.1 the detail read succeeded', detail !== null, 'null');
+  eq('W4.2 it carries only that league\'s events', detail.events.map(e => e.id), ['e-lg2']);
+  eq('W4.3 and only its roster', detail.players.map(p => p.id), ['p3']);
+  eq('W4.4 and only its games', detail.games.map(g => g.id), ['g2']);
+  eq('W4.5 and only its teams', detail.teams.map(t => t.id).sort(), ['tA2', 'tH2']);
+}
+
+async function w5_memberships_are_read_and_a_failure_is_unknown_not_none() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  server.memberships = ['lg1', 'lg7'];
+
+  eq('W5.1 memberships come back', (await fetchMemberships(A.client)).sort(), ['lg1', 'lg7']);
+
+  // A refused RPC must read as "unknown", never as "this account runs nothing".
+  // Scoping a scorekeeper's own league out of the pull because an RPC failed is
+  // how their game stops syncing.
+  server.failures['rpc:my_memberships'] = { message: 'permission denied' };
+  eq('W5.2 a refusal is unknown, not an empty list', await fetchMemberships(A.client), null);
+
+  // A transport failure is offline, and has to be distinguishable from both.
+  server.failures['rpc:my_memberships'] = 'network-resolved';
+  let threw = null;
+  try { await fetchMemberships(A.client); } catch (e) { threw = e; }
+  ok('W5.3 a transport failure throws rather than reporting none', threw !== null, 'did not throw');
+}
+
+/* ==========================================================================
+   GROUP X - the one cross-league view that survives scoping
+   ==========================================================================
+
+   Scoping the pull would otherwise narrow the Home banner to the leagues a
+   device happens to use, and a fan browsing for something to watch is the
+   whole point of it. So live games get their own narrow read.
+
+   It stays cheap because "live" is a tiny slice, and because the banner draws
+   the league name, the matchup and the location and NOTHING ELSE - no score. So
+   this read never touches the events table, which is the one that grows without
+   bound.
+   ========================================================================== */
+
+async function x1_live_games_are_found_in_leagues_the_device_never_loaded() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+  // Both games were set live by the seed helpers.
+  const live = await fetchLiveGames(A.client);
+
+  eq('X1.1 both live games are found', live.map(x => x.gameId).sort(), ['g1', 'g2']);
+  const g2 = live.find(x => x.gameId === 'g2');
+  eq('X1.2 with the league it belongs to', g2.leagueId, 'lg2');
+  eq('X1.3 and the team names the banner draws', [g2.homeName, g2.awayName], ['Hawks', 'Kings']);
+}
+
+async function x2_the_live_read_never_touches_the_events_table() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+  server.log.length = 0;
+
+  await fetchLiveGames(A.client);
+  const tables = [...new Set(server.log.filter(r => r.op === 'select').map(r => r.table))].sort();
+  // The banner shows no score, so the table that grows without bound is not
+  // read at all. If that ever changes, this read stops being cheap and the
+  // whole point of scoping is undone on every pull.
+  eq('X2.1 only games and teams are read', tables, ['games', 'teams']);
+  ok('X2.2 the events table is untouched', !tables.includes('events'), tables.join(','));
+}
+
+async function x3_a_finished_game_drops_out_of_the_banner() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+  A.dispatch({ t: 'SET_GAME_STATUS', leagueId: 'lg2', gameId: 'g2', status: 'final' });
+  await A.settle();
+
+  const live = await fetchLiveGames(A.client);
+  eq('X3.1 only the still-live game is listed', live.map(x => x.gameId), ['g1']);
+}
+
+async function x4_no_live_games_is_an_empty_list_not_a_failure() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+  A.dispatch({ t: 'SET_GAME_STATUS', leagueId: 'lg1', gameId: 'g1', status: 'final' });
+  A.dispatch({ t: 'SET_GAME_STATUS', leagueId: 'lg2', gameId: 'g2', status: 'final' });
+  await A.settle();
+  server.log.length = 0;
+
+  const live = await fetchLiveGames(A.client);
+  eq('X4.1 an empty list, not null', live, []);
+  // Nothing named a team, so there is nothing to look up. A quiet Tuesday
+  // should cost one request, not two.
+  const tables = server.log.filter(r => r.op === 'select').map(r => r.table);
+  eq('X4.2 and the team lookup is skipped entirely', tables, ['games']);
+}
+
+async function x5_a_transport_failure_throws_and_a_refusal_returns_null() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+
+  // A refused read is not the same as an unreachable one, and the banner must
+  // not be the thing that decides the device is offline.
+  server.failures['select:games'] = { message: 'permission denied for table games' };
+  eq('X5.1 a refusal is null, not a throw', await fetchLiveGames(A.client), null);
+
+  delete server.failures['select:games'];
+  server.failures['select:games'] = 'network-resolved';
+  let threw = null;
+  try { await fetchLiveGames(A.client); } catch (e) { threw = e; }
+  ok('X5.2 a transport failure throws', threw !== null, 'did not throw');
+}
+
 const TESTS = [
   ['S1 resurrection is real', s1_resurrection_is_real],
   ['S2 undo deletes server-side', s2_head_deletes_the_row],
@@ -1963,6 +2744,32 @@ const TESTS = [
   ['O17 a dead read is not a bad read', o17_a_dead_read_is_not_a_bad_read],
   ['O18 one transport, two spellings', o18_one_transport_two_spellings],
   ['O19 both transports leave the same ledger', o19_both_transports_leave_the_same_ledger],
+  ['T1 a capped reply is not the whole table', t1_a_capped_reply_is_not_the_whole_table],
+  ['T2 paging does not assume the server cap', t2_paging_does_not_assume_the_servers_cap],
+  ['T3 an unfinishable read fails rather than truncating', t3_an_unfinishable_read_fails_rather_than_truncating],
+  ['T4 a truncated read survives a force-quit', t4_a_truncated_read_survives_a_force_quit],
+  ['T5 an empty project reads as empty, not as an error', t5_an_empty_project_reads_as_empty_not_as_an_error],
+  ['T6 a delete mid-read cannot skip a surviving row', t6_a_delete_mid_read_cannot_skip_a_surviving_row],
+  ['T7 a delete mid-read does not cost the game on relaunch', t7_a_delete_mid_read_does_not_cost_the_game_on_relaunch],
+  ['T8 only an empty page proves the walk finished', t8_only_an_empty_page_proves_the_walk_finished],
+  ['U1 a scoped snapshot does not delete what it never read', u1_a_scoped_snapshot_does_not_delete_what_it_never_read],
+  ['U2 a scoped snapshot does not prune a queued write it never read', u2_a_scoped_snapshot_does_not_prune_a_queued_write_it_never_read],
+  ['U3 an unscoped snapshot behaves exactly as before', u3_an_unscoped_snapshot_behaves_exactly_as_before],
+  ['U4 a relaunch with an empty ledger still keeps what was not read', u4_a_relaunch_with_an_empty_ledger_still_keeps_what_was_not_read],
+  ['V1 a league fetch merges and never replaces', v1_a_league_fetch_merges_and_never_replaces],
+  ['V2 a league fetch does not revert a write it raced', v2_a_league_fetch_does_not_revert_a_write_it_raced],
+  ['V3 an unknown league is not invented', v3_an_unknown_league_is_not_invented],
+  ['V4 a saved state from before this field reads as loaded', v4_a_saved_state_from_before_this_field_reads_as_loaded],
+  ['W1 a scoped pull reads the catalogue whole and the rest narrowly', w1_a_scoped_pull_reads_the_catalogue_whole_and_the_rest_narrowly],
+  ['W2 an empty scope asks the server nothing it already knows', w2_an_empty_scope_asks_the_server_nothing_it_already_knows],
+  ['W3 a scoped pull does not cost an unscoped league its data', w3_a_scoped_pull_does_not_cost_an_unscoped_league_its_data],
+  ['W4 one league can be fetched on its own', w4_one_league_can_be_fetched_on_its_own],
+  ['W5 memberships are read, and a failure is unknown not none', w5_memberships_are_read_and_a_failure_is_unknown_not_none],
+  ['X1 live games are found in leagues the device never loaded', x1_live_games_are_found_in_leagues_the_device_never_loaded],
+  ['X2 the live read never touches the events table', x2_the_live_read_never_touches_the_events_table],
+  ['X3 a finished game drops out of the banner', x3_a_finished_game_drops_out_of_the_banner],
+  ['X4 no live games is an empty list, not a failure', x4_no_live_games_is_an_empty_list_not_a_failure],
+  ['X5 a transport failure throws and a refusal returns null', x5_a_transport_failure_throws_and_a_refusal_returns_null],
 ];
 
 (async () => {

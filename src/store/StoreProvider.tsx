@@ -10,7 +10,7 @@ import { uid } from '../lib/format';
 import { teamColors, DEFAULT_FOUL_OUT } from '../theme';
 import { loadState, saveState, loadPrefs, savePrefs, loadOutbox, saveOutbox } from './storage';
 import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
-import { fetchAllState, pingServer, pushAction, pushPendingEntry, subscribeRealtime } from '../sync/sync';
+import { LiveElsewhere, PullScope, StateSnapshot, fetchAllState, fetchLeagueDetail, fetchLiveGames, fetchMemberships, pingServer, pushAction, pushPendingEntry, subscribeRealtime } from '../sync/sync';
 import { enqueuePush, __resetPushQueue } from '../sync/pushQueue';
 import {
   acceptSnapshot, appliedSnapshotAt, beginPush, beginSnapshot, confirmPending,
@@ -168,6 +168,26 @@ export type Action =
        *  state. Present only for server snapshots; a hydrate from local storage
        *  has no server rows to reconcile against and omits it. */
       snapshotAt?: number;
+      /** Which leagues this snapshot's heavy tables cover; null (or absent) for
+       *  "all of them". A league outside the scope keeps the children this
+       *  device already has: the snapshot was never asked about them, so its
+       *  silence says nothing. See StateSnapshot in sync/sync.ts. */
+      covered?: readonly string[] | null;
+    }
+  /**
+   * One league's heavy tables, fetched on demand because someone opened it.
+   *
+   * Separate from HYDRATE because HYDRATE REPLACES the league list with the
+   * snapshot's, which is right for a full pull and catastrophic for a
+   * single-league read - it would delete every other league on the device. This
+   * merges into the league it names and leaves the rest untouched.
+   */
+  | {
+      t: 'HYDRATE_LEAGUE';
+      leagueId: string;
+      detail: { teams: Team[]; players: Player[]; games: Game[]; events: GameEvent[] };
+      /** Tick from `beginSnapshot()`, taken BEFORE the fetch, as HYDRATE's is. */
+      snapshotAt: number;
     }
   | { t: 'ADD_LEAGUE'; id: string; name: string; season: string; foulOutLimit?: number; kind?: 'league' | 'recreational'; trackMisses?: boolean; trackTurnovers?: boolean; isShared?: boolean; creationCode?: string }
   | { t: 'DELETE_LEAGUE'; leagueId: string }
@@ -305,7 +325,37 @@ export function reducer(state: AppState, a: Action): AppState {
       const bundles = activeBundles();
       const localLeagues = new Map(state.leagues.map(l => [l.id, l]));
 
+      // Which leagues this snapshot is allowed to speak for. `null` is every
+      // league, which is what an unscoped pull sends and what every caller sent
+      // before scoping existed - so this is a no-op until something narrows it.
+      const covered = a.covered ?? null;
+      const coveredSet = covered === null ? null : new Set(covered);
+      const speaksFor = (id: string) => coveredSet === null || coveredSet.has(id);
+
       const leagues = a.state.leagues.map(l => {
+        // OUT OF SCOPE: take the catalogue fields, keep the children. The
+        // snapshot carried this league's name and season but was never asked
+        // for its games, so replacing them with the empty arrays it happens to
+        // have would delete them - and the autosave would make that permanent.
+        if (a.snapshotAt !== undefined && !speaksFor(l.id)) {
+          const local = localLeagues.get(l.id);
+          const scalars = l.trackMisses === undefined ? { ...l, trackMisses: legacyTrackMisses } : l;
+          return {
+            ...scalars,
+            teams: local?.teams ?? [],
+            players: local?.players ?? [],
+            games: local?.games ?? [],
+            events: local?.events ?? [],
+            _redo: local?._redo,
+            // Unchanged by definition: this snapshot read none of it, so it can
+            // neither prove the detail is here nor that it is not. Explicit
+            // `false` rather than undefined: undefined means "saved by a build
+            // that predates this field", which the local-storage hydrate below
+            // reads as loaded, and a league that arrived in the catalogue and
+            // was never fetched must not become loaded by being saved.
+            detailLoaded: local?.detailLoaded ?? false,
+          } as League;
+        }
         // Reconcile the snapshot's events against local writes the server has
         // not demonstrably applied yet. `snapshotAt` is the tick taken before
         // the fetch; without one this is a hydrate from local storage, which
@@ -329,7 +379,20 @@ export function reducer(state: AppState, a: Action): AppState {
           : reconcileLeagueGames(l.id, migrated.games, a.snapshotAt, localLeagues.get(l.id)?.games);
         // _redo is local-only and never present in a server snapshot, so it
         // must be carried across or every background sync would clear it.
-        let out: League = { ...migrated, games, _redo: localLeagues.get(l.id)?._redo };
+        let out: League = {
+          ...migrated, games, _redo: localLeagues.get(l.id)?._redo,
+          // A server snapshot that speaks for this league has just read all four
+          // of its heavy tables, so the detail is here.
+          //
+          // A hydrate from local storage proves nothing either way and carries
+          // the saved value through - except that `undefined` there means the
+          // state was written by a build with no such field, when every pull
+          // was global and every saved league therefore WAS complete. Reading
+          // that as "not loaded" would put a spinner over every league on the
+          // first launch after upgrading, and in a local-only build (no server
+          // to fetch from) it would never clear.
+          detailLoaded: a.snapshotAt === undefined ? (l.detailLoaded ?? true) : true,
+        };
 
         // Re-add anything a guarded bundle owns that the server snapshot
         // hasn't caught up on yet, so a mid-write refetch can't delete a
@@ -362,6 +425,29 @@ export function reducer(state: AppState, a: Action): AppState {
       return { leagues: [...rescued, ...leagues] };
     }
 
+    case 'HYDRATE_LEAGUE': {
+      const local = state.leagues.find(l => l.id === a.leagueId);
+      // Nothing to merge into. The catalogue is the only thing that introduces
+      // a league, so a detail read for one this device has never heard of is a
+      // race with a delete, not a new league.
+      if (!local) return state;
+      return {
+        ...state,
+        leagues: state.leagues.map(l => l.id !== a.leagueId ? l : {
+          ...l,
+          teams: a.detail.teams,
+          players: a.detail.players,
+          // The same reconciliation a full pull applies, for the same reason: a
+          // lineup or a basket logged while this read was in flight must not be
+          // reverted by it. See sync/pendingEvents.ts.
+          games: reconcileLeagueGames(l.id, a.detail.games, a.snapshotAt, l.games),
+          events: reconcileLeagueEvents(l.id, a.detail.events, a.snapshotAt),
+          _redo: l._redo,
+          detailLoaded: true,
+        }),
+      };
+    }
+
     case 'ADD_LEAGUE': {
       const league: League = {
         id: a.id, name: a.name.trim() || 'New League', season: a.season.trim() || 'Season 1',
@@ -371,6 +457,10 @@ export function reducer(state: AppState, a: Action): AppState {
         trackTurnovers: a.trackTurnovers ?? true,
         isShared: a.isShared || undefined,
         teams: [], players: [], games: [], events: [], createdAt: Date.now(),
+        // Created here, so its (empty) detail is genuinely in hand. Without
+        // this a brand-new league would look unfetched and show a spinner over
+        // a league the person is standing in.
+        detailLoaded: true,
       };
       return { ...state, leagues: [league, ...state.leagues] };
     }
@@ -806,6 +896,31 @@ interface Ctx {
   state: AppState;
   dispatch: React.Dispatch<Action>;
   ready: boolean;
+  /**
+   * Fetch one league's teams, players, games and events, for a league the
+   * catalogue knows about but this device has not read.
+   *
+   * Idempotent and de-duplicated: a screen may call it on every render without
+   * issuing a second request, and two screens asking at once share one. Returns
+   * whether the detail is now in hand.
+   */
+  loadLeagueDetail: (leagueId: string) => Promise<boolean>;
+  /** League ids with a detail fetch in flight, for a loading state. */
+  leaguesLoading: readonly string[];
+  /**
+   * Record that a league was opened, so later pulls keep it up to date.
+   *
+   * Cheap and idempotent; safe to call from a screen effect.
+   */
+  noteLeagueOpened: (leagueId: string) => void;
+  /**
+   * Live games in leagues this device has NOT loaded, for the Home banner.
+   *
+   * The one cross-league view that survives scoping. Transient: never
+   * persisted, and no screen but the banner should read it - it is a projection
+   * of a few rows, not league data.
+   */
+  liveElsewhere: readonly LiveElsewhere[];
   /** True when the app is connected to Supabase and syncing across devices. */
   synced: boolean;
   syncState: 'idle' | 'saving' | 'saved' | 'error';
@@ -930,8 +1045,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   // module-level; this is the bridge into React.
   useEffect(() => subscribeNet(setNet), []);
 
+  /**
+   * Leagues the most recently applied snapshot spoke for, or null for "all of
+   * them". Read by the drain, which must not mistake an unloaded league for a
+   * league whose games were deleted. See pruneOutbox.
+   */
+  const coveredRef = useRef<readonly string[] | null>(null);
+
   /** Hydrate one snapshot, or refuse it and say why. */
-  const applySnapshot = useCallback((at: number, remote: Partial<AppState> | null, source: string): boolean => {
+  const applySnapshot = useCallback((at: number, remote: StateSnapshot | null, source: string): boolean => {
     const leagues = remote?.leagues;
     if (!leagues) return false;
     // An empty league list is not evidence that this account owns nothing: an
@@ -949,7 +1071,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       return false;
     }
     trace('SNAPSHOT', `accepted at=${at} leagues=${leagues.length} source=${source}`);
-    baseDispatch({ t: 'HYDRATE', state: { leagues }, snapshotAt: at });
+    // The scope travels WITH the snapshot rather than being read from provider
+    // state, so a snapshot that was in flight while the scope changed is still
+    // applied against the scope it was actually taken with.
+    const covered = remote?.covered ?? null;
+    coveredRef.current = covered;
+    baseDispatch({ t: 'HYDRATE', state: { leagues }, snapshotAt: at, covered });
     return true;
   }, []);
 
@@ -972,8 +1099,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           gate.trailing = false;
           // Tick BEFORE the fetch: rows read after this point may predate any
           // local write confirmed after it. See sync/pendingEvents.ts.
+          // Alongside the snapshot, not part of it: the banner spans every
+          // league and the pull no longer does. Started BEFORE the tick below
+          // and never awaited with it, for two reasons - a failure here must not
+          // cost the snapshot, and the tick must stay adjacent to the read it
+          // dates (see the static assertion). A briefly stale banner is not a
+          // correctness problem; a mis-dated snapshot is.
+          void (async () => {
+            try {
+              const live = await fetchLiveGames(sb);
+              if (live !== null && aliveRef.current) setLiveElsewhere(live);
+            } catch {
+              // Offline, or the host refused. The previous list stands; the
+              // pull's own reachability handling is the authority on status.
+            }
+          })();
           const at = beginSnapshot();
-          const remote = await fetchAllState(sb);
+          const remote = await fetchAllState(sb, scopeRef.current);
           // The read came back. Whether it carried rows is a different question
           // (row-level security answers plenty of reads with none), and not the
           // one reachability asks.
@@ -997,6 +1139,85 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     gate.inFlight = run;
     return run;
   }, [applySnapshot]);
+
+  /**
+   * WHICH LEAGUES A PULL READS IN FULL.
+   *
+   * The catalogue is always read whole - browsing every league is the product.
+   * The four heavy tables are read only for leagues this device actually uses,
+   * because the alternative is every device downloading every event in the
+   * database on every pull (the ceiling that made N-39's truncation possible in
+   * the first place).
+   *
+   * Three sources, and the reason for each:
+   *   memberships   leagues this account runs. Their games are the ones being
+   *                 scored, so they must be present and offline-capable.
+   *   favourites    a fan's own leagues. Local prefs, so they cost nothing to
+   *                 know and are available before the first request.
+   *   recents       leagues opened lately, bounded. Without these, going back
+   *                 to a league you were just in would re-fetch it.
+   *
+   * Held in a ref as well as prefs because `pullState` is a stable callback and
+   * must not close over a stale scope.
+   */
+  const scopeRef = useRef<PullScope>(null);
+  const [liveElsewhere, setLiveElsewhere] = React.useState<readonly LiveElsewhere[]>([]);
+  const membersRef = useRef<readonly string[] | null>(null);
+  const computeScope = useCallback((p: LocalPrefs, members: readonly string[] | null): PullScope => {
+    const ids = new Set<string>([
+      ...(members ?? p.memberLeagueIds ?? []),
+      ...p.favLeagueIds,
+      ...(p.recentLeagueIds ?? []),
+    ]);
+    return [...ids];
+  }, []);
+
+  /**
+   * One league's detail, on demand.
+   *
+   * The in-flight map is what makes this callable from a render path: a screen
+   * that asks on every render must not open a request on every render, and two
+   * screens mounting together must share one. Failures are NOT cached - a
+   * league that failed to load has to be retryable, or a single flaky moment
+   * would leave it permanently blank.
+   */
+  const detailInFlight = useRef(new Map<string, Promise<boolean>>());
+  const [leaguesLoading, setLeaguesLoading] = React.useState<readonly string[]>([]);
+  const loadLeagueDetail = useCallback((leagueId: string): Promise<boolean> => {
+    const running = detailInFlight.current.get(leagueId);
+    if (running) return running;
+
+    const sb = SYNC_ENABLED ? getSupabase() : null;
+    // Local-only build: whatever is on the device IS the whole truth, so there
+    // is nothing to fetch and nothing to wait for.
+    if (!sb) return Promise.resolve(true);
+
+    const run = (async (): Promise<boolean> => {
+      // Ticked BEFORE the read, exactly as pullState does it: that is what makes
+      // "this snapshot predates that confirmation" decidable, and it is what
+      // stops this read reverting a basket tapped while it was in flight.
+      const at = beginSnapshot();
+      try {
+        const detail = await fetchLeagueDetail(sb, leagueId);
+        noteReachable();
+        if (!aliveRef.current || !detail) return false;
+        baseDispatch({ t: 'HYDRATE_LEAGUE', leagueId, detail, snapshotAt: at });
+        return true;
+      } catch (e) {
+        // A transport failure here means offline, the same as it does on a pull.
+        noteUnreachable(e);
+        warn(`[sync] league detail failed (${leagueId}):`, (e as Error)?.message ?? String(e));
+        return false;
+      } finally {
+        detailInFlight.current.delete(leagueId);
+        setLeaguesLoading(prev => prev.filter(id => id !== leagueId));
+      }
+    })();
+
+    detailInFlight.current.set(leagueId, run);
+    setLeaguesLoading(prev => (prev.includes(leagueId) ? prev : [...prev, leagueId]));
+    return run;
+  }, []);
 
   // Hydrate from local storage first (fast, offline-friendly), then if synced,
   // wait until Supabase auth is ready (anonymous sign-in finishes), then pull
@@ -1034,8 +1255,24 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const savedPrefs = await loadPrefs();
       if (!cancelled && savedPrefs) {
         const hz = savedPrefs.hapticsEnabled ?? true;
-        setPrefs({ favLeagueIds: savedPrefs.favLeagueIds ?? [], favTeamIds: savedPrefs.favTeamIds ?? [], hapticsEnabled: hz, seenOnboarding: savedPrefs.seenOnboarding, notifsEnabled: savedPrefs.notifsEnabled });
+        const restored: LocalPrefs = {
+          favLeagueIds: savedPrefs.favLeagueIds ?? [],
+          favTeamIds: savedPrefs.favTeamIds ?? [],
+          hapticsEnabled: hz,
+          seenOnboarding: savedPrefs.seenOnboarding,
+          notifsEnabled: savedPrefs.notifsEnabled,
+          recentLeagueIds: savedPrefs.recentLeagueIds ?? [],
+          memberLeagueIds: savedPrefs.memberLeagueIds ?? [],
+        };
+        setPrefs(restored);
         setHapticsEnabled(hz);
+        // BEFORE the first request. Favourites, recents and the last known
+        // memberships all come off the disk, so the opening pull can be scoped
+        // correctly without waiting for a round trip. That ordering is the
+        // whole reason the memberships are cached: the alternatives are a boot
+        // that pulls nothing (and a scorekeeper's own league arrives late) or
+        // one that pulls everything.
+        scopeRef.current = computeScope(restored, null);
       }
       if (!cancelled) setPrefsReady(true);
 
@@ -1066,7 +1303,37 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           // `hadData`, not "the pull worked": an empty result may only mean the
           // session was not ready, so it must keep retrying. Applying the
           // snapshot is now pullState's business, not this loop's.
+          // Concurrent with the first pull, not before it: the cached scope is
+          // usually already right, and making boot wait on an RPC to find that
+          // out would cost every launch a round trip. If the fresh answer names
+          // a league the cache did not, the scope widens and one more pull
+          // collects it.
+          const membershipRefresh = (async () => {
+            try {
+              const fresh = await fetchMemberships(sb);
+              if (fresh === null || cancelled) return false; // unknown, not "none"
+              membersRef.current = fresh;
+              const known = new Set(scopeRef.current ?? []);
+              const added = fresh.filter(id => !known.has(id));
+              setPrefs(prev => {
+                const next = { ...prev, memberLeagueIds: fresh };
+                void savePrefs(next);
+                scopeRef.current = computeScope(next, fresh);
+                return next;
+              });
+              return added.length > 0;
+            } catch (e) {
+              // A transport failure here is the same "offline" the pull reports;
+              // the cached scope stands and the next launch tries again.
+              warn('[sync] membership refresh failed:', (e as Error)?.message ?? String(e));
+              return false;
+            }
+          })();
+
           const gotData = (await pullState('boot')).hadData;
+          if (await membershipRefresh) {
+            if (!cancelled) await pullState('boot-memberships');
+          }
           if (gotData && !cancelled) setInitialSyncDone(true);
           if (!gotData && !cancelled) {
             // Background retry: 1s, 2s, 4s, 8s, then every 15s up to ~1 min.
@@ -1111,10 +1378,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
       authSubRef.current?.unsubscribe();
     };
-    // `pullState` is stable for the life of the provider (its only dependency,
-    // applySnapshot, has an empty dependency list), so this still runs exactly
-    // once - it is listed because it is used, not because it changes.
-  }, [pullState]);
+    // Both are stable for the life of the provider - `pullState`'s only
+    // dependency (applySnapshot) has an empty dependency list, and
+    // `computeScope` has none at all - so this still runs exactly once. They
+    // are listed because they are used, not because they change.
+  }, [pullState, computeScope]);
 
   // Realtime subscription: when ANY row changes (from another device), re-pull
   // the full state. Cheap on a free tier with our data volume; the realtime
@@ -1167,10 +1435,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // person deliberately got rid of, pointing at teams and players that went
     // with them.
     const localGameIds = new Set<string>();
+    const loadedLeagueIds = new Set<string>();
     for (const l of stateRef.current.leagues) {
+      loadedLeagueIds.add(l.id);
       for (const g of l.games) localGameIds.add(g.id);
     }
-    if (pruneOutbox(localGameIds) > 0) persistOutbox();
+    // Null scope means every league's games are in hand, so every absence is a
+    // real deletion - today's behaviour. Once the pull is scoped, only leagues
+    // the snapshot spoke for can be judged that way.
+    const prunable = coveredRef.current === null ? null : loadedLeagueIds;
+    if (pruneOutbox(localGameIds, prunable) > 0) persistOutbox();
 
     if (drainableEntries().length === 0) return false;
 
@@ -1361,8 +1635,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   // to Supabase. We compute the post-dispatch state inline via the reducer so
   // pushAction sees the exact rows we want to mirror — no React render gap.
   const dispatch = useCallback<React.Dispatch<Action>>((incoming) => {
-    // HYDRATE is server→local; don't echo it back.
-    if (incoming.t === 'HYDRATE') { baseDispatch(incoming); return; }
+    // HYDRATE and HYDRATE_LEAGUE are server→local; don't echo them back.
+    // loadLeagueDetail already uses baseDispatch, so this is the guard for a
+    // future caller reaching for the public dispatch - which would otherwise
+    // push a whole league's tables back at the server that just sent them.
+    if (incoming.t === 'HYDRATE' || incoming.t === 'HYDRATE_LEAGUE') { baseDispatch(incoming); return; }
 
     // Name the exact event row this action is about, from the PRE-dispatch
     // state, before anything else looks at it. The reducer, the server push and
@@ -1540,9 +1817,31 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const list = cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id];
       const next = { ...prev, [key]: list };
       void savePrefs(next);
+      // Favouriting a league is a request to keep it up to date, so the scope
+      // has to widen immediately rather than at the next launch.
+      if (key === 'favLeagueIds') scopeRef.current = computeScope(next, membersRef.current);
       return next;
     });
-  }, []);
+  }, [computeScope]);
+  /**
+   * Newest first, capped. The cap is the point: this list decides how much every
+   * future pull reads, so an unbounded one would rebuild the unbounded pull.
+   */
+  const RECENT_LEAGUES_MAX = 5;
+  const noteLeagueOpened = useCallback((leagueId: string) => {
+    setPrefs(prev => {
+      const current = prev.recentLeagueIds ?? [];
+      if (current[0] === leagueId) return prev; // already the most recent; no write
+      const next = {
+        ...prev,
+        recentLeagueIds: [leagueId, ...current.filter(id => id !== leagueId)].slice(0, RECENT_LEAGUES_MAX),
+      };
+      void savePrefs(next);
+      scopeRef.current = computeScope(next, membersRef.current);
+      return next;
+    });
+  }, [computeScope]);
+
   const dismissOnboarding = useCallback(() => {
     setPrefs(prev => { const next = { ...prev, seenOnboarding: true }; void savePrefs(next); return next; });
   }, []);
@@ -1573,7 +1872,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [net, pendingWrites, syncState, lastSyncError],
   );
 
-  return <StoreCtx.Provider value={{ state, dispatch, ready, synced: SYNC_ENABLED, refresh, prefs, toggleFavLeague, toggleFavTeam, setHaptics, setNotifs, syncState, lastSyncError, lastSyncErrorDetail, net, pendingWrites, sync, prefsReady, initialSyncDone, dismissOnboarding }}>{children}</StoreCtx.Provider>;
+  return <StoreCtx.Provider value={{ state, dispatch, ready, synced: SYNC_ENABLED, refresh,
+    loadLeagueDetail, leaguesLoading, noteLeagueOpened, liveElsewhere, prefs, toggleFavLeague, toggleFavTeam, setHaptics, setNotifs, syncState, lastSyncError, lastSyncErrorDetail, net, pendingWrites, sync, prefsReady, initialSyncDone, dismissOnboarding }}>{children}</StoreCtx.Provider>;
 }
 
 export function useStore(): Ctx {

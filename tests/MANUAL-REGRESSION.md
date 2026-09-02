@@ -298,6 +298,10 @@ Needs two devices, or one device plus airplane mode.
 - [ ] **R118** Re-enable network. *Expect:* offline stats sync up, nothing lost.
 - [ ] **R119** Force-quit mid-game and reopen.
       *Expect:* resume-live-game path works and no stats are lost.
+      **This step passed for months while N-39 was live**, because it says
+      nothing about how many rows the database holds. R157-R160 are the version
+      that can actually fail; run those too, and treat this one as the
+      small-database case only.
 - [ ] **R120** Two devices scoring **different** games at once.
       *Expect:* no interference between them.
 - [ ] **R121** Sync badge shows saving → saved, and shows an **error** state if
@@ -355,6 +359,49 @@ Each of these showed "Connected" before, in states where it was not true.
 - [ ] **R156** With a screen reader on (VoiceOver/TalkBack), start a live game
       and drop the connection. *Expect:* the change is spoken without having to
       navigate to the chip, and spoken again when it recovers.
+
+---
+
+
+### The read that was not the whole table (N-39)
+
+> **Why these exist.** PostgREST will not return more rows than `db-max-rows`
+> (1000 on a default Supabase project) and does **not** report having capped the
+> reply - it is an ordinary success carrying a short array. The automated suite
+> can only *emulate* that cap (`server.maxRows` in `tests/harness/fakeSupabase.js`),
+> and `tests/sql/` is skipped whenever there is no Postgres on PATH, so a real
+> project is the only place the real behaviour can be observed. Every step below
+> therefore has a **precondition about the size of the database**, and a run on a
+> small or freshly seeded project proves nothing at all.
+>
+> Check the row count first: in the Supabase dashboard, SQL editor,
+> `select count(*) from events;`. The reads are **global** - not scoped to one
+> league - so the number that matters is the whole table, across every league in
+> the project, not just the one being scored. `db-max-rows` is a project setting
+> (Settings → API); look it up rather than assuming 1000.
+
+- [ ] **R157** *Precondition:* `select count(*) from events` returns **more than
+      `db-max-rows`** (more than 1000 on a default project). Score a game, log
+      several stats for named players, exit the game, force-quit the app, reopen
+      it, and open the same game.
+      *Expect:* every stat and the score are exactly as they were left.
+      *This is the reported bug.* Before the fix this showed **0-0**.
+- [ ] **R158** The same sequence on a project comfortably **under** the cap.
+      *Expect:* identical result. Recorded separately on purpose - a pass here is
+      not evidence for R157, and R157 is the only one of the two that could fail.
+- [ ] **R159** After R157, look specifically at **which** stats are missing if any
+      are. *Expect:* none. But if older games look complete while only the most
+      recent stats are gone, that is the signature of this failure - the reads are
+      ordered oldest-first, so a capped reply drops the NEWEST rows. Do **not**
+      record that as "the game synced fine": it is the bug, and it is the shape
+      the original reporter described.
+- [ ] **R160** *Precondition:* same as R157, plus a second device. Start scoring
+      on device A. While A is still on the game, force-quit and reopen A so it
+      takes a fresh full read, and during that read tap **Undo** on device B.
+      *Expect:* A comes back with every stat that still exists on the server, and
+      nothing that B undid reappears. This is the paging race (a delete moving
+      rows under the read); it needs more rows than the cap to be reachable at
+      all, since a single-page read has no second page to be shifted.
 
 ---
 
