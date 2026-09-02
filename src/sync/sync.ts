@@ -300,6 +300,48 @@ export async function fetchAllState(sb: SupabaseClient): Promise<StateSnapshot |
   return { leagues, covered: null };
 }
 
+/**
+ * Read ONE league's heavy tables, for a league opened from the catalogue.
+ *
+ * The same keyset walk as `fetchAllState`, filtered to one league_id, and the
+ * returned snapshot covers exactly that league - so HYDRATE reconciles this
+ * league and leaves every other one alone. The league row itself is not
+ * re-read: the catalogue already has it, and re-reading it would let a stale
+ * copy of the scalars overwrite a rename that has not been pulled yet.
+ */
+export async function fetchLeagueDetail(
+  sb: SupabaseClient,
+  leagueId: string,
+): Promise<{ teams: Team[]; players: Player[]; games: Game[]; events: GameEvent[] } | null> {
+  const forLeague = (table: 'teams' | 'players' | 'games' | 'events') =>
+    readAll((after, limit) => {
+      const q = sb.from(table).select('*').eq('league_id', leagueId).order('id').limit(limit);
+      return after === null ? q : q.gt('id', after);
+    });
+  const [tr, pr, gr, er] = await Promise.all([
+    forLeague('teams'), forLeague('players'), forLeague('games'), forLeague('events'),
+  ]);
+
+  // Transport first and it REJECTS, exactly as fetchAllState does: "nothing
+  // came back at all" is the only thing that means offline.
+  for (const [what, res] of [['teams', tr], ['players', pr], ['games', gr], ['events', er]] as const) {
+    const transport = transportFailure(res);
+    if (transport !== null) throw new Error(`fetch ${what} for ${leagueId}: ${transport}`);
+  }
+  if (tr.error || pr.error || gr.error || er.error) {
+    warn('[sync] fetch league detail error:',
+      tr.error?.message ?? pr.error?.message ?? gr.error?.message ?? er.error?.message);
+    return null;
+  }
+
+  return {
+    teams: (tr.data as TeamRow[]).slice().sort(byAsc('name')).map(teamFromRow),
+    players: (pr.data as PlayerRow[]).slice().sort(byAsc('name')).map(playerFromRow),
+    games: (gr.data as GameRow[]).slice().sort(byDesc('scheduled_at')).map(gameFromRow),
+    events: (er.data as EventRow[]).slice().sort(byTsThenId).map(eventFromRow),
+  };
+}
+
 /* ---------- Push: mirror an action's effect to Supabase --------------------- */
 // We translate the *intent* of each action to a row-level operation. The post-
 // reducer `state` is passed in so we can look up the new shape of things (e.g.

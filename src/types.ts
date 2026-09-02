@@ -92,6 +92,20 @@ export interface League {
   // Transient redo stash (per gameId) — lives only in memory, never synced or
   // saved. Populated by UNDO_EVENT, drained by REDO_EVENT, cleared by ADD_EVENT.
   _redo?: Record<string, GameEvent[]>;
+  /**
+   * Whether this device holds this league's teams, players, games and events -
+   * as opposed to just its catalogue row.
+   *
+   * "No games" and "games not fetched" are different facts that look identical
+   * in the arrays below, and confusing them renders a scored game as 0-0 (see
+   * N-39). Absent/false means the four arrays below say nothing; a screen must
+   * show a loading state rather than zeros, and nothing may conclude from their
+   * emptiness that rows were deleted.
+   *
+   * PERSISTED deliberately: a relaunch has to know which leagues it actually
+   * has on disk, or it would present a catalogue row as a fully-read league.
+   */
+  detailLoaded?: boolean;
   teams: Team[];
   players: Player[]; // league-scoped player pool
   games: Game[];

@@ -123,7 +123,10 @@ for (const a of actions) {
   ok(`reducer handles ${a}`, reducerBody.includes(`case '${a}'`), 'no case in reducer');
 }
 // sync coverage: local-only actions legitimately have no server write
-const localOnly = new Set(['HYDRATE']);
+// HYDRATE and HYDRATE_LEAGUE are both server->local. Pushing either would
+// echo the server's own rows back at it, and HYDRATE_LEAGUE carries a whole
+// league's tables - see the 'don't echo it back' guard in the dispatch wrapper.
+const localOnly = new Set(['HYDRATE', 'HYDRATE_LEAGUE']);
 // NOTE: UNDO_EVENT/REDO_EVENT must persist — a local-only undo reappears on the next pull.
 for (const a of actions) {
   if (localOnly.has(a)) continue;

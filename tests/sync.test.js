@@ -2390,6 +2390,123 @@ async function u3_an_unscoped_snapshot_behaves_exactly_as_before() {
   eq('U3.2 and the server-side undo still lands on lg2', A.points('g2', 'lg2'), 0);
 }
 
+/* ==========================================================================
+   GROUP V - one league, fetched because someone opened it
+   ==========================================================================
+
+   Phase 1 of bounding the pull. HYDRATE replaces the league list with the
+   snapshot's, which is right for a full pull and would be catastrophic for a
+   single-league read - it would delete every other league on the device. So
+   HYDRATE_LEAGUE merges instead, and these pin that it merges rather than
+   replaces, that it reconciles against the ledger like every other snapshot,
+   and that `detailLoaded` tells "not fetched" apart from "empty".
+
+   The last one matters more than it looks: every screen computing standings,
+   leaders or a box score off empty arrays renders ZEROS, which is
+   indistinguishable from a season that has not started - and is exactly what
+   the N-39 data loss looked like to the person holding the phone.
+   ========================================================================== */
+
+const twoLeagueState = () => ({
+  leagues: [
+    { id: 'lg1', name: 'BPBL', season: 'S3', teams: [], players: [], games: [], events: [], createdAt: 1, detailLoaded: true },
+    { id: 'lg2', name: 'Other', season: 'S1', teams: [], players: [], games: [], events: [], createdAt: 2, detailLoaded: false },
+  ],
+});
+
+const detailFor = (gameId, eventId) => ({
+  teams: [{ id: 'tX', name: 'Hawks', color: '#fff', playerIds: ['pX'] }],
+  players: [{ id: 'pX', name: 'Mika' }],
+  games: [{ id: gameId, homeTeamId: 'tX', awayTeamId: 'tX', status: 'live', homeOnCourt: [], awayOnCourt: [] }],
+  events: [{ id: eventId, gameId, teamId: 'tX', playerId: 'pX', type: 'fg3_make', period: 1, ts: 100 }],
+});
+
+function v1_a_league_fetch_merges_and_never_replaces() {
+  resetSyncPrimitives();
+  const before = twoLeagueState();
+  const at = beginSnapshot();
+  const after = reducer(before, {
+    t: 'HYDRATE_LEAGUE', leagueId: 'lg2', detail: detailFor('g2', 'e2'), snapshotAt: at,
+  });
+
+  eq('V1.1 both leagues are still there', after.leagues.map(l => l.id), ['lg1', 'lg2']);
+  eq('V1.2 the fetched league has its detail', after.leagues[1].events.map(e => e.id), ['e2']);
+  eq('V1.3 and its roster', after.leagues[1].players.length, 1);
+  eq('V1.4 and is marked loaded', after.leagues[1].detailLoaded, true);
+  eq('V1.5 the other league is untouched', after.leagues[0], before.leagues[0]);
+}
+
+function v2_a_league_fetch_does_not_revert_a_write_it_raced() {
+  resetSyncPrimitives();
+  const before = twoLeagueState();
+
+  // The read starts...
+  const at = beginSnapshot();
+  // ...and while it is in flight, a basket is tapped in that league and queued.
+  const withLocal = reducer(before, {
+    t: 'ADD_EVENT', leagueId: 'lg2', gameId: 'g2', teamId: 'tX', playerId: 'pX',
+    type: 'fg2_make', period: 1, id: 'e-local', ts: 500,
+  });
+  recordPending(
+    { t: 'ADD_EVENT', leagueId: 'lg2', gameId: 'g2', teamId: 'tX', playerId: 'pX', type: 'fg2_make', period: 1, id: 'e-local', ts: 500 },
+    before, withLocal,
+  );
+  ok('V2.1 the tap is in the ledger', pendingCount() > 0, `pending=${pendingCount()}`);
+
+  // The read lands. It predates the tap, so it cannot know about it.
+  const after = reducer(withLocal, {
+    t: 'HYDRATE_LEAGUE', leagueId: 'lg2', detail: detailFor('g2', 'e2'), snapshotAt: at,
+  });
+
+  const ids = after.leagues[1].events.map(e => e.id).sort();
+  eq('V2.2 the fetched event is there', ids.includes('e2'), true);
+  eq('V2.3 and the tap it raced survives', ids.includes('e-local'), true);
+}
+
+function v3_an_unknown_league_is_not_invented() {
+  resetSyncPrimitives();
+  const before = twoLeagueState();
+  const after = reducer(before, {
+    t: 'HYDRATE_LEAGUE', leagueId: 'lg-nope', detail: detailFor('gX', 'eX'), snapshotAt: beginSnapshot(),
+  });
+  // The catalogue is the only thing that introduces a league. A detail read for
+  // one this device has never heard of is a race with a delete, not a new
+  // league, and re-adding it would resurrect what someone removed.
+  eq('V3.1 state is unchanged', after, before);
+}
+
+function v4_a_saved_state_from_before_this_field_reads_as_loaded() {
+  resetSyncPrimitives();
+  // Every pull used to be global, so every league in a saved state written by
+  // an older build genuinely WAS complete. Reading the missing field as "not
+  // loaded" would put a spinner over every league on the first launch after
+  // upgrading - and in a local-only build, with no server to fetch from, it
+  // would never clear.
+  const legacy = {
+    leagues: [{ id: 'lg1', name: 'BPBL', season: 'S3', teams: [], players: [], games: [], events: [], createdAt: 1 }],
+  };
+  const hydrated = reducer({ leagues: [] }, { t: 'HYDRATE', state: legacy });
+  eq('V4.1 a legacy saved league counts as loaded', hydrated.leagues[0].detailLoaded, true);
+
+  // But a catalogue row that arrived from a scoped SERVER snapshot must not.
+  const at = beginSnapshot();
+  const scoped = reducer(hydrated, {
+    t: 'HYDRATE',
+    state: { leagues: [
+      hydrated.leagues[0],
+      { id: 'lg9', name: 'New', season: 'S1', teams: [], players: [], games: [], events: [], createdAt: 9 },
+    ] },
+    snapshotAt: at,
+    covered: ['lg1'],
+  });
+  eq('V4.2 the in-scope league is loaded', scoped.leagues[0].detailLoaded, true);
+  eq('V4.3 a catalogue row the snapshot did not read is NOT loaded', scoped.leagues[1].detailLoaded, false);
+  // Explicit false, not undefined: undefined would be read as "legacy, assume
+  // loaded" the next time this state came back off disk.
+  ok('V4.4 and says so explicitly, so a save round trip cannot promote it',
+     scoped.leagues[1].detailLoaded === false, JSON.stringify(scoped.leagues[1].detailLoaded));
+}
+
 const TESTS = [
   ['S1 resurrection is real', s1_resurrection_is_real],
   ['S2 undo deletes server-side', s2_head_deletes_the_row],
@@ -2453,6 +2570,10 @@ const TESTS = [
   ['U2 a scoped snapshot does not prune a queued write it never read', u2_a_scoped_snapshot_does_not_prune_a_queued_write_it_never_read],
   ['U3 an unscoped snapshot behaves exactly as before', u3_an_unscoped_snapshot_behaves_exactly_as_before],
   ['U4 a relaunch with an empty ledger still keeps what was not read', u4_a_relaunch_with_an_empty_ledger_still_keeps_what_was_not_read],
+  ['V1 a league fetch merges and never replaces', v1_a_league_fetch_merges_and_never_replaces],
+  ['V2 a league fetch does not revert a write it raced', v2_a_league_fetch_does_not_revert_a_write_it_raced],
+  ['V3 an unknown league is not invented', v3_an_unknown_league_is_not_invented],
+  ['V4 a saved state from before this field reads as loaded', v4_a_saved_state_from_before_this_field_reads_as_loaded],
 ];
 
 (async () => {
