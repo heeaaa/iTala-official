@@ -1,19 +1,28 @@
-import { Alert } from 'react-native';
+// `AppState` is this app's own root state type (../types). React Native exports
+// a module with the same name for foreground/background, so it is aliased here
+// rather than renaming a type used across thirty files.
+import { Alert, AppState as RNAppState } from 'react-native';
 import React, { createContext, useContext, useEffect, useReducer, useRef, useCallback } from 'react';
 import { AppState, League, Team, Player, Game, GameEvent, EventType, LocalPrefs, LegacyPersistedSettings } from '../types';
 import { setHapticsEnabled } from '../lib/haptics';
 import { ensureNotifPermission } from '../lib/notify';
 import { uid } from '../lib/format';
 import { teamColors, DEFAULT_FOUL_OUT } from '../theme';
-import { loadState, saveState, loadPrefs, savePrefs } from './storage';
+import { loadState, saveState, loadPrefs, savePrefs, loadOutbox, saveOutbox } from './storage';
 import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
-import { fetchAllState, pushAction, subscribeRealtime } from '../sync/sync';
+import { fetchAllState, pingServer, pushAction, pushPendingEntry, subscribeRealtime } from '../sync/sync';
 import { enqueuePush, __resetPushQueue } from '../sync/pushQueue';
 import {
-  acceptSnapshot, appliedSnapshotAt, beginSnapshot, confirmPending, failPending,
-  insertEvent, lastEventOf, recordPending, reconcileLeagueEvents,
-  reconcileLeagueGames, sortEvents, __resetPending,
+  acceptSnapshot, appliedSnapshotAt, beginPush, beginSnapshot, confirmPending,
+  drainableEntries, failPending, insertEvent, lastEventOf, outboxSnapshot,
+  pruneOutbox, recordPending, reconcileLeagueEvents, reconcileLeagueGames, restoreOutbox,
+  sortEvents, unsyncedCount, __resetPending,
 } from '../sync/pendingEvents';
+import {
+  NetStatus, isKnownOffline, netStatus, noteReachable, noteUnreachable,
+  probeDelay, subscribeNet, __resetNet,
+} from '../sync/connectivity';
+import { SyncSummary, WriteState, describeSync } from '../sync/syncStatus';
 import { isDevBuild, trace, warn } from '../lib/log';
 import { isNetworkFailure } from './authErrors';
 
@@ -137,6 +146,16 @@ interface RecTeamInput { id: string; name: string; color?: string; players: { id
  *  has to keep retrying on - an empty read may only mean the session wasn't
  *  ready yet, and looks identical to an account that genuinely owns nothing. */
 interface PullResult { applied: boolean; hadData: boolean }
+
+/**
+ * What a manual refresh did, for the screen that asked for it.
+ *
+ *   'refreshed'  the server answered and local state is current
+ *   'offline'    the server was not reached - either the request failed at the
+ *                transport, or it was never sent because we already knew
+ *   'local-only' this build has no server; there is nothing to refresh
+ */
+export type RefreshOutcome = 'refreshed' | 'offline' | 'local-only';
 
 export type Action =
   // `settings` is the legacy app-wide toggle. It is no longer part of AppState,
@@ -269,6 +288,7 @@ export function __resetSyncPrimitives(): void {
   __resetPending();
   bundleGuard.length = 0;
   __resetPushQueue();
+  __resetNet();
 }
 
 export function reducer(state: AppState, a: Action): AppState {
@@ -801,7 +821,30 @@ interface Ctx {
   /** The same failure in the server's own words, for a developer. null in a
    *  release build, so nothing user-facing may depend on it. */
   lastSyncErrorDetail: string | null;
-  refresh: () => Promise<void>;
+  /**
+   * Whether the SERVER is reachable, as last observed. Not whether the build
+   * has sync configured (`synced`), and not whether a radio is on: a device on
+   * a captive-portal wifi is 'offline' here, correctly, because a stat logged
+   * on it is exactly as unsent as one logged in aeroplane mode.
+   */
+  net: NetStatus;
+  /** Local writes the server has not confirmed. Survives an app restart. */
+  pendingWrites: number;
+  /**
+   * The single answer to "is my work saved?", for every screen that shows one.
+   * Derived in sync/syncStatus.ts so the wording and the precedence between
+   * these inputs live in one tested place rather than in three components.
+   */
+  sync: SyncSummary;
+  /**
+   * Re-pull the server state now.
+   *
+   * Returns what happened, because pull-to-refresh has to say something when
+   * nothing can. 'offline' means the request was not attempted (the server is
+   * known unreachable) or it failed at the transport; the caller shows the
+   * toast. Callers that only want the side effect can still ignore this.
+   */
+  refresh: () => Promise<RefreshOutcome>;
   /** Device-local favorites (leagues/teams pinned to the top of lists). */
   prefs: LocalPrefs;
   setHaptics: (on: boolean) => void;
@@ -820,9 +863,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [prefs, setPrefs] = React.useState<LocalPrefs>({ favLeagueIds: [], favTeamIds: [], hapticsEnabled: true });
   const [prefsReady, setPrefsReady] = React.useState(false);
   const [initialSyncDone, setInitialSyncDone] = React.useState(!SYNC_ENABLED);
-  const [syncState, setSyncState] = React.useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [syncState, setSyncState] = React.useState<WriteState>('idle');
   const [lastSyncError, setLastSyncError] = React.useState<string | null>(null);
   const [lastSyncErrorDetail, setLastSyncErrorDetail] = React.useState<string | null>(null);
+  // Reachability and outbox depth are module state (they have to be: the push
+  // path is not a component). These mirror them into React so a screen
+  // re-renders when either moves.
+  const [net, setNet] = React.useState<NetStatus>(netStatus);
+  const [pendingWrites, setPendingWrites] = React.useState(0);
   const savedTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const first = useRef(true);
   const stateRef = useRef(state);
@@ -859,6 +907,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const aliveRef = useRef(true);
   useEffect(() => () => { aliveRef.current = false; }, []);
   const pullGate = useRef<{ inFlight: Promise<PullResult> | null; trailing: boolean }>({ inFlight: null, trailing: false });
+
+  /* ---------------------------------------------------------------- outbox --
+   * Write the ledger to disk and republish its depth.
+   *
+   * Called at every point the ledger moves: a local write recorded, a push
+   * settled either way, a drain attempt finished. That is more often than
+   * strictly necessary - the state autosave beside it already runs per dispatch
+   * - and it is the right trade: the whole failure this closes is a queue that
+   * existed only in memory, so "persisted a moment too often" is the side to
+   * err on.
+   *
+   * `saveOutbox` is fire-and-forget and swallows its own failures, exactly as
+   * `saveState` does. Nothing on the tap path may await storage.
+   */
+  const persistOutbox = useCallback(() => {
+    void saveOutbox(outboxSnapshot());
+    setPendingWrites(unsyncedCount());
+  }, []);
+
+  // Reachability is observed on the push and pull paths (see below), which are
+  // module-level; this is the bridge into React.
+  useEffect(() => subscribeNet(setNet), []);
 
   /** Hydrate one snapshot, or refuse it and say why. */
   const applySnapshot = useCallback((at: number, remote: Partial<AppState> | null, source: string): boolean => {
@@ -904,13 +974,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           // local write confirmed after it. See sync/pendingEvents.ts.
           const at = beginSnapshot();
           const remote = await fetchAllState(sb);
+          // The read came back. Whether it carried rows is a different question
+          // (row-level security answers plenty of reads with none), and not the
+          // one reachability asks.
+          noteReachable();
           if (!aliveRef.current) break;
           hadData = hadData || !!remote?.leagues?.length;
           applied = applySnapshot(at, remote, source) || applied;
         } while (gate.trailing);
       } catch (e) {
         // Never silent: a failed pull is how a device ends up looking empty for
-        // no visible reason.
+        // no visible reason. It is also the cheapest connectivity evidence the
+        // app gets - a five-table read that never left the device is exactly
+        // what "offline" means here.
+        noteUnreachable(e);
         warn(`[sync] pull failed (${source}):`, (e as Error)?.message ?? String(e));
       } finally {
         gate.inFlight = null;
@@ -931,6 +1008,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       const saved = await loadState();
       if (!cancelled && saved) baseDispatch({ t: 'HYDRATE', state: saved });
+
+      // BEFORE any server pull, and that ordering is the fix.
+      //
+      // Restored entries are unconfirmed, and an unconfirmed entry is one no
+      // snapshot may overwrite (see sync/pendingEvents.ts). Without them the
+      // boot pull hydrates the server's rows through an EMPTY ledger, which
+      // hands back the server's version verbatim - so stats logged offline in
+      // the previous session were deleted from state, and the autosave that
+      // runs on the very next render wrote that back over the only durable copy
+      // of them. That is the reported "scores are missing after reopening the
+      // app", and it happened before anything the person could see or do.
+      if (!cancelled) {
+        const restored = restoreOutbox(await loadOutbox());
+        if (restored > 0) trace('OUTBOX', `restored ${restored} unsent write(s) from disk`);
+        setPendingWrites(unsyncedCount());
+      }
+
       const savedPrefs = await loadPrefs();
       if (!cancelled && savedPrefs) {
         const hz = savedPrefs.hapticsEnabled ?? true;
@@ -1030,10 +1124,198 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return unsubscribe;
   }, [ready, pullState]);
 
-  // Manual refresh for pull-to-refresh: re-pull the full server state now.
-  const refresh = useCallback(async () => {
+  /* ----------------------------------------------------------- the drain --
+   * Send everything the server has not confirmed, oldest first.
+   *
+   * This is the piece the app never had. A push that failed was pinned in the
+   * ledger and abandoned there - the sync badge said as much, in as many words
+   * - so reconnecting sent nothing, and the next successful tap made the board
+   * look right while the earlier taps stayed on the device only. Closing the
+   * app then discarded them, because the boot pull hydrates the server's
+   * snapshot over local state and, with the ledger gone, nothing objected.
+   *
+   * Three properties matter here and each is load-bearing:
+   *
+   *   ORDER      oldest first, and through the same `enqueuePush` chain as live
+   *              taps, so a replayed insert cannot overtake the undo of it.
+   *   IDEMPOTENT every replay is an upsert (or a delete) on an id minted on this
+   *              device before the first attempt, so re-sending a write the
+   *              server already took is a no-op. That is the whole answer to
+   *              duplicate stats on retry - see pushPendingEntry.
+   *   RESUMABLE  each entry is settled and persisted on its own. A drain
+   *              interrupted by the connection dropping again, or by the app
+   *              being closed, leaves the rest of the queue exactly as it was.
+   *
+   * `drainingRef` keeps one drain running at a time; reconnect, foreground and
+   * pull-to-refresh can all ask at once. Entries are marked in flight
+   * individually as well, so even a re-entrant caller cannot double-send one.
+   */
+  const drainingRef = useRef(false);
+  const drainOutbox = useCallback(async (source: string): Promise<boolean> => {
+    const sb = SYNC_ENABLED ? getSupabase() : null;
+    if (!sb || drainingRef.current) return false;
+
+    // Never replay a write for a game this device has since removed - a
+    // rolled-back drop-in, a deleted game. See pruneOutbox: while nothing
+    // retried, such an entry was harmless; replaying one re-creates rows the
+    // person deliberately got rid of, pointing at teams and players that went
+    // with them.
+    const localGameIds = new Set<string>();
+    for (const l of stateRef.current.leagues) {
+      for (const g of l.games) localGameIds.add(g.id);
+    }
+    if (pruneOutbox(localGameIds) > 0) persistOutbox();
+
+    if (drainableEntries().length === 0) return false;
+
+    drainingRef.current = true;
+    let sent = 0;
+    let lastFailure: unknown = null;
+    try {
+      setSyncState('saving');
+      for (const entry of drainableEntries()) {
+        if (!aliveRef.current) break;
+        // Re-checked every iteration, not once at the top: the connection can
+        // die in the middle of a hundred queued stats, and firing the remaining
+        // ninety at a host we have just been told is unreachable helps nobody.
+        if (isKnownOffline()) break;
+        beginPush([entry.token]);
+        persistOutbox();
+        try {
+          await enqueuePush(() => pushPendingEntry(sb, entry));
+          confirmPending([entry.token]);
+          noteReachable();
+          sent++;
+          trace('DRAIN', `sent ${entry.token} source=${source}`);
+        } catch (e) {
+          failPending([entry.token], e);
+          lastFailure = e;
+          trace('DRAIN', `FAILED ${entry.token} source=${source}`);
+          // A transport failure will repeat for every remaining entry. Stop,
+          // keep the queue intact, and let the probe restart it.
+          if (noteUnreachable(e)) break;
+        }
+        persistOutbox();
+      }
+    } finally {
+      drainingRef.current = false;
+      persistOutbox();
+    }
+
+    if (lastFailure !== null) {
+      setLastSyncError(describeSyncFailure(lastFailure));
+      const detail = technicalSyncDetail(lastFailure);
+      setLastSyncErrorDetail(detail ? `outbox: ${detail}` : null);
+      setSyncState('error');
+    } else if (sent > 0) {
+      setLastSyncError(null);
+      setLastSyncErrorDetail(null);
+      setSyncState('saved');
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSyncState('idle'), 2000);
+    } else {
+      setSyncState('idle');
+    }
+
+    if (sent > 0) {
+      // Retire what the server now demonstrably holds. Entries are removed from
+      // the ledger only by a snapshot READ AFTER their confirmation that
+      // actually contains them (see reconcileLeagueEvents), so this pull is not
+      // cosmetic - without it the outbox keeps every drained entry, and every
+      // relaunch replays writes the server already has.
+      await pullState(`drain:${source}`);
+      persistOutbox();
+    }
+    return sent > 0;
+  }, [persistOutbox, pullState]);
+
+  /**
+   * Manual refresh for pull-to-refresh.
+   *
+   * Two changes from "re-pull the full server state now": it sends before it
+   * reads, so a person who reconnects and pulls down gets their queued stats
+   * away rather than only a fresh copy of the server's older truth; and it
+   * reports what happened, because "nothing visibly occurred" was the entire
+   * offline symptom.
+   *
+   * The known-offline short circuit is deliberate. A pull is five full table
+   * reads, and firing them at a host we have already watched fail buys nothing
+   * except a longer spinner before the same silence. `unknown` is NOT treated
+   * as offline: at launch nobody has tried yet, and refusing on a guess would
+   * be a worse bug than the one being fixed.
+   */
+  const refresh = useCallback(async (): Promise<RefreshOutcome> => {
+    if (!SYNC_ENABLED) return 'local-only';
+    if (isKnownOffline()) {
+      // Not silent about it: one probe, so a connection that came back while
+      // the app sat idle is picked up by the gesture the person just made.
+      const sb = getSupabase();
+      if (sb && await pingServer(sb)) noteReachable();
+      else return 'offline';
+    }
+    await drainOutbox('manual-refresh');
     await pullState('manual-refresh');
-  }, [pullState]);
+    return isKnownOffline() ? 'offline' : 'refreshed';
+  }, [drainOutbox, pullState]);
+
+  /* --------------------------------------------------- reconnect handling --
+   * Everything that can make a dead connection worth re-testing, in one place.
+   *
+   *   1. reachable again, with work queued   -> drain it
+   *   2. believed offline                    -> probe on a backoff until it is
+   *                                             not, since a device with
+   *                                             nothing to send generates no
+   *                                             evidence of its own
+   *   3. the app came back to the foreground -> both of the above, now, rather
+   *                                             than on whatever the timer had
+   *                                             left. A backgrounded app's
+   *                                             timers are throttled or frozen,
+   *                                             so this is usually the moment
+   *                                             an overnight reconnect is
+   *                                             actually noticed.
+   */
+  useEffect(() => {
+    if (!SYNC_ENABLED || !ready || net !== 'online') return;
+    void drainOutbox('reconnect');
+  }, [net, ready, drainOutbox]);
+
+  useEffect(() => {
+    if (!SYNC_ENABLED || !ready || net !== 'offline') return;
+    const sb = getSupabase();
+    if (!sb) return;
+    let cancelled = false;
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const probe = async () => {
+      if (cancelled) return;
+      const answered = await pingServer(sb);
+      if (cancelled) return;
+      // Flipping the status re-runs this effect's cleanup and starts the drain
+      // above, so there is nothing else to do here on success.
+      if (answered) { noteReachable(); return; }
+      attempt++;
+      timer = setTimeout(() => { void probe(); }, probeDelay(attempt));
+    };
+    timer = setTimeout(() => { void probe(); }, probeDelay(0));
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [net, ready]);
+
+  useEffect(() => {
+    if (!SYNC_ENABLED || !ready) return;
+    const sub = RNAppState.addEventListener('change', s => {
+      if (s !== 'active') return;
+      const sb = getSupabase();
+      if (!sb) return;
+      void (async () => {
+        if (isKnownOffline()) {
+          if (await pingServer(sb)) noteReachable();
+          return; // the reconnect effect drains from here
+        }
+        await drainOutbox('foreground');
+      })();
+    });
+    return () => sub.remove();
+  }, [ready, drainOutbox]);
 
   // Wrapped dispatch: apply the action locally, then push the resulting state
   // to Supabase. We compute the post-dispatch state inline via the reducer so
@@ -1059,6 +1341,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // diffing prev against next. See sync/pendingEvents.ts.
     const pushTokens = recordPending(action, prev, next);
     trace('ACTION', `t=${action.t} game=${'gameId' in action ? action.gameId : '-'} tokens=${pushTokens.join(',') || 'none'}`);
+    // On disk before the request goes out, so a write that is interrupted
+    // between the tap and the reply - the app killed, the battery gone - is
+    // still queued on the next launch rather than existing only in this
+    // process's memory.
+    if (pushTokens.length) persistOutbox();
 
     // Protect freshly-created bundles (rows that exist locally but haven't
     // finished their server round trip) from being deleted by a mid-write
@@ -1112,11 +1399,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         // was undoing, which resurrected the stat on the next pull — see
         // sync/pushQueue.ts.
         setSyncState('saving');
+        // The push is attempted even when the server is known to be
+        // unreachable, and deliberately so. It fails immediately and costs
+        // nothing, it keeps the online path byte-for-byte what it always was,
+        // and - the reason that decides it - the all-or-nothing bundle writes
+        // below depend on their own rejection to roll their local half back. A
+        // short circuit here would leave a drop-in game half-created with
+        // nothing to undo it, which is a worse bug than the request it saves.
+        beginPush(pushTokens);
         void enqueuePush(() => pushAction(sb, action, next))
           .then(() => {
             // The server has it. The ledger entry stays until a snapshot read
             // after this moment confirms it — an older one is still in flight.
             confirmPending(pushTokens);
+            noteReachable();
+            persistOutbox();
             trace('PERSIST', `ok t=${action.t} tokens=${pushTokens.join(',') || 'none'}`);
             setLastSyncError(null);
             setLastSyncErrorDetail(null);
@@ -1127,7 +1424,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           .catch((e) => {
             // Pin the entry: the scorekeeper's stat stays on the board and the
             // badge stays red, rather than the board quietly reverting later.
-            failPending(pushTokens);
+            // It also stays in the OUTBOX now, so "pinned" is no longer the end
+            // of the story - the drain re-sends it when the server answers
+            // again, and it survives the app being closed in the meantime.
+            failPending(pushTokens, e);
+            noteUnreachable(e);
+            persistOutbox();
             trace('PERSIST', `FAILED t=${action.t} tokens=${pushTokens.join(',') || 'none'}`);
             // The reason, in two registers. The person gets a sentence they
             // can act on; the server's own words are dev-only, because they name
@@ -1178,7 +1480,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           });
       }
     }
-  }, []);
+  // `persistOutbox` is itself a stable useCallback with no dependencies, so
+  // naming it here does not make `dispatch` change identity between renders.
+  }, [persistOutbox]);
 
   // Favorites: pure device-local preference. Toggle + persist; never synced.
   const toggleFav = useCallback((key: 'favLeagueIds' | 'favTeamIds', id: string) => {
@@ -1211,7 +1515,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     saveState(state);
   }, [state, ready]);
 
-  return <StoreCtx.Provider value={{ state, dispatch, ready, synced: SYNC_ENABLED, refresh, prefs, toggleFavLeague, toggleFavTeam, setHaptics, setNotifs, syncState, lastSyncError, lastSyncErrorDetail, prefsReady, initialSyncDone, dismissOnboarding }}>{children}</StoreCtx.Provider>;
+  // One derived answer for every screen that shows a sync state, so Home, the
+  // live tracker and Settings cannot disagree about the same four facts.
+  // Memoised on the inputs alone: `describeSync` is pure, and a fresh object
+  // every render would re-render every consumer on every keystroke elsewhere.
+  const sync = React.useMemo(
+    () => describeSync({ enabled: SYNC_ENABLED, net, pending: pendingWrites, writeState: syncState, lastError: lastSyncError }),
+    [net, pendingWrites, syncState, lastSyncError],
+  );
+
+  return <StoreCtx.Provider value={{ state, dispatch, ready, synced: SYNC_ENABLED, refresh, prefs, toggleFavLeague, toggleFavTeam, setHaptics, setNotifs, syncState, lastSyncError, lastSyncErrorDetail, net, pendingWrites, sync, prefsReady, initialSyncDone, dismissOnboarding }}>{children}</StoreCtx.Provider>;
 }
 
 export function useStore(): Ctx {

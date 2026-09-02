@@ -15,6 +15,8 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { Action } from '../store/StoreProvider';
 import { AppState, GameEvent, League, Player, Team, Game } from '../types';
 import { warn } from '../lib/log';
+import { OutboxEntry } from './pendingEvents';
+import { isNetworkFailure } from '../store/authErrors';
 
 /* ---------- Row shapes (snake_case columns ↔ camelCase types) -------------- */
 
@@ -507,7 +509,100 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
     // Keyed off the action, not off how the message happens to be worded. A
     // network TypeError carries no label at all, so a message test could never
     // have classified the case that matters most.
-    if (MUST_NOT_FAIL_SILENTLY.has(action.t)) throw e;
+    //
+    // ...and off the TRANSPORT, which is the second half and was missing.
+    //
+    // A request that never reached the host wrote nothing, for any action, so
+    // resolving it is always a false 'saved'. That mattered little while a
+    // resolved push only meant "stop showing the spinner"; it matters a great
+    // deal now that it also means "the outbox may let this go". A lineup, a
+    // substitution, the period and the game status all push through `check`,
+    // which swallows failures - so with the connection down every one of them
+    // reported success, was marked confirmed, and was never queued or retried.
+    // An offline substitution simply did not exist as far as the server was
+    // ever concerned.
+    //
+    // Row-level rejections keep the old behaviour: those DID reach the server,
+    // the server made a decision, and a non-critical one can still reconverge
+    // on the next pull rather than interrupting a live game.
+    if (MUST_NOT_FAIL_SILENTLY.has(action.t) || isNetworkFailure(msg)) throw e;
+  }
+}
+
+/* ---------- Replay: re-send an outbox entry ---------------------------------
+ *
+ * `pushAction` mirrors an ACTION, and an action is a thing that happened at a
+ * moment, against the state at that moment. That is the right shape for a write
+ * issued as the person taps, and the wrong shape for one re-sent an hour later:
+ * `ADD_EVENT` looks the row up in the state handed to it, and it INSERTs, so a
+ * retry of a write that did land (the request succeeded, the reply was lost)
+ * comes back as a duplicate-key rejection - a permanent failure, on a stat that
+ * is in fact perfectly saved.
+ *
+ * Replay is by ROW instead, and every operation is idempotent:
+ *
+ *   add     upsert on a client-generated id  - present already? no-op.
+ *   remove  delete .eq(id)                   - gone already? no-op.
+ *   game    upsert the whole row             - the same write the live path makes.
+ *
+ * That is what makes "retry until it sticks" safe, and it is the answer to
+ * duplicate stats: the id was minted on the device before the first attempt, so
+ * every attempt names the same row. `events` and `games` both carry a
+ * `for all` RLS policy (schema.sql), so the update half of an upsert is
+ * permitted for anyone allowed to write the row at all.
+ *
+ * Failures are rethrown. The caller keeps the entry, counts the attempt, and
+ * tries again later - an outbox that swallowed a rejection would be back to
+ * reporting a save that did not happen.
+ */
+export async function pushPendingEntry(sb: SupabaseClient, entry: OutboxEntry): Promise<void> {
+  if (entry.kind === 'game') {
+    if (!entry.game) return;
+    checkCritical('REPLAY_games', await sb.from('games').upsert(gameToRow(entry.game)));
+    return;
+  }
+  if (entry.op === 'add') {
+    const ev = entry.event;
+    if (!ev) return;
+    checkCritical('REPLAY_events', await sb.from('events').upsert({
+      id: ev.id, league_id: entry.leagueId, game_id: ev.gameId, team_id: ev.teamId,
+      player_id: ev.playerId, type: ev.type, period: ev.period, ts: ev.ts, note: ev.note ?? null,
+    }));
+    return;
+  }
+  // A removal. Same care as UNDO_EVENT's delete: PostgREST reports no error when
+  // row-level security hides the rows a DELETE targeted, so ask for the removed
+  // rows back and, when none came, check whether the row is still there. Gone
+  // means the delete has nothing left to do; still present means it was refused,
+  // and the entry has to stay in the outbox rather than report a success.
+  if (!entry.eventId) return;
+  const res = await sb.from('events').delete().eq('id', entry.eventId).select('id');
+  if (res.error) checkCritical('REPLAY_delete_events', res);
+  else if ((res.data ?? []).length === 0) {
+    const back = await sb.from('events').select('id').eq('id', entry.eventId);
+    if (!back.error && (back.data ?? []).length > 0) {
+      throw new Error(`REPLAY_delete_events: server refused to delete event ${entry.eventId}`);
+    }
+  }
+}
+
+/**
+ * Is the server answering?
+ *
+ * The cheapest read the schema allows, used only while the app believes it is
+ * offline. It asks nothing about the DATA - an empty result is a perfectly good
+ * answer, and under row-level security a common one - only whether the request
+ * came back at all, which is the entire question `connectivity.ts` needs.
+ *
+ * A row-level rejection resolves `true` for the same reason: something answered.
+ * Only a transport failure means unreachable, and that arrives as a throw.
+ */
+export async function pingServer(sb: SupabaseClient): Promise<boolean> {
+  try {
+    await sb.from('leagues').select('id').limit(1);
+    return true;
+  } catch {
+    return false;
   }
 }
 

@@ -3,7 +3,7 @@ import { View, FlatList, Pressable, Alert, TextInput, ScrollView, useWindowDimen
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Screen, Txt, Card, Button, Pill, Empty, Wordmark, PasswordModal, LivePip,
-  ProfileButton, ProfileSheet, InviteCodeModal, SyncBadge, OnboardingSheet, PromoCard,
+  ProfileButton, ProfileSheet, InviteCodeModal, SyncBadge, OnboardingSheet, PromoCard, Toast,
 } from '../components/ui';
 import { usePromos, onPromoTap } from '../lib/usePromos';
 import { useStore } from '../store/StoreProvider';
@@ -17,11 +17,28 @@ import { ScreenProps } from '../navigation';
 const HIDDEN_LOCK_TAPS = 10;
 
 export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
-  const { state, ready, prefs, toggleFavLeague, dispatch, refresh, synced, syncState, prefsReady, initialSyncDone, dismissOnboarding } = useStore();
+  const { state, ready, prefs, toggleFavLeague, dispatch, refresh, synced, sync, prefsReady, initialSyncDone, dismissOnboarding } = useStore();
   const [refreshing, setRefreshing] = useState(false);
   const [onboardingClosed, setOnboardingClosed] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
   const { activePromos, reload: reloadPromos } = usePromos();
-  const onRefresh = async () => { setRefreshing(true); try { await Promise.all([refresh(), reloadPromos()]); } finally { setRefreshing(false); } };
+
+  // Pull-to-refresh with no connection used to do nothing at all: the spinner
+  // appeared, five table reads failed into a `warn` nobody sees, and the
+  // spinner went away again — the same thing that happens when a refresh finds
+  // no changes. `refresh` now reports which of those it was, so the gesture
+  // gets an answer. It also sends anything queued before it reads, so pulling
+  // down after a reconnect pushes the offline stats up rather than only
+  // fetching the server's older copy.
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const [outcome] = await Promise.all([refresh(), reloadPromos()]);
+      setToast(outcome === 'offline' ? 'No internet connection. Please try again.' : null);
+    } finally {
+      setRefreshing(false);
+    }
+  };
   const { role, isAdmin, user, unlock, lock, signOut, signInWithGoogle, appleAvailable, signInWithApple, authBusy, errorFor, clearError, isOwner, redeemCode, createCreationCode, canScoreGame } = useAdmin();
   const [askPw, setAskPw] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -198,29 +215,66 @@ Share this with the organizer. It can create exactly one league, then expires.`)
           <Wordmark size={40} />
           <Txt k="body" color={colors.muted} style={{ marginTop: 6 }}>Record. Track. Elevate.</Txt>
         </Pressable>
-        {/* Reassuring save indicator, top-left under the tagline */}
-        <View style={{ position: 'absolute', left: space(4), top: space(2) + 58 }}>
-          <SyncBadge state={syncState} />
+        {/* The save indicator, under the profile photo.
+
+            It was ABSOLUTELY POSITIONED at left: space(4), top: space(2) + 58 —
+            on top of the tagline, not under it. The wordmark is 40pt tall plus
+            a 6pt underline gap and a 3pt rule, so "Record. Track. Elevate."
+            starts at roughly 55pt from the top of the header and the badge was
+            laid over it at 58. Nothing enforced the number, and the two
+            overlapped whenever the badge had anything to say, which offline is
+            constantly.
+
+            Absolute positioning was the bug, not the coordinate. This sits in
+            normal flow at the end of the right-hand column, under the avatar,
+            so it cannot be laid over anything at any text size — and it is the
+            one part of the header with room to grow, which matters now that the
+            label can read "Offline · 3 changes waiting" rather than a fixed
+            word. maxWidth keeps a long label off the wordmark on a narrow
+            phone; SyncBadge caps it at one line. */}
+        <View style={{ alignItems: 'flex-end' }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            {/* Settings gear: admin shortcut (Settings is also in the profile sheet) */}
+            {isAdmin && (
+              <Pressable onPress={() => navigation.navigate('Settings')} hitSlop={12}
+                style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line }}>
+                <Txt k="h2" color={colors.muted}>⚙️</Txt>
+              </Pressable>
+            )}
+            {/* Hidden password lock — emergency backup. Revealed by the wordmark
+                gesture; also shown while password-elevated so it can re-lock. */}
+            {(lockRevealed || (isAdmin && !user)) && (
+              <Pressable onPress={onLockPress} hitSlop={12}
+                style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: isAdmin ? colors.accentDim : colors.surface, borderWidth: 1, borderColor: isAdmin ? colors.brandTeal : colors.line }}>
+                <Txt k="h2" color={isAdmin ? colors.brandTeal : colors.muted}>{isAdmin ? '🔓' : '🔒'}</Txt>
+              </Pressable>
+            )}
+            {/* Profile: guest 👤 or the Google avatar */}
+            <ProfileButton avatarUrl={user?.avatarUrl} onPress={openProfileSheet} />
+          </View>
+          <View style={{ marginTop: 6, maxWidth: 168, alignItems: 'flex-end' }}>
+            <SyncBadge sync={sync} onPress={() => Alert.alert('Sync status', sync.detail)} />
+          </View>
         </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          {/* Settings gear: admin shortcut (Settings is also in the profile sheet) */}
-          {isAdmin && (
-            <Pressable onPress={() => navigation.navigate('Settings')} hitSlop={12}
-              style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line }}>
-              <Txt k="h2" color={colors.muted}>⚙️</Txt>
-            </Pressable>
-          )}
-          {/* Hidden password lock — emergency backup. Revealed by the wordmark
-              gesture; also shown while password-elevated so it can re-lock. */}
-          {(lockRevealed || (isAdmin && !user)) && (
-            <Pressable onPress={onLockPress} hitSlop={12}
-              style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: isAdmin ? colors.accentDim : colors.surface, borderWidth: 1, borderColor: isAdmin ? colors.brandTeal : colors.line }}>
-              <Txt k="h2" color={isAdmin ? colors.brandTeal : colors.muted}>{isAdmin ? '🔓' : '🔒'}</Txt>
-            </Pressable>
-          )}
-          {/* Profile: guest 👤 or the Google avatar */}
-          <ProfileButton avatarUrl={user?.avatarUrl} onPress={openProfileSheet} />
-        </View>
+      </View>
+
+      {/* Transient messages.
+
+          Absolutely positioned and pointer-transparent, so a toast never moves
+          the list underneath it or eats a tap meant for a league card - the
+          whole point of answering the refresh gesture this way rather than with
+          a banner in the flow, which would push every card down and then let
+          them spring back.
+
+          Anchored above the bottom action bar, using the bar's OWN measured
+          height rather than a guess at it. The obvious spot is the top, and the
+          top is where the header is: the sync badge two elements up is in this
+          diff precisely because something was positioned over that text with a
+          hard-coded offset. */}
+      <View
+        pointerEvents="none"
+        style={{ position: 'absolute', left: space(4), right: space(4), bottom: barHeight + space(3), zIndex: 60 }}>
+        <Toast message={toast} onHide={() => setToast(null)} />
       </View>
 
       {isAdmin && (

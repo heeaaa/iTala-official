@@ -47,6 +47,29 @@ class FakeServer {
     return p ? !!p(row, op) : true;
   }
 
+  // The whole device loses its connection, not one table.
+  //
+  // Every existing failure in this harness is per-operation, which is right for
+  // "the server refused THIS write" and useless for "there is no network". An
+  // offline device fails every read and every write identically, and the
+  // difference matters: the outbox, the reachability signal and the drain all
+  // key off a TRANSPORT failure rather than a rejection.
+  //
+  // Deliberately leaves any per-op failure already set: a suite that combines
+  // an RLS rejection with a connection drop is testing something real.
+  offline(on = true) {
+    const ops = ['select', 'insert', 'upsert', 'delete'];
+    const rpcs = ['create_league', 'add_player', 'rec_setup_game', 'bulk_import_roster'];
+    const keys = [
+      ...TABLES.flatMap(t => ops.map(op => `${op}:${t}`)),
+      ...rpcs.map(r => `rpc:${r}`),
+    ];
+    for (const k of keys) {
+      if (on) this.failures[k] = 'network';
+      else if (this.failures[k] === 'network') delete this.failures[k];
+    }
+  }
+
   count(table) { return this.rows[table].length; }
   find(table, id) { return this.rows[table].find(r => r.id === id); }
   has(table, id) { return !!this.find(table, id); }
@@ -134,6 +157,10 @@ function makeBuilder(server, table, op, payload) {
     eq(col, val) { filters.push({ col, val }); return builder; },
     order(col, opts) { orderBy.push({ col, ascending: opts?.ascending !== false }); return builder; },
     select() { wantReturning = true; return builder; },
+    // PostgREST's row cap. pingServer uses it for the cheapest possible read;
+    // the emulator only has to accept it, because no assertion here depends on
+    // the row count coming back.
+    limit() { return builder; },
     maybeSingle() { wantSingle = true; return builder; },
     single() { wantSingle = true; return builder; },
     then(res, rej) { return settle().then(res, rej); },

@@ -217,8 +217,12 @@ ok('docs/DEPLOYMENT.md keeps the zip-apply commands', read('docs/DEPLOYMENT.md')
   ok('the ledger is given both sides of the change, not just the result',
      /const prev = stateRef\.current;/.test(store) && /const next = reducer\(prev, action\)/.test(store),
      'the game-row half of the ledger is found by diffing prev against next');
+  // `failPending` also takes the reason now, so the outbox can carry why the
+  // last attempt was rejected. The argument is optional in the signature and
+  // matched loosely here: what this check is for is that BOTH sides are wired,
+  // not how many arguments they take.
   ok('a settled push tells the ledger which way it went',
-     /confirmPending\(pushTokens\)/.test(store) && /failPending\(pushTokens\)/.test(store),
+     /confirmPending\(pushTokens\)/.test(store) && /failPending\(pushTokens\b/.test(store),
      'an entry that is never confirmed pins forever; one confirmed on failure loses the stat');
   ok('the ledger settles by push token, not by bare event id',
      /const pushTokens = recordPending\(/.test(store) &&
@@ -262,6 +266,64 @@ ok('docs/DEPLOYMENT.md keeps the zip-apply commands', read('docs/DEPLOYMENT.md')
      /if \(!acceptSnapshot\(at\)\)/.test(store) &&
      /snapshotStarted <= appliedAt/.test(pend),
      'this is the out-of-order revert the ledger alone cannot catch');
+
+  // ---- the outbox: the ledger has to survive the process -----------------
+  // The ledger protected a failed write inside one run of the app and nothing
+  // else: no retry, and a Map that died with the process. So a stat logged
+  // offline stayed on the device, was never re-sent after reconnecting, and was
+  // DELETED on the next launch — the boot pull hydrated the server's rows
+  // through an empty ledger and the autosave wrote that over the durable copy.
+  // Each of these is one link in the chain that closes it.
+  const storage = read('src/store/storage.ts');
+  ok('the outbox is written to disk',
+     /export async function saveOutbox\(/.test(storage) && /outboxSnapshot\(\)/.test(store),
+     'a queue that only exists in memory loses everything the moment the app closes');
+  ok('the outbox is restored BEFORE the first server pull',
+     store.indexOf('restoreOutbox(') > 0 &&
+     store.indexOf('restoreOutbox(') < store.indexOf("pullState('boot')"),
+     'restored after, the boot snapshot has already deleted the writes it was meant to protect');
+  ok('a restored entry is unconfirmed, so no snapshot may overwrite it',
+     /confirmedAt: null,/.test(pend) && /export function restoreOutbox\(/.test(pend),
+     'the whole point of restoring is to make reconciliation keep the local rows');
+  ok('reconnecting drains the outbox',
+     /const drainOutbox = useCallback\(/.test(store) &&
+     /net !== 'online'\) return;\s*\n\s*void drainOutbox\('reconnect'\)/.test(store),
+     'without a drain, reconnecting sends nothing and only the NEXT tap reaches the server');
+  ok('replay is idempotent, so a retry cannot duplicate a stat',
+     /export async function pushPendingEntry\(/.test(sync) &&
+     /REPLAY_events', await sb\.from\('events'\)\.upsert\(/.test(sync),
+     'an insert would reject as a duplicate key on a write that actually landed');
+  ok('a drain marks entries in flight so nothing is sent twice',
+     /beginPush\(\[entry\.token\]\)/.test(store) && /export function beginPush\(/.test(pend),
+     'reconnect, foreground and pull-to-refresh can all ask at once');
+  ok('the outbox is pruned of games the device no longer has',
+     /pruneOutbox\(localGameIds\)/.test(store) && /export function pruneOutbox\(/.test(pend),
+     'replaying a write for a rolled-back or deleted game re-creates it on the server');
+  ok('but a queued insert is never pruned by local absence',
+     !/localEventIds/.test(pend),
+     'the outbox is written before the state, so an entry can legitimately '
+     + 'outlive the saved row - and it holds the last copy of it');
+  ok('nothing in the outbox is discarded for being old',
+     !/MAX_OUTBOX_AGE|OUTBOX_TTL|expires/.test(pend),
+     'an outbox that throws work away to stay tidy is the timeout bug in a new costume');
+
+  // ---- connectivity is observed, not assumed -----------------------------
+  // `synced` is SYNC_ENABLED — a build-time constant that said "Connected" in
+  // aeroplane mode. Reachability is a different question and has to be asked.
+  const conn = read('src/sync/connectivity.ts');
+  ok('reachability is observed on both the pull and the push path',
+     (store.match(/noteReachable\(\)/g) ?? []).length >= 2 &&
+     (store.match(/noteUnreachable\(/g) ?? []).length >= 2,
+     'a status derived from one path is blind to the other');
+  ok('offline is only ever KNOWN, never guessed',
+     /status === 'offline'/.test(conn) && /let status: NetStatus = 'unknown'/.test(conn),
+     "'unknown' must not refuse a refresh nobody has tried yet");
+  ok('a known-offline refresh does not fire five table reads',
+     /if \(isKnownOffline\(\)\)/.test(store),
+     'the request cannot succeed and its failure is what the user already reported');
+  ok('a dead connection is probed until it answers',
+     /pingServer\(sb\)/.test(store) && /probeDelay\(attempt\)/.test(store),
+     'a device with nothing to send generates no evidence of its own recovery');
   // The reducer body, from its declaration to the context type that follows it.
   const reducerFrom = store.indexOf('export function reducer');
   const reducerTo = store.indexOf('interface Ctx {');

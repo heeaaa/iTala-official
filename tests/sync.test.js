@@ -27,6 +27,14 @@ const {
   beginSnapshot, acceptSnapshot, appliedSnapshotAt,
   recordPending, confirmPending, failPending, pendingCount,
   __resetSyncPrimitives: resetSyncPrimitives,
+  // The durable half: the outbox, its replay, and the reachability signal that
+  // decides when to run it. Imported from the app for the same reason as
+  // everything above - a suite that reimplemented these would keep passing
+  // after the app stopped calling them.
+  beginPush, drainableEntries, outboxSnapshot, pruneOutbox, restoreOutbox, unsyncedCount,
+  pushPendingEntry, pingServer,
+  isKnownOffline, netStatus, noteReachable, noteUnreachable, probeDelay,
+  describeSync,
 } = M;
 
 for (const [name, fn] of Object.entries({
@@ -34,6 +42,9 @@ for (const [name, fn] of Object.entries({
   beginSnapshot, acceptSnapshot, appliedSnapshotAt,
   recordPending, confirmPending, failPending, pendingCount,
   resetSyncPrimitives,
+  beginPush, drainableEntries, outboxSnapshot, pruneOutbox, restoreOutbox, unsyncedCount,
+  pushPendingEntry, pingServer,
+  isKnownOffline, netStatus, noteReachable, noteUnreachable, probeDelay, describeSync,
 })) {
   if (typeof fn !== 'function') {
     console.error(`✗ sync suite cannot run: '${name}' is not exported by the app bundle`);
@@ -87,12 +98,19 @@ class Device {
     // overwriting it. Same call the app makes: prev and next together, so the
     // ledger can see whether the game row moved as well as the event list.
     const touched = recordPending(action, prev, next);
+    // On disk before the request leaves, exactly as StoreProvider does it: a
+    // write interrupted between the tap and the reply must still be queued on
+    // the next launch.
+    if (touched.length) this.persist();
 
     this.syncState = 'saving';
+    beginPush(touched);
     const p = enqueuePush(() => pushAction(this.client, action, next)).then(
-      () => { confirmPending(touched); this.syncState = 'saved'; },
+      () => { confirmPending(touched); noteReachable(); this.persist(); this.syncState = 'saved'; },
       e => {
-        failPending(touched);
+        failPending(touched, e);
+        noteUnreachable(e);
+        this.persist();
         this.syncState = 'error';
         this.pushErrors.push(String(e && e.message ? e.message : e));
         // All-or-nothing bundles roll their local half back, exactly as
@@ -123,9 +141,73 @@ class Device {
   }
 
   // A realtime refetch: pull the whole server snapshot and hydrate.
+  //
+  // Reachability is observed here for the same reason StoreProvider observes it
+  // here: a five-table read that never left the device is the clearest evidence
+  // of an offline device the app ever gets. And the device AUTOSAVES after
+  // hydrating - which is not incidental, it is the step that used to make the
+  // data loss permanent, so a suite that skipped it could not reproduce the bug.
   async pull() {
-    const snap = await this.snapshot();
+    let snap;
+    try {
+      snap = await this.snapshot();
+      noteReachable();
+    } catch (e) {
+      noteUnreachable(e);
+      return;
+    }
     if (snap && snap.remote && snap.remote.leagues) this.applySnapshot(snap);
+    this.persist();
+  }
+
+  /* ------------------------------------------------------- the outbox ----- */
+
+  // What AsyncStorage would hold right now: the state, and the queue beside it.
+  // storage.ts strips `_redo` on the way out, so this does too.
+  persist() {
+    const clean = {
+      ...this.state,
+      leagues: this.state.leagues.map(({ _redo, ...l }) => l),
+    };
+    this.disk = {
+      state: JSON.parse(JSON.stringify(clean)),
+      outbox: JSON.parse(JSON.stringify(outboxSnapshot())),
+    };
+  }
+
+  // Send everything the server has not confirmed. Mirrors StoreProvider's
+  // drainOutbox, including the two things that make it safe: entries for rows
+  // the device no longer has are pruned first, and a transport failure stops
+  // the loop rather than burning the rest of the queue against a dead host.
+  async drain() {
+    const gIds = new Set();
+    for (const l of this.state.leagues) {
+      for (const g of l.games) gIds.add(g.id);
+    }
+    pruneOutbox(gIds);
+
+    let sent = 0;
+    for (const entry of drainableEntries()) {
+      if (isKnownOffline()) break;
+      beginPush([entry.token]);
+      try {
+        await enqueuePush(() => pushPendingEntry(this.client, entry));
+        confirmPending([entry.token]);
+        noteReachable();
+        sent++;
+      } catch (e) {
+        failPending([entry.token], e);
+        this.pushErrors.push(String(e && e.message ? e.message : e));
+        if (noteUnreachable(e)) break;
+      }
+      this.persist();
+    }
+    this.persist();
+    // The pull is what RETIRES the drained entries: an entry leaves the ledger
+    // only when a snapshot read after its confirmation actually contains it.
+    // Without this the outbox keeps every write it has already sent.
+    if (sent > 0) { await this.pull(); this.persist(); }
+    return sent;
   }
 
   // Split out so a test can capture a snapshot at one moment and apply it later,
@@ -1271,6 +1353,367 @@ async function s31_a_push_with_nothing_to_write_reports_failure() {
 
 /* --------------------------------------------------------------------------- */
 
+/* ==========================================================================
+   GROUP O - offline durability: the stat that survives a closed app
+   ==========================================================================
+
+   The reported bug, in the reporter's words: stats entered offline, connection
+   restored, a new stat succeeds, the score on screen is right, the app is
+   closed and reopened, and the earlier scores are gone.
+
+   Every step of that is reproduced here against the real reducer, the real
+   ledger, the real push layer and a server that can lose its connection. O1
+   proves the loss is real without the outbox; O2 proves the outbox is what
+   stops it. The rest cover the ways a retrying queue can go wrong, of which
+   duplicating a stat would be worse than the bug it fixes.
+   ========================================================================== */
+
+// The process ends and starts again: the ledger, the push chain and the
+// reachability signal all die with it, and the next launch has nothing but what
+// reached the disk. `restoreOutbox` is called in the position StoreProvider
+// calls it - after loading the saved state, BEFORE any server pull.
+function relaunch(device, withOutbox) {
+  const disk = device.disk;
+  resetSyncPrimitives();
+  const D = new Device(device.name, device.server);
+  D.state = JSON.parse(JSON.stringify(disk.state));
+  D.disk = disk;
+  if (withOutbox !== false) restoreOutbox(disk.outbox);
+  return D;
+}
+
+// Three baskets logged with no connection. Returns the device, mid-outage.
+async function threeStatsLoggedOffline() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.persist();
+  server.offline(true);
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg3_make', 1));
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg3_make', 1));
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg3_make', 1));
+  await A.settle();
+  return A;
+}
+
+async function o1_the_loss_is_real_without_a_durable_queue() {
+  const A = await threeStatsLoggedOffline();
+  eq('O1.1 the board shows all three baskets', A.points(), 9);
+  eq('O1.2 none of them reached the server', A.server.count('events'), 0);
+  ok('O1.3 every push reported a transport failure',
+     A.pushErrors.length === 3 && A.pushErrors.every(m => /Network request failed/.test(m)));
+  eq('O1.4 the device knows it is offline', netStatus(), 'offline');
+
+  // The connection comes back and one more stat goes up, exactly as reported.
+  A.server.offline(false);
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg2_make', 1));
+  await A.settle();
+  eq('O1.5 the new stat succeeds', A.server.count('events'), 1);
+  eq('O1.6 the board still looks right', A.points(), 11);
+
+  // ...and now close the app with the queue thrown away. This is the pre-fix
+  // world: the ledger lived in memory only, so a relaunch started with nothing.
+  const B = relaunch(A, false);
+  eq('O1.7 the saved state still holds them before any pull', B.points(), 11);
+  await B.pull();
+  eq('O1.8 THE BUG: the boot pull deletes every offline stat', B.points(), 2);
+  eq('O1.9 and the autosave writes that over the only durable copy',
+     B.disk.state.leagues[0].events.length, 1);
+}
+
+async function o2_a_restored_outbox_keeps_the_stats() {
+  const A = await threeStatsLoggedOffline();
+  A.server.offline(false);
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg2_make', 1));
+  await A.settle();
+  eq('O2.1 three writes are still unsent', unsyncedCount(), 3);
+
+  // Close and reopen, this time with the outbox on disk where it belongs.
+  const B = relaunch(A);
+  eq('O2.2 the outbox came back with three entries', unsyncedCount(), 3);
+  await B.pull();
+  eq('O2.3 the boot pull no longer deletes them', B.points(), 11);
+  eq('O2.4 and the autosave keeps them durable', B.disk.state.leagues[0].events.length, 4);
+
+  // The drain is what finally gets them there.
+  const sent = await B.drain();
+  eq('O2.5 all three were sent on reconnect', sent, 3);
+  eq('O2.6 the server now holds every basket', B.server.count('events'), 4);
+  eq('O2.7 nothing is left waiting', unsyncedCount(), 0);
+  eq('O2.8 the board is unchanged throughout', B.points(), 11);
+
+  // And the reopen the reporter actually did: everything is simply there.
+  const C = relaunch(B);
+  await C.pull();
+  eq('O2.9 reopening shows the correct synced score', C.points(), 11);
+  eq('O2.10 the outbox is empty and stays empty', unsyncedCount(), 0);
+}
+
+async function o3_replay_cannot_duplicate_a_stat() {
+  const A = await threeStatsLoggedOffline();
+  const ids = A.eventIds();
+
+  // The nastiest retry case, and the reason replay upserts rather than inserts:
+  // the write DID reach the server and only the reply was lost. The outbox has
+  // no way to know that, so it re-sends - and must not double the score.
+  const ev = A.league().events.find(e => e.id === ids[0]);
+  A.server.rows.events.push({
+    id: ev.id, league_id: 'lg1', game_id: ev.gameId, team_id: ev.teamId,
+    player_id: ev.playerId, type: ev.type, period: ev.period, ts: ev.ts, note: null,
+  });
+
+  A.server.offline(false);
+  noteReachable();
+  const sent = await A.drain();
+  eq('O3.1 every queued write was replayed', sent, 3);
+  eq('O3.2 the server holds three rows, not four', A.server.count('events'), 3);
+  eq('O3.3 the score did not double', A.points(), 9);
+
+  // Draining again is a no-op: the pull inside the first drain retired them.
+  const again = await A.drain();
+  eq('O3.4 a second drain sends nothing', again, 0);
+  eq('O3.5 and adds no rows', A.server.count('events'), 3);
+}
+
+async function o4_a_new_stat_does_not_report_the_old_ones_saved() {
+  const A = await threeStatsLoggedOffline();
+  A.server.offline(false);
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg2_make', 1));
+  await A.settle();
+
+  // The push state says 'saved', because the LAST write did save. That reading
+  // is what made the reported bug invisible, so the summary must not repeat it
+  // while three earlier writes are still queued.
+  eq('O4.1 the last push did succeed', A.syncState, 'saved');
+  const s = describeSync({ enabled: true, net: 'online', pending: unsyncedCount(), writeState: 'saved', lastError: null });
+  eq('O4.2 the summary does not claim everything is saved', s.phase, 'syncing');
+  ok('O4.3 and it says how much is waiting', /3 changes/.test(s.label), s.label);
+}
+
+async function o5_a_refused_write_stays_queued_and_is_retried() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.persist();
+
+  // Not a connection failure: the server answered and refused. Such a write is
+  // never dropped - it stays queued, and stays visible as a failure.
+  const refusal = { message: 'new row violates row-level security policy for table "events"' };
+  server.failures['insert:events'] = refusal;
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg3_make', 1));
+  await A.settle();
+  eq('O5.1 the write is queued', unsyncedCount(), 1);
+  eq('O5.2 a rejection does not mark the device offline', netStatus(), 'online');
+  eq('O5.3 the basket is still on the board', A.points(), 3);
+
+  // Retrying while it is still refused keeps it, and counts the attempt.
+  server.failures['upsert:events'] = refusal;
+  await A.drain();
+  eq('O5.4 a refused replay does not discard the write', unsyncedCount(), 1);
+  ok('O5.5 the attempt is recorded', outboxSnapshot()[0].attempts >= 1);
+  ok('O5.6 and why', /row-level security/.test(outboxSnapshot()[0].lastError || ''));
+
+  // Rights restored: the same entry goes up untouched.
+  delete server.failures['insert:events'];
+  delete server.failures['upsert:events'];
+  const sent = await A.drain();
+  eq('O5.7 the retry succeeds once the server accepts it', sent, 1);
+  eq('O5.8 the stat is on the server', server.count('events'), 1);
+  eq('O5.9 nothing is left waiting', unsyncedCount(), 0);
+}
+
+async function o6_repeated_transitions_lose_nothing() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.persist();
+
+  // Five out, five in, a basket on each side of every transition.
+  for (let i = 0; i < 5; i++) {
+    server.offline(true);
+    A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg2_make', 1));
+    await A.settle();
+    server.offline(false);
+    noteReachable();
+    A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'ft_make', 1));
+    await A.settle();
+    await A.drain();
+  }
+  eq('O6.1 every basket is on the board', A.points(), 15);
+  eq('O6.2 every basket reached the server', server.count('events'), 10);
+  eq('O6.3 nothing is left waiting', unsyncedCount(), 0);
+
+  // And a relaunch agrees with both.
+  const B = relaunch(A);
+  await B.pull();
+  eq('O6.4 reopening shows the same score', B.points(), 15);
+}
+
+async function o7_a_drain_stops_when_the_connection_dies_again() {
+  const A = await threeStatsLoggedOffline();
+  A.server.offline(false);
+  noteReachable();
+
+  // The connection dies again in the middle of the queue: the second replay
+  // fails at the transport. The rest must stay queued rather than being burned
+  // against a host that is not there.
+  const realFrom = A.client.from.bind(A.client);
+  let seen = 0;
+  A.client.from = table => {
+    const t = realFrom(table);
+    if (table !== 'events') return t;
+    return Object.assign({}, t, {
+      upsert: payload => {
+        if (++seen === 2) A.server.offline(true);
+        return t.upsert(payload);
+      },
+    });
+  };
+
+  const sent = await A.drain();
+  eq('O7.1 only the writes that could land did', sent, 1);
+  eq('O7.2 the rest are still queued', unsyncedCount(), 2);
+  eq('O7.3 nothing was thrown away', A.points(), 9);
+  eq('O7.4 and the device knows it is offline again', netStatus(), 'offline');
+
+  // Restore everything and finish the job.
+  A.client.from = realFrom;
+  A.server.offline(false);
+  noteReachable();
+  await A.drain();
+  eq('O7.5 the remainder syncs on the next reconnect', A.server.count('events'), 3);
+  eq('O7.6 nothing is left waiting', unsyncedCount(), 0);
+}
+
+async function o8_an_offline_undo_is_replayed_as_a_delete() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg3_make', 1));
+  await A.settle();
+  A.persist();
+  eq('O8.1 the basket is on the server', server.count('events'), 1);
+
+  server.offline(true);
+  A.dispatch({ t: 'UNDO_EVENT', leagueId: 'lg1', gameId: 'g1' });
+  await A.settle();
+  eq('O8.2 the undo is local only for now', A.points(), 0);
+  eq('O8.3 the server still has the row', server.count('events'), 1);
+  eq('O8.4 the undo is queued', unsyncedCount(), 1);
+
+  // The dangerous moment: a pull while the delete is unsent must not hand the
+  // basket back. The restored-and-unconfirmed entry is what prevents it.
+  const B = relaunch(A);
+  B.server.offline(false);
+  await B.pull();
+  eq('O8.5 a pull does not resurrect the undone basket', B.points(), 0);
+
+  noteReachable();
+  await B.drain();
+  eq('O8.6 the delete reaches the server on reconnect', server.count('events'), 0);
+  eq('O8.7 nothing is left waiting', unsyncedCount(), 0);
+}
+
+async function o9_a_write_for_a_deleted_game_is_never_replayed() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.persist();
+  server.offline(true);
+
+  // A lineup written offline, then the game deleted. The delete leaves no entry
+  // of its own - there is no row left to mirror - so without pruning, the older
+  // write would put the game back on the server on reconnect.
+  A.dispatch({ t: 'SET_LINEUP', leagueId: 'lg1', gameId: 'g1', side: 'home', playerIds: ['p1'] });
+  await A.settle();
+  ok('O9.1 the lineup write is queued', unsyncedCount() >= 1);
+  A.dispatch({ t: 'DELETE_GAME', leagueId: 'lg1', gameId: 'g1' });
+  await A.settle();
+  ok('O9.2 the game is gone locally', !A.game('g1'));
+
+  server.offline(false);
+  noteReachable();
+  await A.drain();
+  ok('O9.3 no queued write survives for the deleted game',
+     !outboxSnapshot().some(e => e.gameId === 'g1'));
+}
+
+async function o10_connectivity_is_observed_not_assumed() {
+  eq('O10.1 nothing has been tried yet', netStatus(), 'unknown');
+  ok('O10.2 and unknown is not treated as offline', !isKnownOffline());
+
+  noteUnreachable(new TypeError('Network request failed'));
+  eq('O10.3 a transport failure means offline', netStatus(), 'offline');
+  ok('O10.4 which IS treated as offline', isKnownOffline());
+
+  // A server that answers with a refusal is a server that answered.
+  noteUnreachable(new Error('new row violates row-level security policy'));
+  eq('O10.5 a rejection is not a connection problem', netStatus(), 'online');
+
+  noteUnreachable(new TypeError('Network request failed'));
+  noteReachable();
+  eq('O10.6 a successful round trip clears it', netStatus(), 'online');
+
+  ok('O10.7 the probe backs off', probeDelay(0) < probeDelay(3));
+  ok('O10.8 and is capped', probeDelay(99) === probeDelay(4) && probeDelay(99) <= 30000);
+}
+
+async function o11_the_summary_says_what_is_true() {
+  const at = (net, pending, writeState, lastError) =>
+    describeSync({ enabled: true, net, pending, writeState, lastError: lastError || null });
+
+  eq('O11.1 connected and settled', at('online', 0, 'idle').phase, 'synced');
+  eq('O11.2 connected and sending', at('online', 0, 'saving').phase, 'syncing');
+  eq('O11.3 offline with nothing waiting', at('offline', 0, 'idle').phase, 'offline');
+  eq('O11.4 offline with changes waiting', at('offline', 3, 'idle').phase, 'offline-pending');
+  eq('O11.5 connected but refused', at('online', 2, 'error', 'No rights').phase, 'failed');
+
+  // The two readings that used to lie.
+  eq('O11.6 a build with no server is never "Connected"',
+     describeSync({ enabled: false, net: 'online', pending: 0, writeState: 'idle', lastError: null }).phase,
+     'local-only');
+  eq('O11.7 offline is never "Connected", whatever the last write did',
+     at('offline', 0, 'saved').phase, 'offline');
+  ok('O11.8 a waiting queue outranks a saved last write',
+     at('online', 4, 'saved').phase === 'syncing');
+
+  // Every state has to fit the chip beside Exit, and carry a real sentence.
+  const shapes = [at('online', 0, 'idle'), at('offline', 12, 'idle'), at('online', 7, 'error', 'x'), at('online', 0, 'saving')];
+  for (const s of shapes) {
+    ok('O11.9 the chip label is short enough: ' + s.short, s.short.length <= 16, s.short);
+    ok('O11.10 every state has a detail sentence: ' + s.phase, s.detail.length > 20);
+  }
+}
+
+async function o12_a_pull_alone_clears_a_stale_not_saved() {
+  // "When connectivity is restored and the user successfully refreshes, the
+  // stale Not saved state must disappear." It could not: the badge read
+  // syncState, which only a successful PUSH ever reset, and a refresh is a pull.
+  const A = await threeStatsLoggedOffline();
+  eq('O12.1 the badge is in its error state', A.syncState, 'error');
+  const before = describeSync({ enabled: true, net: netStatus(), pending: unsyncedCount(), writeState: A.syncState, lastError: 'x' });
+  eq('O12.2 and reads as offline with changes waiting', before.phase, 'offline-pending');
+
+  A.server.offline(false);
+  noteReachable();
+  await A.drain();
+  const after = describeSync({ enabled: true, net: netStatus(), pending: unsyncedCount(), writeState: 'saved', lastError: null });
+  eq('O12.3 a successful sync clears it', after.phase, 'saved');
+  eq('O12.4 because there is genuinely nothing waiting', unsyncedCount(), 0);
+}
+
+async function o13_a_malformed_outbox_never_breaks_a_launch() {
+  // Storage is not a trusted input: an older build, a truncated write, a device
+  // whose disk lied. None of it may stop the app starting, and none of it may
+  // become a push that can only fail.
+  const bad = [
+    null, undefined, 42, 'nope',
+    { token: 'add:x' },
+    { token: 'add:x2', leagueId: 'lg1', kind: 'event', op: 'add' },
+    { token: 'game:g', leagueId: 'lg1', kind: 'game' },
+    { token: 'add:ok', leagueId: 'lg1', kind: 'event', op: 'add', eventId: 'ok',
+      event: { id: 'ok', gameId: 'g1', teamId: 'tH', playerId: 'p1', type: 'fg3_make', period: 1, ts: 1 } },
+  ];
+  const restored = restoreOutbox(bad);
+  eq('O13.1 only the well-formed entry is restored', restored, 1);
+  eq('O13.2 and it is the one that can actually be pushed', unsyncedCount(), 1);
+}
+
 const TESTS = [
   ['S1 resurrection is real', s1_resurrection_is_real],
   ['S2 undo deletes server-side', s2_head_deletes_the_row],
@@ -1303,6 +1746,19 @@ const TESTS = [
   ['S29 a resolved push without the row keeps the stat', s29_a_resolved_push_without_the_row_keeps_the_stat],
   ['S30 an acknowledged delete that did nothing keeps the undo', s30_an_acknowledged_delete_that_did_nothing_keeps_the_undo],
   ['S31 a push with nothing to write reports failure', s31_a_push_with_nothing_to_write_reports_failure],
+  ['O1 the loss is real without a durable queue', o1_the_loss_is_real_without_a_durable_queue],
+  ['O2 a restored outbox keeps the stats', o2_a_restored_outbox_keeps_the_stats],
+  ['O3 replay cannot duplicate a stat', o3_replay_cannot_duplicate_a_stat],
+  ['O4 a new stat does not report the old ones saved', o4_a_new_stat_does_not_report_the_old_ones_saved],
+  ['O5 a refused write stays queued and is retried', o5_a_refused_write_stays_queued_and_is_retried],
+  ['O6 repeated transitions lose nothing', o6_repeated_transitions_lose_nothing],
+  ['O7 a drain stops when the connection dies again', o7_a_drain_stops_when_the_connection_dies_again],
+  ['O8 an offline undo is replayed as a delete', o8_an_offline_undo_is_replayed_as_a_delete],
+  ['O9 a write for a deleted game is never replayed', o9_a_write_for_a_deleted_game_is_never_replayed],
+  ['O10 connectivity is observed, not assumed', o10_connectivity_is_observed_not_assumed],
+  ['O11 the summary says what is true', o11_the_summary_says_what_is_true],
+  ['O12 a pull alone clears a stale Not saved', o12_a_pull_alone_clears_a_stale_not_saved],
+  ['O13 a malformed outbox never breaks a launch', o13_a_malformed_outbox_never_breaks_a_launch],
 ];
 
 (async () => {
