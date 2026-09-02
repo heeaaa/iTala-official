@@ -561,11 +561,22 @@ export function unsyncedCount(): number {
  * A pending REMOVAL is kept for a simpler reason: absent is what a removal is
  * FOR, and the delete it carries is idempotent.
  */
-export function pruneOutbox(localGameIds: ReadonlySet<string>): number {
+export function pruneOutbox(
+  localGameIds: ReadonlySet<string>,
+  loadedLeagueIds: ReadonlySet<string> | null = null,
+): number {
   const drop: string[] = [];
   for (const [token, e] of pending) {
     if (e.kind !== 'game') continue;
     if (e.inFlight) continue; // not ours to remove while a push is on the wire
+    // "This device no longer has that game" is only evidence of a deletion if
+    // this device was ever holding that league's games in the first place. Once
+    // the pull is scoped, an unloaded league contributes NO game ids, so every
+    // queued lineup, substitution, period and status change for it would look
+    // deleted and be dropped from the outbox - silently, on every drain. That
+    // is the loss N-38 exists to prevent, so absence of the league is not
+    // absence of the game.
+    if (loadedLeagueIds !== null && !loadedLeagueIds.has(e.leagueId)) continue;
     if (!localGameIds.has(e.gameId)) drop.push(token);
   }
   for (const token of drop) pending.delete(token);

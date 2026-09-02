@@ -10,7 +10,7 @@ import { uid } from '../lib/format';
 import { teamColors, DEFAULT_FOUL_OUT } from '../theme';
 import { loadState, saveState, loadPrefs, savePrefs, loadOutbox, saveOutbox } from './storage';
 import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
-import { fetchAllState, pingServer, pushAction, pushPendingEntry, subscribeRealtime } from '../sync/sync';
+import { StateSnapshot, fetchAllState, pingServer, pushAction, pushPendingEntry, subscribeRealtime } from '../sync/sync';
 import { enqueuePush, __resetPushQueue } from '../sync/pushQueue';
 import {
   acceptSnapshot, appliedSnapshotAt, beginPush, beginSnapshot, confirmPending,
@@ -168,6 +168,11 @@ export type Action =
        *  state. Present only for server snapshots; a hydrate from local storage
        *  has no server rows to reconcile against and omits it. */
       snapshotAt?: number;
+      /** Which leagues this snapshot's heavy tables cover; null (or absent) for
+       *  "all of them". A league outside the scope keeps the children this
+       *  device already has: the snapshot was never asked about them, so its
+       *  silence says nothing. See StateSnapshot in sync/sync.ts. */
+      covered?: readonly string[] | null;
     }
   | { t: 'ADD_LEAGUE'; id: string; name: string; season: string; foulOutLimit?: number; kind?: 'league' | 'recreational'; trackMisses?: boolean; trackTurnovers?: boolean; isShared?: boolean; creationCode?: string }
   | { t: 'DELETE_LEAGUE'; leagueId: string }
@@ -305,7 +310,30 @@ export function reducer(state: AppState, a: Action): AppState {
       const bundles = activeBundles();
       const localLeagues = new Map(state.leagues.map(l => [l.id, l]));
 
+      // Which leagues this snapshot is allowed to speak for. `null` is every
+      // league, which is what an unscoped pull sends and what every caller sent
+      // before scoping existed - so this is a no-op until something narrows it.
+      const covered = a.covered ?? null;
+      const coveredSet = covered === null ? null : new Set(covered);
+      const speaksFor = (id: string) => coveredSet === null || coveredSet.has(id);
+
       const leagues = a.state.leagues.map(l => {
+        // OUT OF SCOPE: take the catalogue fields, keep the children. The
+        // snapshot carried this league's name and season but was never asked
+        // for its games, so replacing them with the empty arrays it happens to
+        // have would delete them - and the autosave would make that permanent.
+        if (a.snapshotAt !== undefined && !speaksFor(l.id)) {
+          const local = localLeagues.get(l.id);
+          const scalars = l.trackMisses === undefined ? { ...l, trackMisses: legacyTrackMisses } : l;
+          return {
+            ...scalars,
+            teams: local?.teams ?? [],
+            players: local?.players ?? [],
+            games: local?.games ?? [],
+            events: local?.events ?? [],
+            _redo: local?._redo,
+          } as League;
+        }
         // Reconcile the snapshot's events against local writes the server has
         // not demonstrably applied yet. `snapshotAt` is the tick taken before
         // the fetch; without one this is a hydrate from local storage, which
@@ -930,8 +958,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   // module-level; this is the bridge into React.
   useEffect(() => subscribeNet(setNet), []);
 
+  /**
+   * Leagues the most recently applied snapshot spoke for, or null for "all of
+   * them". Read by the drain, which must not mistake an unloaded league for a
+   * league whose games were deleted. See pruneOutbox.
+   */
+  const coveredRef = useRef<readonly string[] | null>(null);
+
   /** Hydrate one snapshot, or refuse it and say why. */
-  const applySnapshot = useCallback((at: number, remote: Partial<AppState> | null, source: string): boolean => {
+  const applySnapshot = useCallback((at: number, remote: StateSnapshot | null, source: string): boolean => {
     const leagues = remote?.leagues;
     if (!leagues) return false;
     // An empty league list is not evidence that this account owns nothing: an
@@ -949,7 +984,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       return false;
     }
     trace('SNAPSHOT', `accepted at=${at} leagues=${leagues.length} source=${source}`);
-    baseDispatch({ t: 'HYDRATE', state: { leagues }, snapshotAt: at });
+    // The scope travels WITH the snapshot rather than being read from provider
+    // state, so a snapshot that was in flight while the scope changed is still
+    // applied against the scope it was actually taken with.
+    const covered = remote?.covered ?? null;
+    coveredRef.current = covered;
+    baseDispatch({ t: 'HYDRATE', state: { leagues }, snapshotAt: at, covered });
     return true;
   }, []);
 
@@ -1167,10 +1207,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // person deliberately got rid of, pointing at teams and players that went
     // with them.
     const localGameIds = new Set<string>();
+    const loadedLeagueIds = new Set<string>();
     for (const l of stateRef.current.leagues) {
+      loadedLeagueIds.add(l.id);
       for (const g of l.games) localGameIds.add(g.id);
     }
-    if (pruneOutbox(localGameIds) > 0) persistOutbox();
+    // Null scope means every league's games are in hand, so every absence is a
+    // real deletion - today's behaviour. Once the pull is scoped, only leagues
+    // the snapshot spoke for can be judged that way.
+    const prunable = coveredRef.current === null ? null : loadedLeagueIds;
+    if (pruneOutbox(localGameIds, prunable) > 0) persistOutbox();
 
     if (drainableEntries().length === 0) return false;
 

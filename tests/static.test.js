@@ -297,8 +297,18 @@ ok('docs/DEPLOYMENT.md keeps the zip-apply commands', read('docs/DEPLOYMENT.md')
      /beginPush\(\[entry\.token\]\)/.test(store) && /export function beginPush\(/.test(pend),
      'reconnect, foreground and pull-to-refresh can all ask at once');
   ok('the outbox is pruned of games the device no longer has',
-     /pruneOutbox\(localGameIds\)/.test(store) && /export function pruneOutbox\(/.test(pend),
+     /pruneOutbox\(localGameIds, prunable\)/.test(store) && /export function pruneOutbox\(/.test(pend),
      'replaying a write for a rolled-back or deleted game re-creates it on the server');
+  // The prune's evidence is "this device does not have that game". That is
+  // only a deletion if the device was holding the league's games at all, so a
+  // scoped snapshot has to narrow what the prune may judge. Without this the
+  // first scoped pull would silently empty the outbox of every queued lineup,
+  // substitution, period and status change for an unloaded league.
+  ok('and never judges a league the snapshot did not speak for',
+     /loadedLeagueIds !== null && !loadedLeagueIds\.has\(e\.leagueId\)/.test(pend) &&
+     /coveredRef\.current === null \? null : loadedLeagueIds/.test(store),
+     'an unloaded league contributes no game ids, so every entry for it would '
+     + 'look deleted');
   ok('but a queued insert is never pruned by local absence',
      !/localEventIds/.test(pend),
      'the outbox is written before the state, so an entry can legitimately '

@@ -228,7 +228,10 @@ class Device {
     if (!leagues) return false;
     if (leagues.length === 0 && this.state.leagues.length > 0) { this.refused = 'empty'; return false; }
     if (!acceptSnapshot(snap.at)) { this.refused = 'stale'; return false; }
-    this.dispatch({ t: 'HYDRATE', state: { leagues }, snapshotAt: snap.at });
+    // The scope rides with the snapshot, as it does in StoreProvider: null (or
+    // absent) means the snapshot speaks for every league.
+    const covered = snap.remote.covered === undefined ? null : snap.remote.covered;
+    this.dispatch({ t: 'HYDRATE', state: { leagues }, snapshotAt: snap.at, covered });
     return true;
   }
 
@@ -241,8 +244,10 @@ class Device {
     const l = this.league();
     return (l ? l.events : []).filter(e => e.gameId === gameId).map(e => e.id);
   }
-  points(gameId = 'g1') {
-    const l = this.league();
+  // leagueId defaults to lg1, which is what every group before the scoping
+  // work used; GROUP U needs a second league, so it may name one.
+  points(gameId = 'g1', leagueId = 'lg1') {
+    const l = this.league(leagueId);
     // The short names are this suite's own shorthand, kept because every group
     // below already reads in them; the fg2_make/fg3_make/ft_make spellings are
     // the app's real EventType values, used by the groups added for the
@@ -2234,6 +2239,157 @@ async function t5_an_empty_project_reads_as_empty_not_as_an_error() {
      String(server.log.filter(x => x.op === 'select').length));
 }
 
+/* ==========================================================================
+   GROUP U - a snapshot that does not speak for every league
+   ==========================================================================
+
+   Scoping the pull introduces a state this app has never had: a league row
+   present in the catalogue whose games and events were never requested. In a
+   result set that is indistinguishable from a league that HAS no games, and
+   treating the second as the first is precisely how N-39 deleted a
+   scorekeeper's game - HYDRATE drops the events, the autosave makes it
+   permanent, and the tracker reopens at 0-0.
+
+   So the snapshot declares what it was asked about (`covered`), and everything
+   that would otherwise read absence as deletion has to consult it. These pin
+   the two places that do. `covered: null` is "every league, in full", which is
+   what an unscoped pull sends and what every caller sent before scoping
+   existed - so U3 is the proof that none of this changed the old behaviour.
+   ========================================================================== */
+
+// Two leagues, both with a game and stats, both fully on the device.
+async function twoLeaguesBothScored(server) {
+  const A = await seed(server);
+  A.dispatch({ t: 'ADD_LEAGUE', id: 'lg2', name: 'Other', season: 'S1' });
+  A.dispatch({ t: 'ADD_TEAM', leagueId: 'lg2', name: 'Hawks', id: 'tH2' });
+  A.dispatch({ t: 'ADD_TEAM', leagueId: 'lg2', name: 'Kings', id: 'tA2' });
+  A.dispatch({ t: 'ADD_PLAYER', leagueId: 'lg2', teamId: 'tH2', name: 'Mika', number: '4', id: 'p3' });
+  A.dispatch({ t: 'CREATE_GAME', id: 'g2', leagueId: 'lg2', homeTeamId: 'tH2', awayTeamId: 'tA2' });
+  A.dispatch({ t: 'SET_GAME_STATUS', leagueId: 'lg2', gameId: 'g2', status: 'live' });
+  A.dispatch(score('lg1', 'g1', 'tH', 'p1', 'fg3_make', 1));
+  A.dispatch({ ...score('lg2', 'g2', 'tH2', 'p3', 'fg3_make', 1), id: 'e-lg2', ts: 4000 });
+  await A.settle();
+  return A;
+}
+
+// The catalogue row for a league whose heavy tables were not requested: the
+// scalars the leagues table carries, and nothing else. This is the shape a
+// scoped pull produces, and the shape that used to mean "everything was
+// deleted".
+const catalogueOnly = (league) => ({
+  id: league.id, name: league.name, season: league.season, kind: league.kind,
+  createdAt: league.createdAt,
+  teams: [], players: [], games: [], events: [],
+});
+
+async function u1_a_scoped_snapshot_does_not_delete_what_it_never_read() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+  eq('U1.1 both leagues are scored to begin with', [A.points('g1'), A.points('g2', 'lg2')], [3, 3]);
+
+  // A pull that asked about lg1 only. lg2 comes back as a catalogue row.
+  const at = beginSnapshot();
+  const remote = {
+    leagues: [
+      A.state.leagues.find(l => l.id === 'lg1'),
+      catalogueOnly(A.state.leagues.find(l => l.id === 'lg2')),
+    ],
+    covered: ['lg1'],
+  };
+  ok('U1.2 the snapshot was applied', A.applySnapshot({ at, remote }), `refused=${A.refused}`);
+
+  eq('U1.3 the in-scope league is intact', A.points('g1'), 3);
+  eq('U1.4 the out-of-scope league keeps its stats', A.points('g2', 'lg2'), 3);
+  eq('U1.5 and its game', A.game('g2', 'lg2') !== undefined, true);
+  eq('U1.6 and its roster', A.league('lg2').players.length, 1);
+  eq('U1.7 and its teams', A.league('lg2').teams.length, 2);
+  // The catalogue fields still update - that is the whole point of sending them.
+  eq('U1.8 while the catalogue row is still applied', A.league('lg2').name, 'Other');
+}
+
+async function u2_a_scoped_snapshot_does_not_prune_a_queued_write_it_never_read() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+
+  // A lineup change on the out-of-scope league, queued but unconfirmed - the
+  // shape N-38 exists to protect.
+  server.offline(true);
+  A.dispatch({ t: 'SET_LINEUP', leagueId: 'lg2', gameId: 'g2', side: 'home', playerIds: ['p3'] });
+  await A.settle();
+  ok('U2.1 the lineup change is queued', unsyncedCount() > 0, `unsynced=${unsyncedCount()}`);
+  const queued = unsyncedCount();
+
+  // lg2 is no longer loaded, so it contributes no game ids at all - which is
+  // exactly what "the game was deleted" used to look like.
+  const localGameIds = new Set(['g1']);
+
+  eq('U2.2 an unscoped prune still drops it, as it always did',
+     pruneOutbox(localGameIds, null) > 0, true);
+
+  // Rebuild and repeat with the scope declared.
+  resetSyncPrimitives();
+  const B = await twoLeaguesBothScored(new FakeServer());
+  B.server.offline(true);
+  B.dispatch({ t: 'SET_LINEUP', leagueId: 'lg2', gameId: 'g2', side: 'home', playerIds: ['p3'] });
+  await B.settle();
+  eq('U2.3 the same write is queued again', unsyncedCount(), queued);
+
+  eq('U2.4 a scoped prune drops nothing for a league it did not read',
+     pruneOutbox(new Set(['g1']), new Set(['lg1'])), 0);
+  eq('U2.5 so the queued lineup change survives', unsyncedCount(), queued);
+}
+
+/* U1 asserts the roster and the game survive, and those are the load-bearing
+   assertions: teams and players are in NO ledger, so the scope gate is the only
+   thing standing between them and deletion. U1's EVENTS assertion is weaker
+   than it looks - with the gate removed it still passes, because the ledger's
+   "the server acknowledged this and the snapshot does not have it" branch
+   re-adds them from its own copy.
+
+   That protection expires. A confirmed entry is excluded from the persisted
+   outbox, so the next launch starts with an empty ledger and nothing to object
+   with - which is exactly the sequence that made N-39 permanent. So the events
+   have to be asserted where the ledger cannot help them. */
+async function u4_a_relaunch_with_an_empty_ledger_still_keeps_what_was_not_read() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+  A.persist();
+
+  const B = relaunch(A);
+  eq('U4.1 the relaunch has both leagues from disk', [B.points('g1'), B.points('g2', 'lg2')], [3, 3]);
+  eq('U4.2 and an empty ledger, as a new process has', pendingCount(), 0);
+
+  const at = beginSnapshot();
+  const remote = {
+    leagues: [
+      B.state.leagues.find(l => l.id === 'lg1'),
+      catalogueOnly(B.state.leagues.find(l => l.id === 'lg2')),
+    ],
+    covered: ['lg1'],
+  };
+  ok('U4.3 the scoped snapshot was applied', B.applySnapshot({ at, remote }), `refused=${B.refused}`);
+
+  eq('U4.4 the out-of-scope stats survive with nothing pinning them', B.points('g2', 'lg2'), 3);
+  eq('U4.5 and the durable copy is not overwritten with less', diskPoints(B, 'g2', 'lg2'), 3);
+  eq('U4.6 the in-scope league is still correct', B.points('g1'), 3);
+}
+
+async function u3_an_unscoped_snapshot_behaves_exactly_as_before() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+
+  // Undo lg2's basket on the server ONLY, then pull unscoped. The old
+  // behaviour - a snapshot that speaks for everything is believed about
+  // everything - has to be untouched, or "covered" would have made local rows
+  // permanently sticky and broken every cross-device delete.
+  server.rows.events = server.rows.events.filter(r => r.id !== 'e-lg2');
+  resetSyncPrimitives();
+  await A.pull();
+
+  eq('U3.1 lg1 is untouched', A.points('g1'), 3);
+  eq('U3.2 and the server-side undo still lands on lg2', A.points('g2', 'lg2'), 0);
+}
+
 const TESTS = [
   ['S1 resurrection is real', s1_resurrection_is_real],
   ['S2 undo deletes server-side', s2_head_deletes_the_row],
@@ -2293,6 +2449,10 @@ const TESTS = [
   ['T6 a delete mid-read cannot skip a surviving row', t6_a_delete_mid_read_cannot_skip_a_surviving_row],
   ['T7 a delete mid-read does not cost the game on relaunch', t7_a_delete_mid_read_does_not_cost_the_game_on_relaunch],
   ['T8 only an empty page proves the walk finished', t8_only_an_empty_page_proves_the_walk_finished],
+  ['U1 a scoped snapshot does not delete what it never read', u1_a_scoped_snapshot_does_not_delete_what_it_never_read],
+  ['U2 a scoped snapshot does not prune a queued write it never read', u2_a_scoped_snapshot_does_not_prune_a_queued_write_it_never_read],
+  ['U3 an unscoped snapshot behaves exactly as before', u3_an_unscoped_snapshot_behaves_exactly_as_before],
+  ['U4 a relaunch with an empty ledger still keeps what was not read', u4_a_relaunch_with_an_empty_ledger_still_keeps_what_was_not_read],
 ];
 
 (async () => {

@@ -217,7 +217,25 @@ const byDesc = (col: string) => (x: any, y: any): number => {
 // means "the last event of this game", so both sides must name the same row.
 const byTsThenId = (x: any, y: any): number => cmpAsc(x.ts, y.ts) || cmpAsc(x.id, y.id);
 
-export async function fetchAllState(sb: SupabaseClient): Promise<Partial<AppState> | null> {
+/**
+ * A server snapshot, and WHICH LEAGUES IT SPEAKS FOR.
+ *
+ * `covered: null` means "every league, in full" - the only kind of snapshot
+ * this app has ever taken. It is a separate field rather than an implication of
+ * the data because the absence of rows cannot carry that meaning: a league with
+ * no events and a league whose events were not requested look identical in a
+ * result set, and treating the second as the first is how HYDRATE deletes a
+ * scorekeeper's game (see N-39). Anything that decides a local row is gone
+ * because the server did not mention it MUST first ask whether the server was
+ * asked about it.
+ */
+export interface StateSnapshot {
+  leagues: League[];
+  /** League ids this snapshot's heavy tables cover, or null for "all of them". */
+  covered: readonly string[] | null;
+}
+
+export async function fetchAllState(sb: SupabaseClient): Promise<StateSnapshot | null> {
   // Every read WALKS THE WHOLE TABLE by `id`, a page at a time - see readAll.
   // The cursor IS the ordering: `.order('id')` is what makes "everything after
   // this id" well defined, and it is deliberately NOT the display order, which
@@ -278,7 +296,8 @@ export async function fetchAllState(sb: SupabaseClient): Promise<Partial<AppStat
     return leagueFromRow(lRow, teams, players, games, events);
   });
 
-  return { leagues };
+  // Unscoped: every league, every child row. See StateSnapshot.
+  return { leagues, covered: null };
 }
 
 /* ---------- Push: mirror an action's effect to Supabase --------------------- */
