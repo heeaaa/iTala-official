@@ -235,7 +235,36 @@ export interface StateSnapshot {
   covered: readonly string[] | null;
 }
 
-export async function fetchAllState(sb: SupabaseClient): Promise<StateSnapshot | null> {
+/**
+ * The leagues whose heavy tables a pull should read, or null for all of them.
+ *
+ * `[]` is meaningful and is NOT the same as null: a device with no leagues of
+ * its own reads the catalogue and nothing else, which is exactly right and
+ * costs four fewer requests.
+ */
+export type PullScope = readonly string[] | null;
+
+/**
+ * Which leagues this account runs, from `my_memberships()`.
+ *
+ * Returns null when the answer could not be obtained, which the caller must
+ * treat as "unknown", not "none" - dropping a scorekeeper's own league out of
+ * the pull because an RPC failed is how their game stops syncing.
+ */
+export async function fetchMemberships(sb: SupabaseClient): Promise<string[] | null> {
+  const res = await sb.rpc('my_memberships');
+  const transport = transportFailure(res as { error: unknown; status?: number });
+  if (transport !== null) throw new Error(`fetch memberships: ${transport}`);
+  if (res.error) {
+    warn('[sync] my_memberships failed:', res.error.message);
+    return null;
+  }
+  const rows = res.data as { league_id?: string }[] | null;
+  if (!Array.isArray(rows)) return null;
+  return rows.map(r => r?.league_id).filter((id): id is string => typeof id === 'string');
+}
+
+export async function fetchAllState(sb: SupabaseClient, scope: PullScope = null): Promise<StateSnapshot | null> {
   // Every read WALKS THE WHOLE TABLE by `id`, a page at a time - see readAll.
   // The cursor IS the ordering: `.order('id')` is what makes "everything after
   // this id" well defined, and it is deliberately NOT the display order, which
@@ -243,13 +272,21 @@ export async function fetchAllState(sb: SupabaseClient): Promise<StateSnapshot |
   // it. Display order is imposed below, on the rows already in hand.
   const byKeyset = (table: 'leagues' | 'teams' | 'players' | 'games' | 'events') =>
     readAll((after, limit) => {
-      const q = sb.from(table).select('*').order('id').limit(limit);
+      let q = sb.from(table).select('*').order('id').limit(limit);
+      // The CATALOGUE is never scoped: one row per league, and browsing every
+      // league is the product. Only the four heavy tables are narrowed.
+      if (scope !== null && table !== 'leagues') q = q.in('league_id', scope as string[]);
       return after === null ? q : q.gt('id', after);
     });
-  const [lr, tr, pr, gr, er] = await Promise.all([
-    byKeyset('leagues'), byKeyset('teams'), byKeyset('players'),
-    byKeyset('games'), byKeyset('events'),
-  ]);
+
+  // An empty scope has nothing to ask about, and `.in('league_id', [])` is a
+  // request whose answer is known. Skip it rather than spend four round trips
+  // being told nothing.
+  const empty = { data: [] as unknown[], error: null };
+  const heavy = () => scope !== null && scope.length === 0
+    ? [empty, empty, empty, empty]
+    : [byKeyset('teams'), byKeyset('players'), byKeyset('games'), byKeyset('events')];
+  const [lr, tr, pr, gr, er] = await Promise.all([byKeyset('leagues'), ...heavy()]);
 
   // TRANSPORT FIRST, and it REJECTS rather than returning null.
   //
@@ -296,8 +333,10 @@ export async function fetchAllState(sb: SupabaseClient): Promise<StateSnapshot |
     return leagueFromRow(lRow, teams, players, games, events);
   });
 
-  // Unscoped: every league, every child row. See StateSnapshot.
-  return { leagues, covered: null };
+  // The scope travels WITH the rows, so HYDRATE knows which leagues this
+  // snapshot is entitled to speak for. Everything outside it keeps whatever the
+  // device already has - see StateSnapshot.
+  return { leagues, covered: scope };
 }
 
 /**

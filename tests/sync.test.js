@@ -32,7 +32,7 @@ const {
   // everything above - a suite that reimplemented these would keep passing
   // after the app stopped calling them.
   beginPush, drainableEntries, outboxSnapshot, pruneOutbox, restoreOutbox, unsyncedCount,
-  pushPendingEntry, pingServer,
+  pushPendingEntry, pingServer, fetchLeagueDetail, fetchMemberships,
   isKnownOffline, netStatus, noteReachable, noteUnreachable, probeDelay,
   describeSync, isNetworkFailure,
 } = M;
@@ -215,9 +215,9 @@ class Device {
   // which is what a slow refetch that overlaps an undo actually does. The tick
   // is taken BEFORE the read, exactly as StoreProvider does it: that is what
   // makes "this snapshot predates that confirmation" decidable.
-  async snapshot() {
+  async snapshot(scope = null) {
     const at = beginSnapshot();
-    const remote = await fetchAllState(this.client);
+    const remote = await fetchAllState(this.client, scope);
     return { at, remote };
   }
   // The same two gates StoreProvider.applySnapshot puts in front of HYDRATE:
@@ -2507,6 +2507,110 @@ function v4_a_saved_state_from_before_this_field_reads_as_loaded() {
      scoped.leagues[1].detailLoaded === false, JSON.stringify(scoped.leagues[1].detailLoaded));
 }
 
+/* ==========================================================================
+   GROUP W - the pull reads only the leagues this device uses
+   ==========================================================================
+
+   Phase 2. Before this, every device downloaded every league's every event on
+   every pull - boot, realtime refetch, pull-to-refresh and the reconnect drain.
+   Measured at roughly 124 MB across twenty leagues of history, and large enough
+   at around 150 that the device cannot serialise its own state. The row cap
+   used to hide that by silently truncating the read, which is the N-39 bug; now
+   that the read is faithful, the ceiling is real.
+
+   The catalogue stays whole, because browsing every league IS the product. Only
+   the four heavy tables are narrowed, and the snapshot says so, so HYDRATE
+   leaves everything it did not read alone (GROUP U).
+   ========================================================================== */
+
+async function w1_a_scoped_pull_reads_the_catalogue_whole_and_the_rest_narrowly() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+
+  const snap = await fetchAllState(A.client, ['lg1']);
+  eq('W1.1 the snapshot declares what it read', snap.covered, ['lg1']);
+  eq('W1.2 the catalogue carries BOTH leagues', snap.leagues.map(l => l.id).sort(), ['lg1', 'lg2']);
+
+  const lg1 = snap.leagues.find(l => l.id === 'lg1');
+  const lg2 = snap.leagues.find(l => l.id === 'lg2');
+  eq('W1.3 the scoped league has its events', lg1.events.length > 0, true);
+  eq('W1.4 and its roster', lg1.players.length > 0, true);
+  // Not "this league is empty" - this snapshot was never asked about it. The
+  // `covered` field above is the only thing that distinguishes the two, which
+  // is why it exists.
+  eq('W1.5 the unscoped league carries no heavy rows', [lg2.events.length, lg2.games.length, lg2.players.length], [0, 0, 0]);
+  eq('W1.6 but its catalogue fields are there', lg2.name, 'Other');
+}
+
+async function w2_an_empty_scope_asks_the_server_nothing_it_already_knows() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+  server.log.length = 0;
+
+  const snap = await fetchAllState(A.client, []);
+  eq('W2.1 the catalogue still comes back', snap.leagues.length, 2);
+  eq('W2.2 and the scope is honestly empty, not "everything"', snap.covered, []);
+
+  // `.in('league_id', [])` is a request whose answer is already known. A device
+  // with no leagues of its own - a first launch, a spectator who has favourited
+  // nothing - should not spend four round trips being told nothing.
+  const heavy = server.log.filter(r => r.op === 'select' && r.table !== 'leagues');
+  eq('W2.3 no heavy table was read at all', heavy.length, 0);
+  ok('W2.4 while the catalogue was', server.log.some(r => r.op === 'select' && r.table === 'leagues'),
+     JSON.stringify(server.log.map(r => r.table)));
+}
+
+async function w3_a_scoped_pull_does_not_cost_an_unscoped_league_its_data() {
+  // The end-to-end version of GROUP U, driven through the real scoped read
+  // rather than a hand-built snapshot, and across a relaunch so the ledger is
+  // empty and nothing local is pinned.
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+  A.persist();
+
+  const B = relaunch(A);
+  eq('W3.1 the relaunch has both leagues from disk', [B.points('g1'), B.points('g2', 'lg2')], [3, 3]);
+  eq('W3.2 and an empty ledger', pendingCount(), 0);
+
+  B.applySnapshot(await B.snapshot(['lg1']));
+  eq('W3.3 the scoped league is correct', B.points('g1'), 3);
+  eq('W3.4 the unscoped league keeps its stats', B.points('g2', 'lg2'), 3);
+  eq('W3.5 and its roster', B.league('lg2').players.length, 1);
+  eq('W3.6 while still being listed', B.state.leagues.map(l => l.id).sort(), ['lg1', 'lg2']);
+}
+
+async function w4_one_league_can_be_fetched_on_its_own() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+
+  const detail = await fetchLeagueDetail(A.client, 'lg2');
+  ok('W4.1 the detail read succeeded', detail !== null, 'null');
+  eq('W4.2 it carries only that league\'s events', detail.events.map(e => e.id), ['e-lg2']);
+  eq('W4.3 and only its roster', detail.players.map(p => p.id), ['p3']);
+  eq('W4.4 and only its games', detail.games.map(g => g.id), ['g2']);
+  eq('W4.5 and only its teams', detail.teams.map(t => t.id).sort(), ['tA2', 'tH2']);
+}
+
+async function w5_memberships_are_read_and_a_failure_is_unknown_not_none() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  server.memberships = ['lg1', 'lg7'];
+
+  eq('W5.1 memberships come back', (await fetchMemberships(A.client)).sort(), ['lg1', 'lg7']);
+
+  // A refused RPC must read as "unknown", never as "this account runs nothing".
+  // Scoping a scorekeeper's own league out of the pull because an RPC failed is
+  // how their game stops syncing.
+  server.failures['rpc:my_memberships'] = { message: 'permission denied' };
+  eq('W5.2 a refusal is unknown, not an empty list', await fetchMemberships(A.client), null);
+
+  // A transport failure is offline, and has to be distinguishable from both.
+  server.failures['rpc:my_memberships'] = 'network-resolved';
+  let threw = null;
+  try { await fetchMemberships(A.client); } catch (e) { threw = e; }
+  ok('W5.3 a transport failure throws rather than reporting none', threw !== null, 'did not throw');
+}
+
 const TESTS = [
   ['S1 resurrection is real', s1_resurrection_is_real],
   ['S2 undo deletes server-side', s2_head_deletes_the_row],
@@ -2574,6 +2678,11 @@ const TESTS = [
   ['V2 a league fetch does not revert a write it raced', v2_a_league_fetch_does_not_revert_a_write_it_raced],
   ['V3 an unknown league is not invented', v3_an_unknown_league_is_not_invented],
   ['V4 a saved state from before this field reads as loaded', v4_a_saved_state_from_before_this_field_reads_as_loaded],
+  ['W1 a scoped pull reads the catalogue whole and the rest narrowly', w1_a_scoped_pull_reads_the_catalogue_whole_and_the_rest_narrowly],
+  ['W2 an empty scope asks the server nothing it already knows', w2_an_empty_scope_asks_the_server_nothing_it_already_knows],
+  ['W3 a scoped pull does not cost an unscoped league its data', w3_a_scoped_pull_does_not_cost_an_unscoped_league_its_data],
+  ['W4 one league can be fetched on its own', w4_one_league_can_be_fetched_on_its_own],
+  ['W5 memberships are read, and a failure is unknown not none', w5_memberships_are_read_and_a_failure_is_unknown_not_none],
 ];
 
 (async () => {

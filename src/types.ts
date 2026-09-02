@@ -128,6 +128,22 @@ export interface LegacyPersistedSettings {
 export interface LocalPrefs {
   favLeagueIds: string[];
   favTeamIds: string[];
+  /**
+   * Leagues opened recently, newest first and BOUNDED - an unbounded list
+   * rebuilds the unbounded pull it exists to avoid.
+   */
+  recentLeagueIds?: string[];
+  /**
+   * Leagues this account was last known to run (owner/scorekeeper).
+   *
+   * Cached because the authoritative answer needs a round trip and the FIRST
+   * pull cannot wait for one: without a cache the opening pull would either
+   * fetch nothing (and a scorekeeper's own league would arrive late) or fetch
+   * everything (the problem). Refreshed after every successful membership read;
+   * only ever a hint, never an authorisation decision - the server enforces
+   * that.
+   */
+  memberLeagueIds?: string[];
   hapticsEnabled?: boolean; // live-tracker tap feedback (default on)
   seenOnboarding?: boolean; // dismissed the first-run explainer
   notifsEnabled?: boolean; // game reminders + final scores for favorites

@@ -11,7 +11,7 @@ import { dayKey, dayLabel, uid } from '../lib/format';
 export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'LeagueDetail'>) {
   const { leagueId } = route.params;
   const league = useLeague(leagueId);
-  const { dispatch, prefs, toggleFavTeam, loadLeagueDetail, leaguesLoading } = useStore();
+  const { dispatch, prefs, toggleFavTeam, loadLeagueDetail, leaguesLoading, noteLeagueOpened } = useStore();
   const { canScore, isOwner, isAdmin, getLeagueCodes, regenerateLeagueCode, listMembers, removeMember, user, canScoreGame } = useAdmin();
   const [tab, setTab] = useState(0);
   const [rosterQuery, setRosterQuery] = useState('');
@@ -29,6 +29,11 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
   useEffect(() => {
     if (needsDetail) void loadLeagueDetail(leagueId);
   }, [needsDetail, leagueId, loadLeagueDetail]);
+
+  // Opening a league is what makes it recent, and recency is what keeps later
+  // pulls reading it. Without this, coming back to a league you were just in
+  // would fetch it again every time.
+  useEffect(() => { noteLeagueOpened(leagueId); }, [leagueId, noteLeagueOpened]);
 
   if (!league) return <Screen><Txt k="body">League not found.</Txt></Screen>;
 

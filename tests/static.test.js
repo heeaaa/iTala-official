@@ -362,7 +362,7 @@ ok('docs/DEPLOYMENT.md keeps the zip-apply commands', read('docs/DEPLOYMENT.md')
      /if \(lr\.error\) \{ warn\('\[sync\] fetch leagues error:'[\s\S]{0,60}?return null; \}/.test(sync),
      'null for both made pullState record a read that never left the device as reachable');
   ok('the pull records reachability only after a read genuinely came back',
-     /const remote = await fetchAllState\(sb\);[\s\S]{0,600}?noteReachable\(\);/.test(store) &&
+     /const remote = await fetchAllState\(sb, scopeRef\.current\);[\s\S]{0,600}?noteReachable\(\);/.test(store) &&
      /noteUnreachable\(e\);/.test(store),
      'a throw from fetchAllState has to reach the catch, not the reachable line');
   ok('both spellings of the transport failure classify the same',

@@ -10,7 +10,7 @@ import { uid } from '../lib/format';
 import { teamColors, DEFAULT_FOUL_OUT } from '../theme';
 import { loadState, saveState, loadPrefs, savePrefs, loadOutbox, saveOutbox } from './storage';
 import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
-import { StateSnapshot, fetchAllState, fetchLeagueDetail, pingServer, pushAction, pushPendingEntry, subscribeRealtime } from '../sync/sync';
+import { PullScope, StateSnapshot, fetchAllState, fetchLeagueDetail, fetchMemberships, pingServer, pushAction, pushPendingEntry, subscribeRealtime } from '../sync/sync';
 import { enqueuePush, __resetPushQueue } from '../sync/pushQueue';
 import {
   acceptSnapshot, appliedSnapshotAt, beginPush, beginSnapshot, confirmPending,
@@ -907,6 +907,12 @@ interface Ctx {
   loadLeagueDetail: (leagueId: string) => Promise<boolean>;
   /** League ids with a detail fetch in flight, for a loading state. */
   leaguesLoading: readonly string[];
+  /**
+   * Record that a league was opened, so later pulls keep it up to date.
+   *
+   * Cheap and idempotent; safe to call from a screen effect.
+   */
+  noteLeagueOpened: (leagueId: string) => void;
   /** True when the app is connected to Supabase and syncing across devices. */
   synced: boolean;
   syncState: 'idle' | 'saving' | 'saved' | 'error';
@@ -1086,7 +1092,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           // Tick BEFORE the fetch: rows read after this point may predate any
           // local write confirmed after it. See sync/pendingEvents.ts.
           const at = beginSnapshot();
-          const remote = await fetchAllState(sb);
+          const remote = await fetchAllState(sb, scopeRef.current);
           // The read came back. Whether it carried rows is a different question
           // (row-level security answers plenty of reads with none), and not the
           // one reachability asks.
@@ -1110,6 +1116,37 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     gate.inFlight = run;
     return run;
   }, [applySnapshot]);
+
+  /**
+   * WHICH LEAGUES A PULL READS IN FULL.
+   *
+   * The catalogue is always read whole - browsing every league is the product.
+   * The four heavy tables are read only for leagues this device actually uses,
+   * because the alternative is every device downloading every event in the
+   * database on every pull (the ceiling that made N-39's truncation possible in
+   * the first place).
+   *
+   * Three sources, and the reason for each:
+   *   memberships   leagues this account runs. Their games are the ones being
+   *                 scored, so they must be present and offline-capable.
+   *   favourites    a fan's own leagues. Local prefs, so they cost nothing to
+   *                 know and are available before the first request.
+   *   recents       leagues opened lately, bounded. Without these, going back
+   *                 to a league you were just in would re-fetch it.
+   *
+   * Held in a ref as well as prefs because `pullState` is a stable callback and
+   * must not close over a stale scope.
+   */
+  const scopeRef = useRef<PullScope>(null);
+  const membersRef = useRef<readonly string[] | null>(null);
+  const computeScope = useCallback((p: LocalPrefs, members: readonly string[] | null): PullScope => {
+    const ids = new Set<string>([
+      ...(members ?? p.memberLeagueIds ?? []),
+      ...p.favLeagueIds,
+      ...(p.recentLeagueIds ?? []),
+    ]);
+    return [...ids];
+  }, []);
 
   /**
    * One league's detail, on demand.
@@ -1194,8 +1231,24 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const savedPrefs = await loadPrefs();
       if (!cancelled && savedPrefs) {
         const hz = savedPrefs.hapticsEnabled ?? true;
-        setPrefs({ favLeagueIds: savedPrefs.favLeagueIds ?? [], favTeamIds: savedPrefs.favTeamIds ?? [], hapticsEnabled: hz, seenOnboarding: savedPrefs.seenOnboarding, notifsEnabled: savedPrefs.notifsEnabled });
+        const restored: LocalPrefs = {
+          favLeagueIds: savedPrefs.favLeagueIds ?? [],
+          favTeamIds: savedPrefs.favTeamIds ?? [],
+          hapticsEnabled: hz,
+          seenOnboarding: savedPrefs.seenOnboarding,
+          notifsEnabled: savedPrefs.notifsEnabled,
+          recentLeagueIds: savedPrefs.recentLeagueIds ?? [],
+          memberLeagueIds: savedPrefs.memberLeagueIds ?? [],
+        };
+        setPrefs(restored);
         setHapticsEnabled(hz);
+        // BEFORE the first request. Favourites, recents and the last known
+        // memberships all come off the disk, so the opening pull can be scoped
+        // correctly without waiting for a round trip. That ordering is the
+        // whole reason the memberships are cached: the alternatives are a boot
+        // that pulls nothing (and a scorekeeper's own league arrives late) or
+        // one that pulls everything.
+        scopeRef.current = computeScope(restored, null);
       }
       if (!cancelled) setPrefsReady(true);
 
@@ -1226,7 +1279,37 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           // `hadData`, not "the pull worked": an empty result may only mean the
           // session was not ready, so it must keep retrying. Applying the
           // snapshot is now pullState's business, not this loop's.
+          // Concurrent with the first pull, not before it: the cached scope is
+          // usually already right, and making boot wait on an RPC to find that
+          // out would cost every launch a round trip. If the fresh answer names
+          // a league the cache did not, the scope widens and one more pull
+          // collects it.
+          const membershipRefresh = (async () => {
+            try {
+              const fresh = await fetchMemberships(sb);
+              if (fresh === null || cancelled) return false; // unknown, not "none"
+              membersRef.current = fresh;
+              const known = new Set(scopeRef.current ?? []);
+              const added = fresh.filter(id => !known.has(id));
+              setPrefs(prev => {
+                const next = { ...prev, memberLeagueIds: fresh };
+                void savePrefs(next);
+                scopeRef.current = computeScope(next, fresh);
+                return next;
+              });
+              return added.length > 0;
+            } catch (e) {
+              // A transport failure here is the same "offline" the pull reports;
+              // the cached scope stands and the next launch tries again.
+              warn('[sync] membership refresh failed:', (e as Error)?.message ?? String(e));
+              return false;
+            }
+          })();
+
           const gotData = (await pullState('boot')).hadData;
+          if (await membershipRefresh) {
+            if (!cancelled) await pullState('boot-memberships');
+          }
           if (gotData && !cancelled) setInitialSyncDone(true);
           if (!gotData && !cancelled) {
             // Background retry: 1s, 2s, 4s, 8s, then every 15s up to ~1 min.
@@ -1271,10 +1354,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
       authSubRef.current?.unsubscribe();
     };
-    // `pullState` is stable for the life of the provider (its only dependency,
-    // applySnapshot, has an empty dependency list), so this still runs exactly
-    // once - it is listed because it is used, not because it changes.
-  }, [pullState]);
+    // Both are stable for the life of the provider - `pullState`'s only
+    // dependency (applySnapshot) has an empty dependency list, and
+    // `computeScope` has none at all - so this still runs exactly once. They
+    // are listed because they are used, not because they change.
+  }, [pullState, computeScope]);
 
   // Realtime subscription: when ANY row changes (from another device), re-pull
   // the full state. Cheap on a free tier with our data volume; the realtime
@@ -1709,9 +1793,31 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const list = cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id];
       const next = { ...prev, [key]: list };
       void savePrefs(next);
+      // Favouriting a league is a request to keep it up to date, so the scope
+      // has to widen immediately rather than at the next launch.
+      if (key === 'favLeagueIds') scopeRef.current = computeScope(next, membersRef.current);
       return next;
     });
-  }, []);
+  }, [computeScope]);
+  /**
+   * Newest first, capped. The cap is the point: this list decides how much every
+   * future pull reads, so an unbounded one would rebuild the unbounded pull.
+   */
+  const RECENT_LEAGUES_MAX = 5;
+  const noteLeagueOpened = useCallback((leagueId: string) => {
+    setPrefs(prev => {
+      const current = prev.recentLeagueIds ?? [];
+      if (current[0] === leagueId) return prev; // already the most recent; no write
+      const next = {
+        ...prev,
+        recentLeagueIds: [leagueId, ...current.filter(id => id !== leagueId)].slice(0, RECENT_LEAGUES_MAX),
+      };
+      void savePrefs(next);
+      scopeRef.current = computeScope(next, membersRef.current);
+      return next;
+    });
+  }, [computeScope]);
+
   const dismissOnboarding = useCallback(() => {
     setPrefs(prev => { const next = { ...prev, seenOnboarding: true }; void savePrefs(next); return next; });
   }, []);
@@ -1743,7 +1849,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   return <StoreCtx.Provider value={{ state, dispatch, ready, synced: SYNC_ENABLED, refresh,
-    loadLeagueDetail, leaguesLoading, prefs, toggleFavLeague, toggleFavTeam, setHaptics, setNotifs, syncState, lastSyncError, lastSyncErrorDetail, net, pendingWrites, sync, prefsReady, initialSyncDone, dismissOnboarding }}>{children}</StoreCtx.Provider>;
+    loadLeagueDetail, leaguesLoading, noteLeagueOpened, prefs, toggleFavLeague, toggleFavTeam, setHaptics, setNotifs, syncState, lastSyncError, lastSyncErrorDetail, net, pendingWrites, sync, prefsReady, initialSyncDone, dismissOnboarding }}>{children}</StoreCtx.Provider>;
 }
 
 export function useStore(): Ctx {

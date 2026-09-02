@@ -70,6 +70,8 @@ class FakeServer {
     // that tries to do it by wrapping the query builder silently does nothing:
     // .order() and .limit() return the real closure-bound builder, so any
     // override spread onto it is dropped on the next chained call.
+    // Leagues this account runs, as my_memberships() would report them.
+    this.memberships = [];
     this.beforeRead = null;
     this.readCounts = {};
     // table -> predicate(row, op). Return false to hide the row from writes,
@@ -158,7 +160,9 @@ function makeBuilder(server, table, op, payload, selectOpts) {
     // PostgREST operators, as far as this client uses them. `gt` is what makes
     // keyset paging expressible: the pull walks `id` with .gt('id', cursor).
     const matches = row => filters.every(f =>
-      f.op === 'gt' ? row[f.col] > f.val : row[f.col] === f.val);
+      f.op === 'gt' ? row[f.col] > f.val
+        : f.op === 'in' ? f.val.includes(row[f.col])
+          : row[f.col] === f.val);
     // An `eq` filter carries no `op`, deliberately: assertions elsewhere in the
     // suite compare the recorded filter log field for field.
 
@@ -244,6 +248,8 @@ function makeBuilder(server, table, op, payload, selectOpts) {
     eq(col, val) { filters.push({ col, val }); return builder; },
     // Strictly greater than: the keyset cursor's operator.
     gt(col, val) { filters.push({ col, val, op: 'gt' }); return builder; },
+    // Membership, which is how the pull is scoped to a set of leagues.
+    in(col, vals) { filters.push({ col, val: vals, op: 'in' }); return builder; },
     order(col, opts) { orderBy.push({ col, ascending: opts?.ascending !== false }); return builder; },
     select() { wantReturning = true; return builder; },
     // PostgREST's row cap. pingServer uses it for the cheapest possible read;
@@ -285,6 +291,13 @@ function makeClient(server) {
       if (f === 'network-resolved') return transportResolved();
       if (f) return { data: null, error: { message: f.message || String(f) } };
       switch (name) {
+        // Which leagues this account runs. The real one reads league_members;
+        // the suite sets server.memberships directly.
+        case 'my_memberships':
+          return {
+            data: (server.memberships || []).map(id => ({ league_id: id, role: 'scorekeeper' })),
+            error: null,
+          };
         case 'create_league':
           if (!server.has('leagues', args.p_id)) {
             server.rows.leagues.push({
