@@ -13,6 +13,7 @@ dist/
 .claude/*
 !.claude/agents/
 !.claude/commands/
+!.claude/settings.json
 
 # Mobile signing / service-account credentials - never commit these
 *.p8

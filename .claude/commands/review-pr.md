@@ -27,13 +27,31 @@ about the code defeats that.
    reviewer is a biased reviewer, and its whole method depends on reaching the
    diff last.
 
-3. Relay its review to the user **verbatim**, in the structure it returns. The
+3. **Spot-check every P0 and P1 before you present it as established.** Not the
+   whole finding - the single factual claim it rests on. If it says a library
+   behaves a certain way, run it. If it says a caller exists, grep for it. If it
+   says a line reads something, open the line.
+
+   This is not distrust of the agent, it is the standard `CLAUDE.md` sections 39
+   and 47 set: agent output ranks below evidence, and agreement between models
+   is not proof. It is also cheap - the checks are seconds each - and it is not
+   optional, because a subagent's transcript is not reliably retained, so its
+   claimed verification cannot be audited after the fact. Yours is the last
+   point at which a wrong P1 can be caught before somebody acts on it.
+
+   Report what the spot-check found, including when it contradicts the agent.
+
+4. Relay the review to the user **verbatim**, in the structure it returns. The
    agent's output is not shown to the user directly, so it has to come through
    you. Do not soften a verdict, re-rank findings, drop the ones you disagree
-   with, or add your own.
+   with, or fold your own opinions into its text.
 
-If you do disagree with something after reading it, say so in one short note
-**after** the review, marked as your own opinion, with the evidence for it.
+   Add your spot-check results, and any disagreement of your own, in a short
+   note **after** the review, marked as yours, with the evidence.
+
+5. Offer to post the review as a PR comment. Do **not** post it without being
+   asked: a review comment is visible to everyone on the repository and is not
+   easily taken back, and the user may want to act on it privately first.
 
 Do not fix anything. This is a review. Wait for the user to decide what to do
 with it.
