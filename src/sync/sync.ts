@@ -381,6 +381,65 @@ export async function fetchLeagueDetail(
   };
 }
 
+/**
+ * A live game in a league this device has not loaded.
+ *
+ * Everything the Home banner draws and NOTHING ELSE: it renders the league
+ * name, the matchup and the location - no score - so this read does not touch
+ * the events table at all. Kept as a flat projection rather than merged into
+ * the league objects, deliberately: half-populating an unloaded league is how a
+ * screen ends up computing standings off three of its games. Nothing persists
+ * it and nothing else reads it.
+ */
+export interface LiveElsewhere {
+  leagueId: string;
+  gameId: string;
+  homeName: string | null;
+  awayName: string | null;
+  location: string | null;
+}
+
+/**
+ * Every live game, in every league, however little of the database is loaded.
+ *
+ * This is the one cross-league read that survives scoping, because a fan
+ * browsing for something to watch is the point of the banner. It stays cheap
+ * because "live" is a tiny slice: a handful of rows on the busiest Saturday,
+ * plus the teams they name.
+ */
+export async function fetchLiveGames(sb: SupabaseClient): Promise<LiveElsewhere[] | null> {
+  const gr = await readAll((after, limit) => {
+    const q = sb.from('games').select('*').eq('status', 'live').order('id').limit(limit);
+    return after === null ? q : q.gt('id', after);
+  });
+  const transportG = transportFailure(gr);
+  if (transportG !== null) throw new Error(`fetch live games: ${transportG}`);
+  if (gr.error) { warn('[sync] fetch live games error:', gr.error.message); return null; }
+
+  const games = gr.data as GameRow[];
+  if (games.length === 0) return [];
+
+  // Only the teams these games actually name. Two ids per game, so this is
+  // bounded by the number of live games rather than by the size of the table.
+  const teamIds = [...new Set(games.flatMap(g => [g.home_team_id, g.away_team_id]).filter(Boolean))];
+  const tr = await readAll((after, limit) => {
+    const q = sb.from('teams').select('*').in('id', teamIds).order('id').limit(limit);
+    return after === null ? q : q.gt('id', after);
+  });
+  const transportT = transportFailure(tr);
+  if (transportT !== null) throw new Error(`fetch live game teams: ${transportT}`);
+  if (tr.error) { warn('[sync] fetch live game teams error:', tr.error.message); return null; }
+
+  const nameOf = new Map((tr.data as TeamRow[]).map(t => [t.id, t.name]));
+  return games.map(g => ({
+    leagueId: g.league_id,
+    gameId: g.id,
+    homeName: nameOf.get(g.home_team_id) ?? null,
+    awayName: nameOf.get(g.away_team_id) ?? null,
+    location: g.location ?? null,
+  }));
+}
+
 /* ---------- Push: mirror an action's effect to Supabase --------------------- */
 // We translate the *intent* of each action to a row-level operation. The post-
 // reducer `state` is passed in so we can look up the new shape of things (e.g.

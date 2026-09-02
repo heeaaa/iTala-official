@@ -10,7 +10,7 @@ import { uid } from '../lib/format';
 import { teamColors, DEFAULT_FOUL_OUT } from '../theme';
 import { loadState, saveState, loadPrefs, savePrefs, loadOutbox, saveOutbox } from './storage';
 import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
-import { PullScope, StateSnapshot, fetchAllState, fetchLeagueDetail, fetchMemberships, pingServer, pushAction, pushPendingEntry, subscribeRealtime } from '../sync/sync';
+import { LiveElsewhere, PullScope, StateSnapshot, fetchAllState, fetchLeagueDetail, fetchLiveGames, fetchMemberships, pingServer, pushAction, pushPendingEntry, subscribeRealtime } from '../sync/sync';
 import { enqueuePush, __resetPushQueue } from '../sync/pushQueue';
 import {
   acceptSnapshot, appliedSnapshotAt, beginPush, beginSnapshot, confirmPending,
@@ -913,6 +913,14 @@ interface Ctx {
    * Cheap and idempotent; safe to call from a screen effect.
    */
   noteLeagueOpened: (leagueId: string) => void;
+  /**
+   * Live games in leagues this device has NOT loaded, for the Home banner.
+   *
+   * The one cross-league view that survives scoping. Transient: never
+   * persisted, and no screen but the banner should read it - it is a projection
+   * of a few rows, not league data.
+   */
+  liveElsewhere: readonly LiveElsewhere[];
   /** True when the app is connected to Supabase and syncing across devices. */
   synced: boolean;
   syncState: 'idle' | 'saving' | 'saved' | 'error';
@@ -1091,6 +1099,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           gate.trailing = false;
           // Tick BEFORE the fetch: rows read after this point may predate any
           // local write confirmed after it. See sync/pendingEvents.ts.
+          // Alongside the snapshot, not part of it: the banner spans every
+          // league and the pull no longer does. Started BEFORE the tick below
+          // and never awaited with it, for two reasons - a failure here must not
+          // cost the snapshot, and the tick must stay adjacent to the read it
+          // dates (see the static assertion). A briefly stale banner is not a
+          // correctness problem; a mis-dated snapshot is.
+          void (async () => {
+            try {
+              const live = await fetchLiveGames(sb);
+              if (live !== null && aliveRef.current) setLiveElsewhere(live);
+            } catch {
+              // Offline, or the host refused. The previous list stands; the
+              // pull's own reachability handling is the authority on status.
+            }
+          })();
           const at = beginSnapshot();
           const remote = await fetchAllState(sb, scopeRef.current);
           // The read came back. Whether it carried rows is a different question
@@ -1138,6 +1161,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
    * must not close over a stale scope.
    */
   const scopeRef = useRef<PullScope>(null);
+  const [liveElsewhere, setLiveElsewhere] = React.useState<readonly LiveElsewhere[]>([]);
   const membersRef = useRef<readonly string[] | null>(null);
   const computeScope = useCallback((p: LocalPrefs, members: readonly string[] | null): PullScope => {
     const ids = new Set<string>([
@@ -1849,7 +1873,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   return <StoreCtx.Provider value={{ state, dispatch, ready, synced: SYNC_ENABLED, refresh,
-    loadLeagueDetail, leaguesLoading, noteLeagueOpened, prefs, toggleFavLeague, toggleFavTeam, setHaptics, setNotifs, syncState, lastSyncError, lastSyncErrorDetail, net, pendingWrites, sync, prefsReady, initialSyncDone, dismissOnboarding }}>{children}</StoreCtx.Provider>;
+    loadLeagueDetail, leaguesLoading, noteLeagueOpened, liveElsewhere, prefs, toggleFavLeague, toggleFavTeam, setHaptics, setNotifs, syncState, lastSyncError, lastSyncErrorDetail, net, pendingWrites, sync, prefsReady, initialSyncDone, dismissOnboarding }}>{children}</StoreCtx.Provider>;
 }
 
 export function useStore(): Ctx {

@@ -32,7 +32,7 @@ const {
   // everything above - a suite that reimplemented these would keep passing
   // after the app stopped calling them.
   beginPush, drainableEntries, outboxSnapshot, pruneOutbox, restoreOutbox, unsyncedCount,
-  pushPendingEntry, pingServer, fetchLeagueDetail, fetchMemberships,
+  pushPendingEntry, pingServer, fetchLeagueDetail, fetchMemberships, fetchLiveGames,
   isKnownOffline, netStatus, noteReachable, noteUnreachable, probeDelay,
   describeSync, isNetworkFailure,
 } = M;
@@ -2611,6 +2611,88 @@ async function w5_memberships_are_read_and_a_failure_is_unknown_not_none() {
   ok('W5.3 a transport failure throws rather than reporting none', threw !== null, 'did not throw');
 }
 
+/* ==========================================================================
+   GROUP X - the one cross-league view that survives scoping
+   ==========================================================================
+
+   Scoping the pull would otherwise narrow the Home banner to the leagues a
+   device happens to use, and a fan browsing for something to watch is the
+   whole point of it. So live games get their own narrow read.
+
+   It stays cheap because "live" is a tiny slice, and because the banner draws
+   the league name, the matchup and the location and NOTHING ELSE - no score. So
+   this read never touches the events table, which is the one that grows without
+   bound.
+   ========================================================================== */
+
+async function x1_live_games_are_found_in_leagues_the_device_never_loaded() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+  // Both games were set live by the seed helpers.
+  const live = await fetchLiveGames(A.client);
+
+  eq('X1.1 both live games are found', live.map(x => x.gameId).sort(), ['g1', 'g2']);
+  const g2 = live.find(x => x.gameId === 'g2');
+  eq('X1.2 with the league it belongs to', g2.leagueId, 'lg2');
+  eq('X1.3 and the team names the banner draws', [g2.homeName, g2.awayName], ['Hawks', 'Kings']);
+}
+
+async function x2_the_live_read_never_touches_the_events_table() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+  server.log.length = 0;
+
+  await fetchLiveGames(A.client);
+  const tables = [...new Set(server.log.filter(r => r.op === 'select').map(r => r.table))].sort();
+  // The banner shows no score, so the table that grows without bound is not
+  // read at all. If that ever changes, this read stops being cheap and the
+  // whole point of scoping is undone on every pull.
+  eq('X2.1 only games and teams are read', tables, ['games', 'teams']);
+  ok('X2.2 the events table is untouched', !tables.includes('events'), tables.join(','));
+}
+
+async function x3_a_finished_game_drops_out_of_the_banner() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+  A.dispatch({ t: 'SET_GAME_STATUS', leagueId: 'lg2', gameId: 'g2', status: 'final' });
+  await A.settle();
+
+  const live = await fetchLiveGames(A.client);
+  eq('X3.1 only the still-live game is listed', live.map(x => x.gameId), ['g1']);
+}
+
+async function x4_no_live_games_is_an_empty_list_not_a_failure() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+  A.dispatch({ t: 'SET_GAME_STATUS', leagueId: 'lg1', gameId: 'g1', status: 'final' });
+  A.dispatch({ t: 'SET_GAME_STATUS', leagueId: 'lg2', gameId: 'g2', status: 'final' });
+  await A.settle();
+  server.log.length = 0;
+
+  const live = await fetchLiveGames(A.client);
+  eq('X4.1 an empty list, not null', live, []);
+  // Nothing named a team, so there is nothing to look up. A quiet Tuesday
+  // should cost one request, not two.
+  const tables = server.log.filter(r => r.op === 'select').map(r => r.table);
+  eq('X4.2 and the team lookup is skipped entirely', tables, ['games']);
+}
+
+async function x5_a_transport_failure_throws_and_a_refusal_returns_null() {
+  const server = new FakeServer();
+  const A = await twoLeaguesBothScored(server);
+
+  // A refused read is not the same as an unreachable one, and the banner must
+  // not be the thing that decides the device is offline.
+  server.failures['select:games'] = { message: 'permission denied for table games' };
+  eq('X5.1 a refusal is null, not a throw', await fetchLiveGames(A.client), null);
+
+  delete server.failures['select:games'];
+  server.failures['select:games'] = 'network-resolved';
+  let threw = null;
+  try { await fetchLiveGames(A.client); } catch (e) { threw = e; }
+  ok('X5.2 a transport failure throws', threw !== null, 'did not throw');
+}
+
 const TESTS = [
   ['S1 resurrection is real', s1_resurrection_is_real],
   ['S2 undo deletes server-side', s2_head_deletes_the_row],
@@ -2683,6 +2765,11 @@ const TESTS = [
   ['W3 a scoped pull does not cost an unscoped league its data', w3_a_scoped_pull_does_not_cost_an_unscoped_league_its_data],
   ['W4 one league can be fetched on its own', w4_one_league_can_be_fetched_on_its_own],
   ['W5 memberships are read, and a failure is unknown not none', w5_memberships_are_read_and_a_failure_is_unknown_not_none],
+  ['X1 live games are found in leagues the device never loaded', x1_live_games_are_found_in_leagues_the_device_never_loaded],
+  ['X2 the live read never touches the events table', x2_the_live_read_never_touches_the_events_table],
+  ['X3 a finished game drops out of the banner', x3_a_finished_game_drops_out_of_the_banner],
+  ['X4 no live games is an empty list, not a failure', x4_no_live_games_is_an_empty_list_not_a_failure],
+  ['X5 a transport failure throws and a refusal returns null', x5_a_transport_failure_throws_and_a_refusal_returns_null],
 ];
 
 (async () => {
