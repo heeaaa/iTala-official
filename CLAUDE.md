@@ -1520,3 +1520,25 @@ merge
 ```
 
 Independent verification is more valuable than AI consensus.
+
+---
+
+# 50. PROJECT AGENT SYSTEM
+
+The reusable project-scoped development system lives under `.claude/`:
+
+* `.claude/PROJECT-CONTEXT.md` centralizes the current architecture map and
+  iTala-specific invariants. It is a navigation aid; source and tests remain
+  authoritative.
+* `.claude/agents/` contains focused specialists. `pr-reviewer` is always
+  read-only; other specialists follow their documented modification modes.
+* `.claude/commands/` contains direct specialist commands and the `/feature`,
+  `/fix`, and `/release-check` orchestration workflows.
+* `.claude/validation/` contains repository-backed representative scenarios.
+* `npm run agents:validate` performs deterministic structural validation. Live
+  model evaluations require an installed, authenticated Claude Code CLI and run
+  only in disposable repository copies.
+
+Read `.claude/README.md` for exact commands and routing. The primary session is
+still responsible for checking agent output, integrating changes, rerunning
+verification, and reporting the truth.

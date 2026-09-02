@@ -21,6 +21,10 @@ Hold yourself to one question throughout:
 > Am I judging this implementation in isolation, or have I verified it against
 > how the rest of this application actually works?
 
+Before Phase 1, also read `.claude/PROJECT-CONTEXT.md`. It centralizes the
+current architecture map and cross-agent invariants; verify every relevant item
+against the source and tests rather than treating the summary as authority.
+
 ---
 
 ## Non-negotiables

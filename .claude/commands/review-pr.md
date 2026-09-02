@@ -1,6 +1,8 @@
 ---
 description: Review an open pull request against the whole application using the pr-reviewer agent
 argument-hint: "[PR number, branch, or nothing for the current branch]"
+disable-model-invocation: true
+disallowed-tools: Edit, Write, NotebookEdit
 ---
 
 Review a pull request with the **pr-reviewer** agent.
