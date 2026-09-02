@@ -69,22 +69,168 @@ const eventFromRow = (r: EventRow): GameEvent => ({
 
 /* ---------- Initial pull: fetch all data, return as AppState ---------------- */
 
+/** One PostgREST response, as much of it as anything here reads. */
+interface ReadResult {
+  data: any[] | null;
+  error: any;
+  status?: number;
+}
+
+/** Rows asked for per request. The server is free to answer with fewer. */
+const PAGE_SIZE = 1000;
+
+/**
+ * A runaway backstop, NOT a row ceiling. Keyset paging finishes when the server
+ * runs out of rows, so this is only reached if the cursor stops advancing. The
+ * offset version used its equivalent as a de facto 200,000-row limit, past
+ * which every pull failed for ever while the app still said "Connected".
+ */
+const MAX_PAGES = 5000;
+
+/**
+ * Read EVERY row of one query, a page at a time, walking `id` upwards.
+ *
+ * WHY KEYSET AND NOT OFFSET.
+ *
+ * PostgREST will not return more rows than `db-max-rows`, and it does not say
+ * when it has capped a reply: the response is an ordinary success carrying a
+ * short array. So the read has to be paged - that is N-39. The obvious way,
+ * `.range(from, to)`, compiles to OFFSET/LIMIT, and OFFSET is defined against a
+ * result set other people are changing while we walk it:
+ *
+ *   Page 1 reads rows 0-999. Someone, anywhere, taps Undo, which DELETEs an
+ *   event row behind our cursor. Every later row shifts down one offset. Page 2
+ *   asks for offset 1000 and is given what was row 1001 - the row that was at
+ *   1000 is now at 999, already passed, and is never read. The exact count
+ *   shrank by the same one, so `rows.length === count` and the read reports
+ *   success.
+ *
+ * The snapshot then holds a row the server deleted AND omits one it still has.
+ * Because a confirmed write is retired from the ledger seconds after the tap,
+ * `reconcileLeagueEvents` has nothing to object with: HYDRATE drops the missing
+ * event and the autosave persists the loss. That is N-39 again, reached by a
+ * stranger's Undo instead of by row count - and no restart required.
+ *
+ * A cursor on `id` has no such window. All five tables are `id text primary
+ * key` (supabase/schema.sql), immutable and unique, so "everything after this
+ * id" names the same boundary however the table is edited around it. A
+ * surviving row can never be stepped over, and completeness stops depending on
+ * a count that moves while we read - so the exact count, which cost a full
+ * COUNT(*) per request on every pull, is gone entirely.
+ *
+ * Only an EMPTY page proves the walk finished. A short page does not: a project
+ * whose `db-max-rows` is below PAGE_SIZE answers every page short, and reading
+ * that as the end would reintroduce the original truncation. Running out of
+ * pages is therefore an ERROR, never a short snapshot - a short snapshot is
+ * precisely the thing that deletes a scorekeeper's game.
+ *
+ * The trade is that a row INSERTED below the cursor mid-read is missed until the
+ * next pull. That is the safe direction, and a different thing entirely: it
+ * withholds a row that has just appeared rather than deleting one that exists.
+ */
+async function readAll(
+  page: (afterId: string | null, limit: number) => PromiseLike<ReadResult>,
+): Promise<ReadResult> {
+  const rows: any[] = [];
+  // A row that arrives twice is the same row twice, and would DOUBLE a score.
+  // Strict `.gt(id, cursor)` should make that impossible; this is the guard for
+  // a server that ignores the cursor, which the advance check below then fails.
+  const seen = new Set<string>();
+  let cursor: string | null = null;
+  let last: ReadResult | null = null;
+  let complete = false;
+
+  for (let i = 0; i < MAX_PAGES; i++) {
+    const res: ReadResult = await page(cursor, PAGE_SIZE);
+    last = res;
+    if (res.error) return res;
+    const batch = res.data ?? [];
+    // Nothing after the cursor: the walk is done, whatever the server was
+    // capping each reply at.
+    if (batch.length === 0) { complete = true; break; }
+
+    let high: string | null = null;
+    for (const row of batch) {
+      const id = row?.id;
+      // Paging is only as sound as its key. A row with no string id cannot be
+      // positioned, and guessing is how a score changes - so the read fails.
+      if (typeof id !== 'string') {
+        return {
+          data: null,
+          error: { message: 'readAll: a row arrived with no string id; cannot page safely' },
+          status: res.status,
+        };
+      }
+      if (high === null || id > high) high = id;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      rows.push(row);
+    }
+
+    // The cursor MUST move. A server that ignores `.gt` and re-answers the same
+    // page would otherwise be walked for ever, and stopping quietly here would
+    // hand back a prefix.
+    if (high === null || (cursor !== null && high <= cursor)) {
+      return {
+        data: null,
+        error: { message: 'readAll: the page cursor did not advance; the read cannot be completed' },
+        status: res.status,
+      };
+    }
+    cursor = high;
+  }
+
+  if (last === null) return { data: null, error: { message: 'readAll: no request was made' } };
+  if (!complete) {
+    return {
+      data: null,
+      error: { message: `readAll: incomplete read - gave up after ${MAX_PAGES} pages` },
+      status: last.status,
+    };
+  }
+  return { data: rows, error: null, status: last.status };
+}
+
+/* ---------- Render order, imposed here rather than taken from the server ---- */
+//
+// Paging walks `id`, so the server no longer hands rows back in display order.
+// These restore exactly the order the five queries used to ask it for. Postgres
+// sorts NULLs LAST ascending and FIRST descending, and these match that; each
+// breaks ties on `id` so the order is TOTAL, where the server left ties
+// arbitrary - which is what used to make lists shuffle between pulls.
+const cmpAsc = (a: string | number | null, b: string | number | null): number => {
+  if (a === b) return 0;
+  if (a === null) return 1;   // NULLS LAST ascending
+  if (b === null) return -1;
+  return a < b ? -1 : 1;
+};
+const byAsc = (col: string) => (x: any, y: any): number =>
+  cmpAsc(x[col] ?? null, y[col] ?? null) || cmpAsc(x.id, y.id);
+const byDesc = (col: string) => (x: any, y: any): number => {
+  const a = x[col] ?? null, b = y[col] ?? null;
+  if (a === b) return cmpAsc(x.id, y.id);
+  if (a === null) return -1;  // NULLS FIRST descending
+  if (b === null) return 1;
+  return a < b ? 1 : -1;
+};
+// Events keep the (ts, id) key the client sorts by - see compareEvents. Undo
+// means "the last event of this game", so both sides must name the same row.
+const byTsThenId = (x: any, y: any): number => cmpAsc(x.ts, y.ts) || cmpAsc(x.id, y.id);
+
 export async function fetchAllState(sb: SupabaseClient): Promise<Partial<AppState> | null> {
-  // Every query is explicitly ordered. Without .order(), PostgREST returns
-  // rows in arbitrary order (often whichever row was updated last moves) —
-  // which made lists visibly shuffle after each realtime re-pull, and could
-  // even change which event "Undo" considered the latest.
+  // Every read WALKS THE WHOLE TABLE by `id`, a page at a time - see readAll.
+  // The cursor IS the ordering: `.order('id')` is what makes "everything after
+  // this id" well defined, and it is deliberately NOT the display order, which
+  // OFFSET paging depended on and which any concurrent write could shift under
+  // it. Display order is imposed below, on the rows already in hand.
+  const byKeyset = (table: 'leagues' | 'teams' | 'players' | 'games' | 'events') =>
+    readAll((after, limit) => {
+      const q = sb.from(table).select('*').order('id').limit(limit);
+      return after === null ? q : q.gt('id', after);
+    });
   const [lr, tr, pr, gr, er] = await Promise.all([
-    sb.from('leagues').select('*').order('created_at', { ascending: false }), // newest first, matches local prepend
-    sb.from('teams').select('*').order('name'),                               // alphabetical, matches render order
-    sb.from('players').select('*').order('name'),
-    sb.from('games').select('*').order('scheduled_at', { ascending: false }),
-    // Chronological, with `id` breaking ties. `ts` alone is not a total order
-    // — two taps in the same millisecond leave PostgREST free to return them
-    // either way round, and "the last event of this game" IS the definition of
-    // Undo. The client sorts by the same (ts, id) key (see compareEvents), so
-    // both sides always name the same row.
-    sb.from('events').select('*').order('ts').order('id'),
+    byKeyset('leagues'), byKeyset('teams'), byKeyset('players'),
+    byKeyset('games'), byKeyset('events'),
   ]);
 
   // TRANSPORT FIRST, and it REJECTS rather than returning null.
@@ -115,13 +261,20 @@ export async function fetchAllState(sb: SupabaseClient): Promise<Partial<AppStat
     return null;
   }
 
-  const leagueRows = lr.data as LeagueRow[];
+  // The order the five queries used to ask the server for, applied to the rows
+  // the keyset walk returned. Sorting once here costs one pass per table and
+  // keeps every consumer's assumptions about render order intact.
+  const leagueRows = (lr.data as LeagueRow[]).slice().sort(byDesc('created_at'));  // newest first, matches local prepend
+  const teamRows   = (tr.data as TeamRow[]).slice().sort(byAsc('name'));           // alphabetical, matches render order
+  const playerRows = (pr.data as PlayerRow[]).slice().sort(byAsc('name'));
+  const gameRows   = (gr.data as GameRow[]).slice().sort(byDesc('scheduled_at'));
+  const eventRows  = (er.data as EventRow[]).slice().sort(byTsThenId);
 
   const leagues = leagueRows.map(lRow => {
-    const teams   = (tr.data as TeamRow[]).filter(x => x.league_id === lRow.id).map(teamFromRow);
-    const players = (pr.data as PlayerRow[]).filter(x => x.league_id === lRow.id).map(playerFromRow);
-    const games   = (gr.data as GameRow[]).filter(x => x.league_id === lRow.id).map(gameFromRow);
-    const events  = (er.data as EventRow[]).filter(x => x.league_id === lRow.id).map(eventFromRow);
+    const teams   = teamRows.filter(x => x.league_id === lRow.id).map(teamFromRow);
+    const players = playerRows.filter(x => x.league_id === lRow.id).map(playerFromRow);
+    const games   = gameRows.filter(x => x.league_id === lRow.id).map(gameFromRow);
+    const events  = eventRows.filter(x => x.league_id === lRow.id).map(eventFromRow);
     return leagueFromRow(lRow, teams, players, games, events);
   });
 

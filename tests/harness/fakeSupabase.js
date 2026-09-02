@@ -51,6 +51,27 @@ class FakeServer {
     // An object comes back as an ordinary PostgREST row-level error, with no
     // status, so nothing classifies it as a transport failure.
     this.failures = {};
+    // POSTGREST'S SILENT ROW CAP.
+    //
+    // PostgREST refuses to return more rows than `db-max-rows`, and Supabase
+    // sets that to 1000 by default. It does NOT report the truncation: the
+    // response is an ordinary success carrying a short array, with no error and
+    // nothing to distinguish it from a table that really does hold that many
+    // rows. A client with no pagination therefore reads a snapshot it believes
+    // is complete and is not.
+    //
+    // `null` means unlimited, which is what every existing test wants and what
+    // this harness has always done. A suite that cares asks for the cap.
+    this.maxRows = null;
+    // Called immediately BEFORE a read is served, with the table and how many
+    // reads of that table have already been served. A paged read is several
+    // requests, and this is the only honest place to model the table changing
+    // between two of them - which is what OFFSET paging cannot survive. A test
+    // that tries to do it by wrapping the query builder silently does nothing:
+    // .order() and .limit() return the real closure-bound builder, so any
+    // override spread onto it is dropped on the next chained call.
+    this.beforeRead = null;
+    this.readCounts = {};
     // table -> predicate(row, op). Return false to hide the row from writes,
     // emulating RLS. Hidden rows are silently skipped, never an error.
     this.rls = {};
@@ -111,15 +132,35 @@ const transportResolved = () => ({
 
 // A thenable query builder. Every terminal await goes through `settle`, which
 // applies the operation's latency first so ordering can be manipulated.
-function makeBuilder(server, table, op, payload) {
+function makeBuilder(server, table, op, payload, selectOpts) {
   const filters = [];
   let wantSingle = false;
   let wantReturning = false;
   const orderBy = [];
+  // .range(from, to) is INCLUSIVE at both ends, as PostgREST's Range header is.
+  let limitN = null;
+  let rangeFrom = 0;
+  let rangeTo = null;
+  // .select('*', { count: 'exact' }) asks for the TOTAL number of matching rows
+  // regardless of the window - PostgREST reports it in the Content-Range header
+  // and postgrest-js surfaces it as `count`. It is deliberately NOT capped by
+  // maxRows: the cap limits the reply, not the count, which is the whole reason
+  // a client can use it to tell a truncated page from the end of the table.
+  let wantCount = selectOpts ? selectOpts.count === 'exact' : false;
 
   const apply = () => {
     server.log.push({ op, table, payload: clone(payload), filters: clone(filters) });
-    const matches = row => filters.every(f => row[f.col] === f.val);
+    if (op === 'select' && typeof server.beforeRead === 'function') {
+      const n = server.readCounts[table] || 0;
+      server.readCounts[table] = n + 1;
+      server.beforeRead(table, n);
+    }
+    // PostgREST operators, as far as this client uses them. `gt` is what makes
+    // keyset paging expressible: the pull walks `id` with .gt('id', cursor).
+    const matches = row => filters.every(f =>
+      f.op === 'gt' ? row[f.col] > f.val : row[f.col] === f.val);
+    // An `eq` filter carries no `op`, deliberately: assertions elsewhere in the
+    // suite compare the recorded filter log field for field.
 
     if (op === 'select') {
       let data = server.rows[table].filter(matches).map(clone);
@@ -140,8 +181,21 @@ function makeBuilder(server, table, op, payload) {
           return 0;
         });
       }
+      const total = data.length;
+      // The window first, then the cap - the order PostgREST applies them in.
+      // Because the cap lands AFTER the ordering, an ascending order plus a cap
+      // silently drops the NEWEST rows, which is the shape that costs a
+      // scorekeeper the game they have just finished scoring.
+      if (rangeFrom > 0 || rangeTo !== null) {
+        data = data.slice(rangeFrom, rangeTo === null ? undefined : rangeTo + 1);
+      }
+      // .limit() narrows the reply before db-max-rows does, as PostgREST does.
+      if (limitN !== null) data = data.slice(0, limitN);
+      if (server.maxRows !== null && server.maxRows !== undefined) {
+        data = data.slice(0, server.maxRows);
+      }
       if (wantSingle) return { data: data[0] ?? null, error: null };
-      return { data, error: null };
+      return wantCount ? { data, error: null, count: total } : { data, error: null };
     }
 
     if (op === 'insert' || op === 'upsert') {
@@ -188,12 +242,21 @@ function makeBuilder(server, table, op, payload) {
 
   const builder = {
     eq(col, val) { filters.push({ col, val }); return builder; },
+    // Strictly greater than: the keyset cursor's operator.
+    gt(col, val) { filters.push({ col, val, op: 'gt' }); return builder; },
     order(col, opts) { orderBy.push({ col, ascending: opts?.ascending !== false }); return builder; },
     select() { wantReturning = true; return builder; },
     // PostgREST's row cap. pingServer uses it for the cheapest possible read;
     // the emulator only has to accept it, because no assertion here depends on
     // the row count coming back.
-    limit() { return builder; },
+    // Applied for real now. The keyset pull asks for a page of PAGE_SIZE and
+    // relies on an EMPTY reply to know it has finished, so a limit the emulator
+    // ignored would make every page the whole table and hide the paging.
+    limit(n) { limitN = n; return builder; },
+    // A window, inclusive of both ends, as PostgREST's Range header is.
+    // `db-max-rows` still applies INSIDE the window, which is exactly what lets
+    // a client page by its own page size and stop on a short page.
+    range(from, to) { rangeFrom = from; rangeTo = to; return builder; },
     maybeSingle() { wantSingle = true; return builder; },
     single() { wantSingle = true; return builder; },
     then(res, rej) { return settle().then(res, rej); },
@@ -207,7 +270,7 @@ function makeClient(server) {
     from(table) {
       if (!TABLES.includes(table)) throw new Error(`fakeSupabase: unknown table ${table}`);
       return {
-        select(_cols) { return makeBuilder(server, table, 'select'); },
+        select(_cols, opts) { return makeBuilder(server, table, 'select', undefined, opts); },
         insert(payload) { return makeBuilder(server, table, 'insert', payload); },
         upsert(payload) { return makeBuilder(server, table, 'upsert', payload); },
         update(payload) { return makeBuilder(server, table, 'upsert', payload); },

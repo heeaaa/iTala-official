@@ -32,6 +32,13 @@ module.exports = [
       // Static marketing/policy pages. Plain hand-written HTML and CSS with no
       // JS to lint; the privacy policy's content is guarded by CHECK 15 instead.
       'site/**',
+      // Generated test bundles. `tests/run.js` builds these with esbuild and
+      // deletes them again, so they are usually absent - but a run that fails
+      // part way leaves one behind, and linting a bundle reports dozens of
+      // errors about code nobody wrote and nobody ships. Build output is not
+      // source; the inputs are linted where they live.
+      'tests/.test-bundle.js',
+      'tests/.provider-bundle.js',
     ],
   },
 
@@ -87,5 +94,44 @@ module.exports = [
       // hidden the real F-14 violation sitting next to it.
       'react-hooks/exhaustive-deps': 'error',
     },
+  },
+  // ---------------------------------------------------------------------------
+  // The provider suite's hook RUNTIME, and the suite that drives it.
+  //
+  // tests/harness/pkg/react-live is a ~200-line implementation OF hooks - the
+  // thing the React rules are written to check the callers of. Applying them
+  // here is a category error, not a finding, and the two ways of "fixing" it
+  // without scoping are both worse: turning a rule off globally would remove
+  // the gate from src/**, and a file-level eslint-disable would also mask any
+  // real problem that lands in the same file later.
+  //
+  // Both blocks are scoped to specific harness paths and both re-register the
+  // Expo config's plugins, because flat config only resolves a plugin-prefixed
+  // rule inside a config object that registers that plugin. Everything under
+  // src/** keeps every rule it has today; tests/static.test.js CHECK 16 asserts
+  // that these exemptions cannot be widened past tests/.
+  // ---------------------------------------------------------------------------
+  {
+    // `useCallback` in the runtime is `useMemo(() => fn, deps)`. That is the
+    // only way to implement it, and it trips exhaustive-deps twice: the
+    // dependency array is a forwarded parameter rather than an array literal,
+    // so the rule cannot statically verify it, and the "missing dependency" it
+    // reports is `fn` - the function being memoised, which must NOT be in the
+    // array or the memo would recompute on every render. There is nothing to
+    // fix in the code.
+    files: ['tests/harness/pkg/react-live/**'],
+    plugins: expoPlugins,
+    rules: { 'react-hooks/exhaustive-deps': 'off' },
+  },
+  {
+    // `React` in the provider suite is that runtime, published on globalThis by
+    // the bundle - not the react package. `React.render(StoreProvider, props)`
+    // is the runtime's own single-component mount, so the rule is matching a
+    // name rather than an API: react-dom's removed `React.render` is not what
+    // is being called, and its suggested `ReactDOM.render` replacement does not
+    // exist here (there is no DOM, and no react-dom in the project at all).
+    files: ['tests/provider.test.js', 'tests/harness/pkg/react-live/**'],
+    plugins: expoPlugins,
+    rules: { 'react/no-deprecated': 'off' },
   },
 ];

@@ -413,11 +413,37 @@ ok('docs/DEPLOYMENT.md keeps the zip-apply commands', read('docs/DEPLOYMENT.md')
      /confirmedAt !== null && e\.confirmedAt < snapshotStarted/.test(pend) &&
      !/GUARD_MS|Date\.now\(\) \+/.test(pend),
      'a time window is both too short for a slow push and too long for a failed one');
-  ok('events are ordered by (ts, id) on the wire',
-     /\.order\('ts'\)\.order\('id'\)/.test(sync),
+  // The (ts, id) order used to be asked of the server. It is now imposed on the
+  // rows in hand, because the read pages by `id` - a cursor the server's display
+  // order cannot be shifted under (see readAll). The INVARIANT is unchanged and
+  // still asserted: both sides must name the same row as "the last event of this
+  // game", or Undo removes a different one from the two.
+  ok('the pull walks a stable key rather than an OFFSET window',
+     /\.order\('id'\)\.limit\(limit\)/.test(sync) && /\.gt\('id', after\)/.test(sync),
+     'OFFSET is defined against a result set other devices are changing; a delete '
+     + 'behind the cursor makes the next window step over a surviving row');
+  // Comments stripped: readAll's own documentation names `.range(from, to)` when
+  // explaining what it replaced, and an assertion that cannot tell prose from
+  // code would be satisfied by a file that talks about the rule while breaking
+  // it. Crude but sufficient for these files - no regex literal here contains a
+  // comment opener.
+  const codeOf = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  ok('and never asks for a row window',
+     !/\.range\(/.test(codeOf(sync)),
+     'a .range() read reintroduces the offset skip this replaced');
+  ok('events are put in (ts, id) order before they are handed over',
+     /const byTsThenId =/.test(sync) && /\.sort\(byTsThenId\)/.test(sync),
      'ts alone ties, and Undo means "the last event" - the two sides must agree');
   ok('the client sorts by the same key',
      /a\.ts !== b\.ts/.test(pend) && /a\.id < b\.id/.test(pend));
+  ok('a completed page walk is proved by an empty reply, not a short one',
+     /batch\.length === 0/.test(sync) && /complete = true/.test(sync) && /if \(!complete\)/.test(sync),
+     'a project whose db-max-rows is below PAGE_SIZE answers every page short; '
+     + 'reading that as the end is the original truncation');
+  ok('a page cursor that does not advance is an error, not a short snapshot',
+     /did not advance/.test(sync),
+     'a server that ignores .gt would otherwise be walked for ever, or quietly '
+     + 'yield a prefix');
   ok('the undo delete asks for the deleted rows back',
      /delete\(\)\.eq\('id', action\.eventId\)\.select\(/.test(sync),
      'PostgREST reports success for a delete that RLS filtered to nothing');
@@ -773,6 +799,53 @@ for (const f of srcFiles) {
     ok('react hook dependencies are an error, not a warning',
        /'react-hooks\/exhaustive-deps':\s*'error'/.test(cfg),
        'F-14 is fixed, so this gate should stay closed');
+    // Two React rules are switched OFF for the provider suite's hook runtime,
+    // which IMPLEMENTS hooks rather than calling them. That exemption is only
+    // safe while it stays scoped: widened to '**/*.tsx', or folded into the
+    // block above, it would silently remove the gate from src/** while both
+    // text checks above still passed - the 'error' line would still be sitting
+    // there, overridden by a later entry. Flat config is last-wins, so the text
+    // of one entry proves nothing on its own.
+    //
+    // So load the config and inspect the SCOPE of every exemption. A load
+    // failure is reported as a failure rather than skipped: a check that
+    // silently stops running is the shape of problem this file exists to catch.
+    let entries;
+    try { entries = require(path.join(ROOT, 'eslint.config.js')); }
+    catch (e) { entries = e; }
+    ok('the ESLint config can be loaded, so its rule scoping can be checked',
+       Array.isArray(entries),
+       `require('eslint.config.js') failed: ${entries && entries.message}`);
+    if (Array.isArray(entries)) {
+      const gated = [
+        'react-hooks/exhaustive-deps',
+        'react-hooks/rules-of-hooks',
+        'react/no-deprecated',
+        '@typescript-eslint/no-unused-vars',
+        'no-unused-vars',
+      ];
+      const isOff = v => v === 'off' || v === 0
+        || (Array.isArray(v) && (v[0] === 'off' || v[0] === 0));
+      const wide = [];
+      for (const entry of entries) {
+        const rules = (entry && entry.rules) || {};
+        for (const name of gated) {
+          if (!isOff(rules[name])) continue;
+          // 'no-unused-vars' is deliberately off everywhere, superseded by the
+          // TypeScript-aware rule of the same name. Only flag it if THAT one is
+          // off in the same entry, which would leave nothing checking at all.
+          if (name === 'no-unused-vars' && !isOff(rules['@typescript-eslint/no-unused-vars'])) continue;
+          const files = [].concat(...[].concat(entry.files || [])).map(String);
+          if (!files.length || !files.every(f => f.startsWith('tests/'))) {
+            wide.push(`${name} is off for ${files.length ? files.join(' + ') : 'EVERY file'}`);
+          }
+        }
+      }
+      ok('every rule exemption is scoped to tests/, never to src/**',
+         wide.length === 0,
+         `${wide.join(' | ')} - src/** must keep the rules it has today; ` +
+         'exempt the harness path, not the rule');
+    }
   }
 
   const pkg = JSON.parse(read('package.json'));

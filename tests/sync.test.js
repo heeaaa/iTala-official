@@ -1912,6 +1912,328 @@ async function o19_both_transports_leave_the_same_ledger() {
   eq('O19.3 the rejecting transport agrees, field for field',
      { ...seen[1], mode: 'resolve' }, seen[0]);
 }
+
+/* ==========================================================================
+   GROUP T - the read that was not the whole table
+   ==========================================================================
+
+   Nothing offline here, nothing refused, nothing racing. Every write in this
+   group is inserted, acknowledged and confirmed. The only thing wrong is that
+   the SERVER will not return the whole table in one reply and does not say so.
+
+   PostgREST caps a response at db-max-rows (1000 on a default Supabase
+   project) and reports an ordinary success carrying a short array. fetchAllState
+   had no pagination, so past that many rows a pull returned a PREFIX - and
+   because the events query is ordered ascending, the rows it dropped were the
+   newest ones. A snapshot is applied wholesale, so the game being scored was
+   deleted locally as though another device had removed it, and the autosave
+   wrote that over the last durable copy of it.
+
+   T1 reproduces the loss end to end. T2 and T3 pin the properties of the fix
+   that a naive version would get wrong: paging has to be cap-agnostic (a
+   project whose cap is BELOW the client's page size must not look like a table
+   that ends early), and a read that cannot be completed has to fail rather than
+   hand back a prefix.
+   ========================================================================== */
+
+// Four baskets in an earlier game and three in tonight's, with explicit ids and
+// timestamps so which rows are "newest" is decided here rather than by the
+// clock. Everything is on the server before the cap is applied.
+async function seedTwoGames(server) {
+  const A = await seed(server);
+  A.dispatch({ t: 'CREATE_GAME', id: 'g0', leagueId: 'lg1', homeTeamId: 'tH', awayTeamId: 'tA' });
+  for (let i = 0; i < 4; i++) {
+    A.dispatch({ ...score('lg1', 'g0', 'tH', 'p1', 'fg2_make', 1), id: 'old' + i, ts: 1000 + i });
+  }
+  for (let i = 0; i < 3; i++) {
+    A.dispatch({ ...score('lg1', 'g1', 'tH', 'p1', 'fg3_make', 1), id: 'new' + i, ts: 5000 + i });
+  }
+  await A.settle();
+  return A;
+}
+
+async function t1_a_capped_reply_is_not_the_whole_table() {
+  const server = new FakeServer();
+  const A = await seedTwoGames(server);
+  eq('T1.1 every basket reached the server', server.count('events'), 7);
+  eq('T1.2 tonight is 9 on the device', A.points('g1'), 9);
+  eq('T1.3 nothing is queued and nothing failed', unsyncedCount(), 0);
+  eq('T1.4 no push reported a failure', A.pushErrors, []);
+
+  // The server will not return more than four event rows per reply. It says
+  // nothing about it: no error, no status, just a short array.
+  server.maxRows = 4;
+
+  const snap = await fetchAllState(A.client);
+  const lg = snap.leagues.find(l => l.id === 'lg1');
+  eq('T1.5 the read still returns every event', lg.events.length, 7);
+  ok('T1.6 including the newest three', ['new0', 'new1', 'new2'].every(id => lg.events.some(e => e.id === id)),
+     lg.events.map(e => e.id).join(','));
+
+  // And the whole point: hydrating that snapshot must not delete tonight.
+  const B = new Device('B', server);
+  B.state = JSON.parse(JSON.stringify(A.state));
+  await B.pull();
+  eq('T1.7 the earlier game survives the pull', B.points('g0'), 8);
+  eq('T1.8 tonight survives the pull', B.points('g1'), 9);
+}
+
+async function t2_paging_does_not_assume_the_servers_cap() {
+  const server = new FakeServer();
+  const A = await seedTwoGames(server);
+
+  // A cap of one row per reply is the adversarial case for any client that
+  // pages by its OWN page size and stops on a short page: every reply is short,
+  // so such a client would read exactly one event and call it the table.
+  server.maxRows = 1;
+  const snap = await fetchAllState(A.client);
+  const lg = snap.leagues.find(l => l.id === 'lg1');
+  eq('T2.1 a one-row cap still yields all seven events', lg.events.length, 7);
+  eq('T2.2 and both teams', lg.teams.length, 2);
+  eq('T2.3 and both games', lg.games.length, 2);
+  eq('T2.4 and both players', lg.players.length, 2);
+
+  // The league read is capped too, so the loop has to page the table it takes
+  // its own iteration order from.
+  const server2 = new FakeServer();
+  const C = await seed(server2);
+  C.dispatch({ t: 'ADD_LEAGUE', id: 'lg2', name: 'Second', season: 'S1' });
+  await C.settle();
+  server2.maxRows = 1;
+  const snap2 = await fetchAllState(C.client);
+  eq('T2.5 both leagues come back under a one-row cap', snap2.leagues.length, 2);
+}
+
+async function t3_an_unfinishable_read_fails_rather_than_truncating() {
+  const server = new FakeServer();
+  const A = await seedTwoGames(server);
+
+  // A server that answers with rows but never advances the cursor: every reply
+  // carries the same first row whatever id it was asked to read past. A client
+  // that trusted the walk to terminate would loop for ever; one that gave up
+  // quietly would hand back a prefix, which is the bug. It has to be an error.
+  const client = makeClient(server);
+  const realFrom = client.from.bind(client);
+  client.from = (table) => {
+    const t = realFrom(table);
+    if (table !== 'events') return t;
+    return {
+      ...t,
+      select: (cols, opts) => {
+        void t.select(cols, opts);
+        const stuck = {
+          order: () => stuck,
+          limit: () => stuck,
+          gt: () => stuck,
+          range: () => stuck,
+          then: (res, rej) => Promise.resolve({
+            data: server.rows.events.slice(0, 1).map(r => ({ ...r })), error: null, status: 200,
+          }).then(res, rej),
+          catch: (rej) => Promise.resolve({ data: [], error: null }).catch(rej),
+        };
+        return stuck;
+      },
+    };
+  };
+
+  let threw = null;
+  let out;
+  try { out = await fetchAllState(client); } catch (e) { threw = e; }
+  ok('T3.1 an unfinishable read does not resolve as a snapshot', out === null || threw !== null,
+     JSON.stringify(out && out.leagues && out.leagues.length));
+  ok('T3.2 and it never returns a prefix of the events',
+     !(out && out.leagues && out.leagues.some(l => l.events.length > 0 && l.events.length < 7)),
+     JSON.stringify(out && out.leagues && out.leagues.map(l => l.events.length)));
+
+  // A device holding the full game is untouched by it.
+  const B = new Device('B', server);
+  B.state = JSON.parse(JSON.stringify(A.state));
+  B.client = client;
+  await B.pull();
+  eq('T3.3 the device keeps tonight', B.points('g1'), 9);
+}
+
+/* THE RACES OFFSET PAGING LOST, AND KEYSET DOES NOT.
+
+   Every case below is a read taken while somebody else writes. They are the
+   reason the pull walks id instead of asking for OFFSET windows: OFFSET is
+   defined against a result set that is moving, so a delete behind the cursor
+   makes the next window step over a surviving row - and the exact count shrinks
+   by the same one, so the completeness check cannot see it. Undo issues a real
+   DELETE, and because the read is global, the undo does not even have to be in
+   your league. All of these were demonstrated against the offset version before
+   it was replaced. */
+
+// A page of two, so paging is genuinely multi-request, with an Undo landing
+// between the first reply and the second. `beforeRead` is used rather than a
+// wrapped builder because a wrapped builder does not survive .order()/.limit().
+async function pagedServerWithDeleteMidRead(deleteId) {
+  const server = new FakeServer();
+  const A = await seedTwoGames(server);
+  server.maxRows = 2;
+  server.readCounts = {};
+  server.beforeRead = (table, n) => {
+    // Somebody, anywhere, taps Undo once we are past the first page of events.
+    if (table === 'events' && n === 1) {
+      server.rows.events = server.rows.events.filter(r => r.id !== deleteId);
+    }
+  };
+  return { server, A, client: A.client };
+}
+
+async function t6_a_delete_mid_read_cannot_skip_a_surviving_row() {
+  // Delete one of the OLD events: a row the first page already returned, which
+  // is what shifts every later row down one offset.
+  const { server, client } = await pagedServerWithDeleteMidRead('old0');
+  const snap = await fetchAllState(client);
+  const surviving = server.rows.events.map(r => r.id).sort();
+
+  ok('T6.1 the read either completes or refuses, never half-completes',
+     snap === null || snap.leagues !== undefined, JSON.stringify(snap));
+  if (snap !== null) {
+    const got = snap.leagues.flatMap(l => l.events.map(e => e.id)).sort();
+    // Whether the deleted row is still in hand depends on when it went, and
+    // either answer is defensible. What must never happen is a row that STILL
+    // EXISTS going missing, or any row arriving twice - one deletes a stat, the
+    // other doubles a score.
+    eq('T6.2 no surviving event is skipped', surviving.filter(id => !got.includes(id)), []);
+    eq('T6.3 and no event is duplicated', got.length, new Set(got).size);
+  }
+}
+
+async function t7_a_delete_mid_read_does_not_cost_the_game_on_relaunch() {
+  // The same race, ending the way the reporter's did: a relaunch with an empty
+  // ledger, where nothing local is pinned and the snapshot is believed in full.
+  // The consequence a running device is spared - it still has the row in the
+  // ledger - is the one a restarted device takes permanently, because the boot
+  // autosave writes whatever the snapshot said over the last durable copy.
+  const { server, A } = await pagedServerWithDeleteMidRead('old0');
+  A.persist();
+  const B = relaunch(A);
+  server.readCounts = {};
+  eq('T7.1 the relaunch starts from disk with every event intact', B.league().events.length, 7);
+  eq('T7.2 and with an empty ledger, as a new process has', pendingCount(), 0);
+
+  await B.pull();
+  const surviving = server.rows.events.map(r => r.id).sort();
+  const onBoard = B.league().events.map(e => e.id);
+  const onDisk = B.disk.state.leagues.find(l => l.id === 'lg1').events.map(e => e.id);
+
+  // Every row the server still holds has to be on the board AND on the disk.
+  // The pre-keyset read stepped over one, and this is where that becomes
+  // permanent: absent from the snapshot, absent from state, absent from disk.
+  eq('T7.3 no surviving event is missing from the board',
+     surviving.filter(id => !onBoard.includes(id)), []);
+  eq('T7.4 and none is missing from the durable copy',
+     surviving.filter(id => !onDisk.includes(id)), []);
+  eq('T7.5 tonight is still nine points', B.points('g1'), 9);
+  eq('T7.6 and the durable copy agrees', diskPoints(B, 'g1'), 9);
+}
+
+async function t8_only_an_empty_page_proves_the_walk_finished() {
+  // The offset version took the count from the NEWEST page and treated an empty
+  // batch as end-of-table unconditionally, so a page answering
+  // { data: [], count: 0 } made it accept 1000 of 2500 rows as the whole table.
+  // This repo documents that exact reply shape at StoreProvider.tsx - an RLS
+  // read taken while the access token is mid-refresh. Keyset keeps no count to
+  // be fooled about; what must never happen is a SHORT page read as the end.
+  const server = new FakeServer();
+  await seedTwoGames(server);
+  server.maxRows = 1; // every page is short; none is empty until the walk ends
+  const snap = await fetchAllState(makeClient(server));
+  ok('T8.1 a short page is not mistaken for the end', snap !== null, 'the snapshot was refused');
+  const lg = snap.leagues.find(l => l.id === 'lg1');
+  eq('T8.2 all seven events came back, one row per reply', lg.events.length, 7);
+  eq('T8.3 and in canonical (ts, id) order', lg.events.map(e => e.id),
+     ['old0', 'old1', 'old2', 'old3', 'new0', 'new1', 'new2']);
+}
+
+/* What the saved AppState on disk says the score is. `points()` reads the
+   RUNNING copy; this reads the only copy that survives a force-quit, and the
+   one the reported bug ends up destroying. */
+function diskPoints(device, gameId, leagueId = 'lg1') {
+  const val = { fg3_make: 3, fg2_make: 2, ft_make: 1 };
+  const lg = device.disk.state.leagues.find(l => l.id === leagueId);
+  return (lg ? lg.events : []).filter(e => e.gameId === gameId).reduce((n, e) => n + (val[e.type] || 0), 0);
+}
+
+/* THE REPORTED BUG, WITH THE PROCESS ACTUALLY RESTARTED.
+
+   T1.7/T1.8 above hydrate the truncated snapshot into a second `Device`, and
+   every Device shares the MODULE-LEVEL pending ledger. Device A's confirmed
+   writes are therefore still in memory, and the ledger's "the server disagrees
+   with a write I know about" guard keeps the events alive - so T1.7/T1.8 pass
+   even with `readAll` reverted. They are kept because they say something true
+   (a live second device is not corrupted either), but they are NOT evidence
+   about the reported bug.
+
+   The report is a force-quit: exit the game, kill the app, reopen it. `relaunch`
+   reproduces that honestly - `resetSyncPrimitives()` drops the ledger, the push
+   chain and the snapshot watermark exactly as ending the process does, and the
+   new device starts from what reached the disk. Confirmed writes are excluded
+   from the persisted outbox, so the ledger comes back EMPTY: there is nothing
+   left to object with, the truncated snapshot is believed in full, HYDRATE
+   removes tonight's events as though another device had deleted them, and the
+   boot autosave writes that over the last durable copy.
+
+   With `src/sync/sync.ts` at HEAD this fails at T4.7 with 0 points, which is
+   the reporter's 0-0 exactly, while T4.8 still passes - the older stats are
+   what the truncated read DID return, which is also what the reporter saw. */
+async function t4_a_truncated_read_survives_a_force_quit() {
+  const server = new FakeServer();
+  const A = await seedTwoGames(server);
+  A.persist();
+
+  eq('T4.1 tonight is 9 before the restart', A.points('g1'), 9);
+  eq('T4.2 and the disk copy holds it', diskPoints(A, 'g1'), 9);
+  eq('T4.3 nothing is queued to replay', unsyncedCount(), 0);
+  eq('T4.4 no push reported a failure', A.pushErrors, []);
+
+  // The cap, and nothing else: no outage, no refused write, no racing pull.
+  server.maxRows = 4;
+
+  const B = relaunch(A);
+  eq('T4.5 the relaunch starts from disk with tonight intact', B.points('g1'), 9);
+  // This is the whole difference from T1: the server confirmed every one of
+  // these writes, so a new process has nothing pinned and believes the snapshot.
+  eq('T4.6 and with an empty ledger, as a new process has', pendingCount(), 0);
+
+  await B.pull();
+  eq('T4.7 tonight is still on the board after the boot pull', B.points('g1'), 9);
+  eq('T4.8 the earlier game is intact too', B.points('g0'), 8);
+  eq('T4.9 and the boot autosave did not overwrite the durable copy', diskPoints(B, 'g1'), 9);
+  eq('T4.10 every event came back', B.league().events.length, 7);
+
+  // Not a lucky refusal. A pull that threw, or one the empty/stale gates
+  // dropped, would leave the local copy standing and pass T4.7 having proved
+  // nothing about the read - which is how the pre-fix suite stayed green.
+  ok('T4.11 the snapshot was actually applied, not skipped', appliedSnapshotAt() > 0,
+     `appliedSnapshotAt=${appliedSnapshotAt()}`);
+  eq('T4.12 and it was not refused', B.refused, null);
+}
+
+/* AN EMPTY PROJECT IS NOT A FAILED READ.
+
+   `readAll` refuses rather than truncating, and the easy way to write that
+   refusal is to treat "fewer rows than I expected" as an error - which turns a
+   first launch, or any account with no leagues yet, into a permanent sync
+   error. It also has to make a request before it can decide anything: skipping
+   the first page for a table believed empty would report success having read
+   nothing.
+
+   nothing. */
+async function t5_an_empty_project_reads_as_empty_not_as_an_error() {
+  const server = new FakeServer();
+  const client = makeClient(server);
+
+  let threw = null, snap;
+  try { snap = await fetchAllState(client); } catch (e) { threw = e; }
+  ok('T5.1 a read of an empty project does not throw', threw === null, threw && threw.message);
+  eq('T5.2 and it is a snapshot of no leagues, not "no snapshot"', snap && snap.leagues, []);
+  ok('T5.3 it did ask all five tables', server.log.filter(x => x.op === 'select').length >= 5,
+     String(server.log.filter(x => x.op === 'select').length));
+}
+
 const TESTS = [
   ['S1 resurrection is real', s1_resurrection_is_real],
   ['S2 undo deletes server-side', s2_head_deletes_the_row],
@@ -1963,6 +2285,14 @@ const TESTS = [
   ['O17 a dead read is not a bad read', o17_a_dead_read_is_not_a_bad_read],
   ['O18 one transport, two spellings', o18_one_transport_two_spellings],
   ['O19 both transports leave the same ledger', o19_both_transports_leave_the_same_ledger],
+  ['T1 a capped reply is not the whole table', t1_a_capped_reply_is_not_the_whole_table],
+  ['T2 paging does not assume the server cap', t2_paging_does_not_assume_the_servers_cap],
+  ['T3 an unfinishable read fails rather than truncating', t3_an_unfinishable_read_fails_rather_than_truncating],
+  ['T4 a truncated read survives a force-quit', t4_a_truncated_read_survives_a_force_quit],
+  ['T5 an empty project reads as empty, not as an error', t5_an_empty_project_reads_as_empty_not_as_an_error],
+  ['T6 a delete mid-read cannot skip a surviving row', t6_a_delete_mid_read_cannot_skip_a_surviving_row],
+  ['T7 a delete mid-read does not cost the game on relaunch', t7_a_delete_mid_read_does_not_cost_the_game_on_relaunch],
+  ['T8 only an empty page proves the walk finished', t8_only_an_empty_page_proves_the_walk_finished],
 ];
 
 (async () => {
