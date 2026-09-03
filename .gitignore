@@ -29,3 +29,9 @@ dist/
 play-service-account.json
 google-services.json
 GoogleService-Info.plist
+
+# Agent skills installed with the skills CLI (npx skills add). Third-party
+# markdown, tracked per-machine rather than shared - unlike .claude/, these are
+# not iTala tooling.
+.agents/
+skills-lock.json
