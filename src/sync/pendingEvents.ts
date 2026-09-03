@@ -358,11 +358,26 @@ export function recordPending(action: EventAction, prev: PostState, next: PostSt
   }
 
   // Whatever else it did, did this action change the game row the push mirrors?
-  if (action.gameId) {
-    const before = leagueOf(prev, leagueId)?.games.find(g => g.id === action.gameId);
-    const after = leagueOf(next, leagueId)?.games.find(g => g.id === action.gameId);
+  //
+  // CREATE_GAME names the row it creates `id`, not `gameId` - there is no game
+  // to refer to until it makes one. Reading `gameId` alone therefore missed the
+  // one write that creates a game, and missing it cost the whole game: a game
+  // created with no connection got no ledger entry and no outbox row, its push
+  // went through the non-critical `check`, and so nothing anywhere held it open.
+  // The next pull hydrated a server snapshot that had never heard of it, HYDRATE
+  // deleted it, and the autosave wrote that over the durable copy - while the
+  // badge said "Everything logged so far is already saved on it".
+  //
+  // Nothing downstream needed changing: `pushPendingEntry` replays a game entry
+  // by upserting the whole row, and `reconcileLeagueGames` already re-adds a
+  // game a snapshot does not have yet rather than dropping it.
+  const gameId = action.t === 'CREATE_GAME' ? action.id : action.gameId;
+  if (gameId) {
+    const before = leagueOf(prev, leagueId)?.games.find(g => g.id === gameId);
+    const after = leagueOf(next, leagueId)?.games.find(g => g.id === gameId);
     // Reference inequality: the reducer copies a game row it changes and leaves
-    // every other row identical, so this is exact and costs nothing.
+    // every other row identical, so this is exact and costs nothing. A creation
+    // has no `before` at all, which is the same test and the same answer.
     if (after && after !== before) tokens.push(pendingGameWrite(leagueId, after));
   }
 

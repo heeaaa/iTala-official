@@ -47,7 +47,7 @@ export default function ManageRosterScreen({ route, navigation }: ScreenProps<'M
         {scorer && (<>
         {owner && league.kind !== 'recreational' && league.teams.length === 0 && (
           <Button
-            title="📋 Bulk import roster (paste teams & players)"
+            title="Bulk import roster (paste teams & players)"
             kind="ghost"
             style={{ marginBottom: space(4) }}
             onPress={() => navigation.navigate('BulkImport', { leagueId })}

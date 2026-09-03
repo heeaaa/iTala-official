@@ -1281,6 +1281,80 @@ ok('P13 uid() emits no comma, which is what makes P12 unreachable',
 }
 
 // ===========================================================================
+// GROUP S — device class: phone vs tablet (src/lib/deviceClass.ts)
+//
+// This one function decides whether a device may rotate. Getting it wrong in
+// either direction is a real bug: a tablet locked portrait loses the feature,
+// and a PHONE that reflows the stat pad under a scorekeeper's thumb mid-game
+// is worse than never shipping landscape at all.
+//
+// Ids are DC-prefixed rather than S-prefixed so a failure report cannot be
+// confused with sync.test.js's S ids.
+//
+// Only isTabletSync is covered. useIsTablet needs a hook runtime: the react
+// stub in this bundle returns the initialiser itself from useState and never
+// runs effects, so a "test" of it would assert the stub, not the app. Its
+// subscribe/unsubscribe behaviour is a device case (see O-section of
+// tests/MANUAL-REGRESSION.md, foldables).
+// ===========================================================================
+{
+  const { isTabletSync, __setDeviceEnv, __resetDeviceEnv } = M;
+
+  ok('DC0 device-class helper is exported to the harness',
+     typeof isTabletSync === 'function' && typeof __setDeviceEnv === 'function');
+
+  if (typeof isTabletSync === 'function') {
+    // iOS asks the platform, and must not fall back to measuring. Split View
+    // and Stage Manager can make an iPad window phone-sized; the device class
+    // must not change with it, or the tracker would lock portrait halfway
+    // through a game because someone dragged in Messages.
+    __resetDeviceEnv();
+    __setDeviceEnv({ os: 'ios', isPad: true, screen: { width: 320, height: 480 }, window: { width: 320, height: 480 } });
+    ok('DC1 iOS trusts Platform.isPad even in a phone-sized window', isTabletSync() === true);
+
+    __setDeviceEnv({ os: 'ios', isPad: false, screen: { width: 1024, height: 1366 }, window: { width: 1024, height: 1366 } });
+    ok('DC2 iOS trusts Platform.isPad even on a large screen', isTabletSync() === false);
+
+    __setDeviceEnv({ os: 'ios', isPad: undefined, screen: { width: 1024, height: 1366 } });
+    ok('DC3 iOS with no isPad flag is a phone, not a tablet', isTabletSync() === false,
+       'undefined must not be read as "probably a tablet" - phones stay locked');
+
+    // Android: the conventional smallest-width >= 600dp test, at the boundary.
+    __setDeviceEnv({ os: 'android', isPad: undefined, screen: { width: 599, height: 1200 } });
+    ok('DC4 Android 599dp shortest side is a phone', isTabletSync() === false);
+
+    __setDeviceEnv({ os: 'android', screen: { width: 600, height: 1200 } });
+    ok('DC5 Android 600dp shortest side is a tablet (boundary is inclusive)',
+       isTabletSync() === true);
+
+    __setDeviceEnv({ os: 'android', screen: { width: 601, height: 1200 } });
+    ok('DC6 Android 601dp shortest side is a tablet', isTabletSync() === true);
+
+    // Shortest side, not width: otherwise a tablet turned on its side would
+    // stop being a tablet and re-lock itself to portrait mid-rotation.
+    __setDeviceEnv({ os: 'android', screen: { width: 1200, height: 599 } });
+    ok('DC7 a landscape phone is still a phone', isTabletSync() === false);
+
+    __setDeviceEnv({ os: 'android', screen: { width: 1280, height: 800 } });
+    ok('DC8 a landscape tablet is still a tablet', isTabletSync() === true);
+    __setDeviceEnv({ os: 'android', screen: { width: 800, height: 1280 } });
+    ok('DC9 the same tablet in portrait answers the same', isTabletSync() === true);
+
+    // 'screen', not 'window'. An Android tablet in split-screen has a narrow
+    // window and a wide display; measuring the window would decide it is a
+    // phone and lock it portrait while the user is holding a tablet.
+    __setDeviceEnv({ os: 'android', screen: { width: 800, height: 1280 }, window: { width: 400, height: 1280 } });
+    ok('DC10 Android measures the display, not the multitasking window',
+       isTabletSync() === true);
+    __setDeviceEnv({ os: 'android', screen: { width: 400, height: 800 }, window: { width: 1200, height: 800 } });
+    ok('DC11 a wide window on a small display is still a phone',
+       isTabletSync() === false, 'the inverse of DC10: window must not win');
+
+    __resetDeviceEnv();
+  }
+}
+
+// ===========================================================================
 console.log('='.repeat(64));
 console.log(`REGRESSION SUITE:  ${pass} passed,  ${fail} failed`);
 if (failures.length) {

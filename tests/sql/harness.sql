@@ -34,6 +34,13 @@ create table games (id text primary key, league_id text not null references leag
   scheduled_at bigint, location text, finished_at bigint, home_on_court text[] not null default '{}',
   away_on_court text[] not null default '{}', period int default 1, attendance text[],
   track_misses boolean, track_turnovers boolean, updated_at timestamptz not null default now());
+-- events exists here only so the shipped RLS block (which creates read_all_events
+-- and events_write_scorer) can be loaded whole. A suite that never @requires the
+-- policies simply leaves it empty.
+create table events (id text primary key, league_id text not null references leagues(id) on delete cascade,
+  game_id text not null references games(id) on delete cascade, team_id text not null, player_id text,
+  type text not null, period int not null, ts bigint not null, note text,
+  created_at timestamptz not null default now());
 create table profiles (id uuid primary key, is_admin boolean default false);
 
 create or replace function public.is_authed_user() returns boolean language sql stable as $$

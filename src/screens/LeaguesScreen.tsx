@@ -123,11 +123,28 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
   // and a fan browsing for something to watch is the whole point of it. Comes
   // from one narrow live-games-only read (see fetchLiveGames).
   const visibleIds = new Set(visibleLeagues.map(l => l.id));
-  const liveGameIds = new Set(loadedRefs.map(r => r.gameId));
+  // What THIS device knows about each game it holds. The server read is a
+  // snapshot of `status = 'live'` rows and can be behind us: finish a game while
+  // offline, or have the finish refused, and the server still says live. Keyed
+  // off `liveGameIds` (live rows only) that stale row fell straight through into
+  // the banner, so a game the device considered FINAL came back as a tappable
+  // Live card. Local status wins for any game we actually hold; a game we have
+  // never loaded is still unknown here and rightly comes from the server.
+  //
+  // 'scheduled' is deliberately NOT excluded: someone else starting a game we
+  // hold as scheduled is exactly the case this server read exists to catch.
+  const localStatus = new Map<string, string>();
+  for (const l of visibleLeagues) for (const g of l.games) localStatus.set(g.id, g.status);
   const elsewhereRefs = liveElsewhere
     // Same visibility rules as everything else on this screen: archived
     // leagues and other people's private drop-in spaces stay out of sight.
-    .filter(x => visibleIds.has(x.leagueId) && !liveGameIds.has(x.gameId))
+    .filter(x => {
+      if (!visibleIds.has(x.leagueId)) return false;
+      const known = localStatus.get(x.gameId);
+      // 'live' is already in loadedRefs (this would duplicate the card);
+      // 'final' is the stale-server case above.
+      return known !== 'live' && known !== 'final';
+    })
     .map(x => ({
       leagueId: x.leagueId,
       gameId: x.gameId,
@@ -344,7 +361,17 @@ Share this with the organizer. It can create exactly one league, then expires.`)
               key={ref.gameId}
               onPress={() => navigation.navigate('LiveGame', { leagueId: ref.leagueId, gameId: ref.gameId, spectator: ref.spectator })}
               style={{
-                width: liveRefs.length === 1 ? windowW - space(4) * 2 : windowW * 0.78,
+                // Capped, because these are proportions of the window and a
+                // tablet in landscape is 1366pt wide: a single card would be
+                // 1334pt, wider than most laptop screens, and the carousel
+                // would show about one card per swipe on a display that could
+                // hold three. The cap only ever engages on a tablet - every
+                // phone width stays well under it, so the phone layout is
+                // untouched.
+                width: Math.min(
+                  liveRefs.length === 1 ? windowW - space(4) * 2 : windowW * 0.78,
+                  520,
+                ),
                 backgroundColor: colors.surface, borderRadius: 14, padding: 14,
                 borderWidth: 1, borderColor: colors.brandTeal,
                 flexDirection: 'row', alignItems: 'center', gap: 12,
@@ -518,8 +545,13 @@ Share this with the organizer. It can create exactly one league, then expires.`)
             flexDirection: 'row', gap: 10,
             backgroundColor: colors.bg, borderTopWidth: 1, borderTopColor: colors.line,
           }}>
-          <Button title="🏀  Drop-In" kind="ghost" style={{ flex: 1 }} onPress={() => navigation.navigate('RecGame')} />
-          <Button title="+  New League" style={{ flex: 1 }} onPress={onNewLeague} />
+          {/* No decorative glyphs: the basketball emoji rendered from a
+              different font with a taller line box, which made the ghost button
+              taller than its neighbour on top of the box-model difference the
+              Button primitive now handles. Plain labels also read better to a
+              screen reader. */}
+          <Button title="Drop-In" kind="ghost" style={{ flex: 1 }} onPress={() => navigation.navigate('RecGame')} />
+          <Button title="New League" style={{ flex: 1 }} onPress={onNewLeague} />
         </View>
       )}
 

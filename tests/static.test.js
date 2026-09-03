@@ -775,6 +775,113 @@ for (const f of srcFiles) {
      'delete was reachable only by a left-swipe, which screen readers intercept');
 }
 
+// ---------------------------------------------------------------------------
+// CHECK 15 - the two Button kinds must stay the same size. They sit side by
+// side in a row in five places (Home's Drop-In / New League bar and the
+// Cancel / confirm pairs in the attendance, duplicate-league and timeout
+// sheets), and they drifted apart twice over: ghost paints a 1px border on the
+// Pressable while primary's padding lives on the inner gradient, and the
+// gradient sized itself to that padding instead of filling the height a row
+// stretch had already given the Pressable - so the primary button was visibly
+// shorter with bare background under it.
+//
+// Structural only. It cannot measure a rendered height; it guards the three
+// declarations that make the two box models identical, and on-device
+// confirmation is still required.
+// ---------------------------------------------------------------------------
+{
+  const ui = read('src/components/ui.tsx');
+  const primary = ui.slice(ui.indexOf("if (kind === 'primary')"), ui.indexOf('const fg = kind ==='));
+  ok('ui.tsx primary Button reserves the same 1px border box as ghost',
+     /borderWidth: 1, borderColor: 'transparent'/.test(primary),
+     'without it primary is 2px shorter than the ghost beside it');
+  ok('ui.tsx primary Button gradient fills the height it is given',
+     /flexGrow: 1/.test(primary),
+     'a row stretch grows the Pressable; the gradient must grow with it');
+  ok('ui.tsx both Button kinds use the same vertical padding',
+     (ui.match(/paddingVertical: 14, paddingHorizontal: 18/g) || []).length >= 2,
+     'equal borders do not help if the padding differs');
+
+  // Home's action bar: plain text labels. The basketball emoji came from a
+  // different font with a taller line box, which grew the ghost button beyond
+  // its neighbour and read as "basketball Drop-In" to a screen reader.
+  const leagues = read('src/screens/LeaguesScreen.tsx');
+  const barButtons = [...leagues.matchAll(
+    /<Button title="([^"]*)"[^>]*onPress=\{(?:\(\) => )?(?:navigation\.navigate\('RecGame'\)|onNewLeague)\}/g)];
+  ok('LeaguesScreen action bar still has its two buttons', barButtons.length === 2,
+     `matched ${barButtons.length} - the check below proves nothing otherwise`);
+  for (const m of barButtons) {
+    ok(`LeaguesScreen action-bar button "${m[1]}" has a plain-text label`,
+       !/[^\x20-\x7E]/.test(m[1]),
+       'decorative glyphs change the line height and are spoken aloud');
+  }
+
+  // No EMOJI in any tappable label, app-wide. Two distinct costs, both real:
+  // an emoji renders from a fallback font with a taller line box, so a row
+  // holding one is taller than a row that does not (the Home bar defect above);
+  // and `Button` passes `title` straight to `accessibilityLabel`, so a screen
+  // reader announced "basketball Drop-In" and "memo Log".
+  //
+  // Non-emoji glyphs are deliberately still allowed - ▶ ✎ ✓ ✕ ★ ▾ ⇩ ⇄ ↺ ↻ stand
+  // in for an icon set the app does not have, and stripping them would leave
+  // unlabelled controls. The line is drawn at pictographs: anything in the
+  // emoji planes, the two that live outside them (✨ ⏱), and anything wearing a
+  // U+FE0F emoji-presentation selector.
+  const EMOJI = /[\u{1F000}-\u{1FAFF}\u{2728}\u{23F1}]|️/u;
+
+  // Read one JSX tag from `<Name` to its closing `>`, skipping over string
+  // literals and nested braces so neither a `>` inside a string nor the `=>` of
+  // an arrow function ends the tag early. A regex cannot do this: `[^>]*?`
+  // stops dead at the first `onPress={() => …}`, which would silently leave
+  // that control unscanned - the guard would still be green and no longer
+  // guarding.
+  function tagAt(src, start) {
+    let i = start, depth = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === '"' || c === "'" || c === '`') {
+        const q = c;
+        i++;
+        while (i < src.length && src[i] !== q) i += src[i] === '\\' ? 2 : 1;
+      } else if (c === '{') depth++;
+      else if (c === '}') depth--;
+      else if (c === '>' && depth === 0) return src.slice(start, i + 1);
+      i++;
+    }
+    return src.slice(start);
+  }
+
+  let tagCount = 0, scanned = 0;
+  for (const f of srcFiles) {
+    const src = read(f);
+    for (const open of [...src.matchAll(/<(?:Button|RowBtn|MiniBtn)\b/g)]) {
+      tagCount++;
+      const tag = tagAt(src, open.index);
+      const attr = /\b(?:title|label)=/.exec(tag);
+      if (!attr) continue;              // e.g. a spread-only tag
+      scanned++;
+      const rest = tag.slice(attr.index + attr[0].length);
+      // EVERY string literal in the attribute, not just the first: a ternary
+      // hides a second label, and `title={x ? 'Plain' : '🏅 Emoji'}` used to
+      // pass on the strength of its first branch alone.
+      const labels = rest.startsWith('"') || rest.startsWith("'")
+        ? [rest.slice(1, rest.indexOf(rest[0], 1))]
+        : [...rest.matchAll(/["'`]([^"'`\n]*)["'`]/g)].map(m => m[1]);
+      for (const label of labels) {
+        if (!label) continue;
+        ok(`${f} button label "${label}" carries no emoji`, !EMOJI.test(label),
+           'emoji inflate the line box and are read aloud by screen readers');
+      }
+    }
+  }
+  // Not a floor: every tag with a literal label must have been READ. A floor
+  // cannot tell 73 from 72, so a control the scanner stopped seeing would go
+  // unnoticed - which is the whole failure this check exists to prevent.
+  ok('every Button/RowBtn/MiniBtn tag was scanned for its label',
+     tagCount > 20 && scanned > 0 && scanned <= tagCount,
+     `${scanned} of ${tagCount} tags yielded a label attribute`);
+}
+
 
 // ---------------------------------------------------------------------------
 // CHECK 16 - lint tooling must exist and CI must run it (F-09). The project had
@@ -1018,6 +1125,240 @@ for (const f of srcFiles) {
     ok(`${name}.md lives in docs/`, exists(`docs/${name}.md`) && !exists(`${name}.md`),
        'the guides moved to docs/; only README.md and CLAUDE.md belong at the root');
   }
+}
+
+// ---------------------------------------------------------------------------
+// CHECK 25 - every schema slice anchor still resolves.
+//
+// tests/sql/run.js loads suites by cutting named regions out of supabase/
+// schema.sql with literal `slice(from, to)` anchors, so that the assertions run
+// against the shipped SQL rather than a copy of it. The failure mode that
+// creates is quiet: rename or delete a chunk of schema.sql and the anchor stops
+// matching, `slice` throws, and the SQL suite that depended on it reports an
+// error - but ONLY on a machine with PostgreSQL. Without a database the whole
+// SQL runner skips, so a broken anchor reaches CI unnoticed and the protection
+// a suite was written to provide is silently gone.
+//
+// This check needs no database. It is also how a deleted safeguard gets caught:
+// the `games_creator` section anchors on the games_own_creator trigger, so
+// removing that trigger from schema.sql fails here rather than only in a
+// database run.
+// ---------------------------------------------------------------------------
+{
+  const runner = read('tests/sql/run.js');
+  const schema = read('supabase/schema.sql').replace(/\r\n/g, '\n');
+  const start = runner.indexOf('const SECTIONS = {');
+  ok('tests/sql/run.js still declares a SECTIONS map', start >= 0,
+     'the anchor check below cannot run without it');
+  if (start >= 0) {
+    const body = runner.slice(start);
+    // Only the string literals that are ARGUMENTS to a slice() call. A plain
+    // regex over the file also swallows psql arguments, log strings and the
+    // runner's own help text, none of which are schema anchors. Anchors contain
+    // parentheses of their own ("...lock_admin() to anon..."), so paren depth
+    // cannot be counted without consuming string literals whole - hence a
+    // scanner rather than a pattern.
+    const anchors = [];
+    for (let i = body.indexOf('slice('); i >= 0; i = body.indexOf('slice(', i + 1)) {
+      let j = i + 'slice('.length;
+      let depth = 1;
+      while (j < body.length && depth > 0) {
+        const c = body[j];
+        if (c === "'") {
+          let s = '';
+          j++;
+          while (j < body.length && body[j] !== "'") {
+            if (body[j] === '\\') { s += body[j] + body[j + 1]; j += 2; }
+            else s += body[j++];
+          }
+          j++;
+          anchors.push(s.replace(/\\n/g, '\n').replace(/\\'/g, "'").replace(/\\\\/g, '\\'));
+          continue;
+        }
+        if (c === '(') depth++;
+        else if (c === ')') depth--;
+        j++;
+      }
+    }
+    ok('schema slice anchors were found to check', anchors.length > 0,
+       'the regex matched nothing - it has drifted from run.js');
+    for (const a of anchors) {
+      const label = a.length > 60 ? a.slice(0, 57).replace(/\n/g, ' ') + '...' : a.replace(/\n/g, ' ');
+      ok(`schema.sql still contains slice anchor "${label}"`, schema.includes(a),
+         'the SQL suite using it would throw, and skip silently with no database');
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CHECK 26 - orientation. Tablets rotate so a scorekeeper can run the live
+// tracker in landscape; phones stay portrait, because a phone that reflows the
+// stat pad under someone's thumb mid-game is worse than no landscape at all.
+//
+// Three things hold that together, and each fails silently:
+//
+//  * `orientation` must be on the navigator's screenOptions, never on an
+//    individual Stack.Screen. react-native-screens resolves an unset screen to
+//    SCREEN_ORIENTATION_UNSPECIFIED on Android, which OVERRIDES the manifest
+//    lock - so setting it per-screen frees rotation on every screen that did
+//    not set it. The app would look correct on iOS and be wrong on Android.
+//  * The iPhone plist array must keep BOTH portrait values. Expo's own plugin
+//    writes Portrait + PortraitUpsideDown for `orientation: "portrait"`, so
+//    dropping UpsideDown here is a silent behaviour change, not a tidy-up.
+//  * An iOS Modal defaults to portrait ONLY. An unlisted modal on a rotated
+//    iPad renders sideways or mis-sized.
+//
+// Structural only: none of this proves a device actually rotates. See the
+// orientation section of tests/MANUAL-REGRESSION.md.
+// ---------------------------------------------------------------------------
+{
+  const appTsx = read('App.tsx');
+  const optsStart = appTsx.indexOf('screenOptions={{');
+  ok('App.tsx declares navigator screenOptions', optsStart >= 0,
+     'the orientation checks below cannot run without it');
+  if (optsStart >= 0) {
+    const optsRaw = appTsx.slice(optsStart, appTsx.indexOf('}}', optsStart));
+    // Comment lines are dropped first. The comment above this option explains
+    // the platform split and quotes `orientation: "portrait"` while doing it,
+    // so a scan of the raw text finds prose before it finds the option and
+    // then reports on the prose - passing, or failing, for the wrong reason.
+    const opts = optsRaw.split(/\r?\n/)
+      .filter(line => { const t = line.trim();
+        return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')); })
+      .join('\n');
+    ok('App.tsx sets orientation in screenOptions', /\borientation:/.test(opts),
+       'without it every screen inherits the manifest/plist default only');
+    // Read the VALUE, not the whole options object: an `isTablet` anywhere
+    // else in screenOptions (a tablet-only header, say) would satisfy a bare
+    // /isTablet/ test while orientation itself stayed a constant. The value
+    // runs from `orientation:` to the next option key, since it is a
+    // multi-line nested ternary.
+    const after = opts.slice(opts.indexOf('orientation:') + 'orientation:'.length);
+    const nextKey = after.search(/\n\s*[A-Za-z_$][\w$]*\s*:/);
+    const orientValue = (nextKey === -1 ? after : after.slice(0, nextKey)).replace(/\s+/g, ' ').trim();
+    ok('App.tsx orientation is device-class dependent', /isTablet/.test(orientValue),
+       'a constant here would rotate phones too, or lock tablets - value: ' + orientValue);
+
+    // Both arms are asserted literally, because on Android every one of these
+    // four words maps to a DIFFERENT ActivityInfo constant and three of the
+    // four plausible simplifications are silent behaviour changes:
+    //
+    //   'portrait'    -> SENSOR_PORTRAIT       (allows upside-down)
+    //   'portrait_up' -> SCREEN_ORIENTATION_PORTRAIT (matches the manifest)
+    //   'all'         -> FULL_SENSOR           (IGNORES the user's rotate lock)
+    //   'default'     -> UNSPECIFIED           (rotates, but honours the lock)
+    //
+    // A tester cannot tell these apart by looking, and the collapsed forms
+    // read like tidy-ups, so they are guarded by name.
+    ok('the phone arm is portrait on iOS and portrait_up on Android',
+       /Platform\.OS === 'ios' \? 'portrait' : 'portrait_up'/.test(orientValue),
+       'collapsing this to a bare \'portrait\' newly lets ANDROID phones flip ' +
+       'upside-down (SENSOR_PORTRAIT), which the manifest lock does not allow - ' +
+       'value: ' + orientValue);
+    ok('the tablet arm is all on iOS and default on Android',
+       /Platform\.OS === 'ios' \? 'all' : 'default'/.test(orientValue),
+       'value: ' + orientValue);
+    ok('the Android tablet arm is never the sensor-driven \'all\'',
+       !/isTablet\s*\?\s*'all'/.test(orientValue) && /'default'/.test(orientValue),
+       'Android \'all\' is FULL_SENSOR, which deliberately ignores the user\'s ' +
+       'auto-rotate lock: a tablet lying flat on a scorer\'s table would reflow ' +
+       'the stat pad mid-game even though its owner locked rotation. ' +
+       '\'default\' still overrides the manifest lock, so the tablet rotates, ' +
+       'but it leaves the final say with the system - value: ' + orientValue);
+  }
+  // The footgun: never per-screen.
+  // The footgun: never per-screen. The real failure mode of a guard like this
+  // is a scan that quietly stops matching, leaving a loop that passes because
+  // it inspected nothing: `[^;]*?` gives up on any screen whose props contain a
+  // semicolon (an inline arrow body with a statement in it), and the pattern
+  // cannot see a non-self-closing <Stack.Screen>...</Stack.Screen> at all. So
+  // the scan asserts its own reach before it asserts anything about content.
+  // Comments are dropped first, for the reason the value check above gives:
+  // App.tsx's own comment explains that orientation must never live on a
+  // Stack.Screen, so a scan of the raw text counts prose as a screen and
+  // reports on documentation instead of code.
+  const appCode = appTsx.split(/\r?\n/)
+    .filter(line => { const t = line.trim();
+      return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')
+        || t.startsWith('{/*')); })
+    .join('\n');
+  const screenTags = (appCode.match(/<Stack\.Screen\b/g) || []).length;
+  const screenMatches = [...appCode.matchAll(/<Stack\.Screen\b[^;]*?\/>/g)];
+  ok('App.tsx registers screens at all', screenTags > 0,
+     'the per-screen orientation guard below is vacuous with no screens to scan');
+  ok('the Stack.Screen scan reaches every registered screen',
+     screenMatches.length === screenTags,
+     'scanned ' + screenMatches.length + ' of ' + screenTags + ' <Stack.Screen> tags - '
+     + 'the unscanned ones could each be setting their own orientation');
+  ok('no Stack.Screen uses the wrapped form the scan cannot read',
+     !/<\/Stack\.Screen>/.test(appCode),
+     'a <Stack.Screen>...</Stack.Screen> body is invisible to the self-closing scan');
+  for (const m of screenMatches) {
+    // \borientation\b rather than /orientation:/ : the shorthand form
+    // options={{ orientation }} carries no colon and would slip through.
+    ok('no Stack.Screen sets its own orientation', !/\borientation\b/.test(m[0]),
+       'on Android an unset screen resolves to UNSPECIFIED and overrides the ' +
+       'manifest lock, so a per-screen value frees rotation everywhere else');
+  }
+
+  const appJson = JSON.parse(read('app.json'));
+  const plist = appJson.expo?.ios?.infoPlist ?? {};
+  const phone = plist.UISupportedInterfaceOrientations;
+  const pad = plist['UISupportedInterfaceOrientations~ipad'];
+  ok('app.json pins iPhone orientations explicitly', Array.isArray(phone),
+     'without this key Expo overwrites iOS orientation from the global key');
+  ok('iPhone keeps BOTH portrait values',
+     Array.isArray(phone) && phone.includes('UIInterfaceOrientationPortrait')
+       && phone.includes('UIInterfaceOrientationPortraitUpsideDown'),
+     'Expo writes both for orientation:portrait; dropping one changes behaviour');
+  ok('iPhone is not allowed to rotate to landscape',
+     Array.isArray(phone) && !phone.some(o => /Landscape/.test(o)),
+     'phones must stay portrait - a mid-game reflow is the thing we are avoiding');
+  ok('iPad is allowed to rotate to landscape',
+     Array.isArray(pad) && pad.some(o => /Landscape/.test(o)),
+     'this key is the whole feature');
+  ok('app.json still drives the Android manifest lock',
+     appJson.expo?.orientation === 'portrait',
+     'the global key no longer affects iOS, but it is what locks Android');
+
+  // Every RN Modal must opt into landscape. Comment lines are skipped: ui.tsx
+  // discusses `<Modal>` in prose while explaining why one component does NOT
+  // use one, and a guard that fails on documentation trains people to ignore it.
+  // Comment lines are dropped first: ui.tsx discusses `<Modal>` in prose while
+  // explaining why one component does NOT use one, and a guard that fails on
+  // documentation trains people to ignore it.
+  //
+  // The scan then runs over the whole (comment-free) file rather than line by
+  // line, because a line-by-line `<Modal ...>` match silently skips any modal
+  // whose props are wrapped across lines - the commonest thing to happen to a
+  // modal that is gaining a prop. The tag count is asserted against the match
+  // count so that a form this pattern cannot read fails loudly instead of
+  // dropping out of coverage.
+  let modalsScanned = 0;
+  for (const f of srcFiles) {
+    const code = read(f).split(/\r?\n/)
+      .filter(line => { const t = line.trim();
+        return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('{/*')); })
+      .join('\n');
+    const tags = (code.match(/<Modal\b/g) || []).length;
+    if (!tags) continue;
+    const matches = [...code.matchAll(/<Modal\b[^>]*>/g)];
+    ok(`${f} Modal scan reaches every <Modal> tag`, matches.length === tags,
+       `scanned ${matches.length} of ${tags} - an unscanned Modal is unguarded`);
+    for (const m of matches) {
+      modalsScanned++;
+      ok(`${f} Modal declares supportedOrientations`,
+         /supportedOrientations=/.test(m[0]),
+         'iOS defaults a Modal to portrait only; it renders wrong on a rotated iPad');
+    }
+  }
+  // LiveGameScreen's four sheets (subs, play-by-play, timeout, exit) are the
+  // ones a scorekeeper meets mid-game on a rotated iPad, so the total is
+  // pinned: a refactor that hides them from this scan must fail here.
+  ok('the Modal scan found every modal in src', modalsScanned >= 5,
+     `found ${modalsScanned}; src had 5 when this guard was written, four of ` +
+     'them in LiveGameScreen - a drop means the scan went blind, not that the ' +
+     'modals went away');
 }
 
 console.log('='.repeat(64));

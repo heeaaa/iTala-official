@@ -549,15 +549,29 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     if (l.kind === 'recreational' && l.isShared) return !!user;     // shared rec: any signed-in user
     return false;
   };
-  // Scoring rights for ONE game. A community drop-in game belongs to whoever
-  // started it; everywhere else the league rules apply. Mirrors can_score_game
-  // in schema.sql — keep the two in step.
+  // Scoring rights for ONE game. The community drop-in space is a single shared
+  // league holding everybody's pickup games, so rights there are per GAME: only
+  // whoever started it, or a Super Admin. Everywhere else — private drop-in
+  // spaces included — the league rules apply, so an owner and the scorekeepers
+  // they invited keep the rights they have always had.
+  //
+  // Mirrors can_score_row in schema.sql; the two MUST agree, because a client
+  // that says yes where the server says no shows a live tracker whose every
+  // write is silently refused. That is exactly the bug this pairing caused.
+  //
+  // `!user` refuses anonymous sessions, and it is NOT the same test as `userId`,
+  // which a guest session also has. The server now stamps created_by from
+  // auth.uid(), so a guest's own uid would otherwise satisfy an ownership check
+  // that is meant to require an account — which is why can_score_row grew an
+  // is_authed_user() term at the same time.
   const canScoreGame = (
     l: { id: string; kind?: string; isShared?: boolean },
     g?: { createdBy?: string },
   ): boolean => {
     if (role === 'admin') return true;
-    if (l.kind === 'recreational' && l.isShared) return !!g?.createdBy && g.createdBy === userId;
+    if (SYNC_ENABLED && l.kind === 'recreational' && l.isShared) {
+      return !!user && !!g?.createdBy && g.createdBy === userId;
+    }
     return canScore(l);
   };
 

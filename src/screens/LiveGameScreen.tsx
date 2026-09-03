@@ -86,6 +86,22 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   // screen's own rules forbid (e.g. someone else's community drop-in game).
   const readOnly = !!spectator || !(league && canScoreGame(league, game));
 
+  // Say WHY, not just that. "Spectator only" left someone who expected to be
+  // scoring with no way to tell whether they were locked out, looking at
+  // somebody else's game, or hitting a bug. The community space has its own
+  // rule — one shared league holding everyone's pickup games, scoreable only by
+  // whoever started each one — and that is worth stating out loud rather than
+  // leaving people to guess.
+  // The trailing hint is not padding: tapping a team to see its on-court five
+  // is the ONLY thing a spectator can do here, and it is invisible - the chips
+  // carry no affordance of their own. The line it replaced said so, and dropping
+  // it while adding the reason would have traded one missing explanation for
+  // another. No eye emoji: same reasoning as the button labels, and a screen
+  // reader reads this string out.
+  const spectatorReason = league?.kind === 'recreational' && league?.isShared
+    ? 'Spectator. Only whoever started this game can score it. Tap a team to see its on-court 5.'
+    : 'Spectator. You cannot score in this league. Tap a team to see its on-court 5.';
+
   const [activeSide, setActiveSide] = useState<'home' | 'away'>('home');
   // `armed` drives rendering; `armedRef` is the authority for whether a tap may
   // log. They are set together through setArmed() below.
@@ -557,19 +573,33 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
 
             Nothing here can reflow: the row already existed, already had this
             height, and the chip is one line inside it. */}
-        {!readOnly && (
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: space(1) }}>
-            <View style={{ flex: 1, marginRight: 8 }}>
-              <SyncChip sync={sync} onPress={() => setSyncDetailOpen(true)} />
-            </View>
-            <Pressable onPress={confirmExit}
-              accessibilityRole="button"
-              accessibilityLabel="Exit game tracker"
-              style={{ flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 6, paddingHorizontal: 14, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.red, backgroundColor: 'rgba(255,90,90,0.12)' }}>
-              <Txt k="body" color={colors.red} style={{ fontSize: 13 }}>✕  Exit</Txt>
-            </Pressable>
+        {/* The row renders for a SPECTATOR too, and it has to. This screen is
+            registered with `headerBackVisible: false` (App.tsx), so when the
+            row was hidden for read-only viewers the only way off the screen was
+            the iOS edge swipe or the Android hardware back — and VoiceOver's
+            escape gesture targets the nav-bar back button that isn't there, so
+            a screen-reader user on iOS was stuck. A spectator gets the leave
+            control in neutral colours (nothing to warn about: `confirmExit`
+            already skips the confirmation when read-only) and no sync chip,
+            which reports on writes they are not making. */}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: space(1) }}>
+          <View style={{ flex: 1, marginRight: 8 }}>
+            {readOnly ? null : <SyncChip sync={sync} onPress={() => setSyncDetailOpen(true)} />}
           </View>
-        )}
+          <Pressable onPress={confirmExit}
+            accessibilityRole="button"
+            accessibilityLabel={readOnly ? 'Leave game' : 'Exit game tracker'}
+            style={{
+              flexDirection: 'row', alignItems: 'center', gap: 5,
+              paddingVertical: 6, paddingHorizontal: 14, borderRadius: radius.pill, borderWidth: 1,
+              borderColor: readOnly ? colors.line : colors.red,
+              backgroundColor: readOnly ? 'transparent' : 'rgba(255,90,90,0.12)',
+            }}>
+            <Txt k="body" color={readOnly ? colors.text : colors.red} style={{ fontSize: 13 }}>
+              {readOnly ? '✕  Leave' : '✕  Exit'}
+            </Txt>
+          </Pressable>
+        </View>
 
         {/* Compact scoreboard */}
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -606,17 +636,17 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
         {/* Controls row */}
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: space(2), gap: 6 }}>
           {!readOnly && <MiniBtn label="⇄ Court" onPress={() => setSwapped(s => !s)} />}
-          <MiniBtn label={readOnly ? "📋 Play-by-play" : "📋 Log"} onPress={() => setLogOpen(true)} />
-          {!readOnly && <MiniBtn label="⏱ Timeout" onPress={() => setTimeoutOpen(true)} />}
+          <MiniBtn label={readOnly ? "Play-by-play" : "Log"} onPress={() => setLogOpen(true)} />
+          {!readOnly && <MiniBtn label="Timeout" onPress={() => setTimeoutOpen(true)} />}
           {!readOnly && <MiniBtn label="↺ Undo" onPress={undo} disabled={!lastEvent} />}
           {!readOnly && <MiniBtn label="↻ Redo" onPress={redo} disabled={!canRedo} />}
-          {!readOnly && !activeTeam.teamOnly && <MiniBtn label="🔁 Subs" onPress={() => setSubOpen(true)} />}
+          {!readOnly && !activeTeam.teamOnly && <MiniBtn label="Subs" onPress={() => setSubOpen(true)} />}
         </View>
 
         {/* Status / confirmation line */}
         <View style={{ marginTop: space(2), borderRadius: radius.md, paddingVertical: 7, paddingHorizontal: 12, backgroundColor: flash ? colors.greenDim : colors.surface, borderWidth: 1, borderColor: armed ? activeTeam.color : flash ? colors.green : colors.line }}>
-          <Txt k="body" color={readOnly ? colors.muted : statusColor} numberOfLines={1}>
-            {readOnly ? '👁  Spectator only. Tap team to view on-court 5.' : statusText}
+          <Txt k="body" color={readOnly ? colors.muted : statusColor} numberOfLines={readOnly ? 2 : 1}>
+            {readOnly ? spectatorReason : statusText}
           </Txt>
         </View>
 
@@ -771,7 +801,11 @@ function SyncDetailModal({ sync, technical, onClose }:
   const color = syncToneColor[sync.tone];
   const waiting = sync.pending > 0;
   return (
-    <Modal transparent animationType="fade" onRequestClose={onClose}>
+    // iOS defaults a Modal to portrait ONLY. On a rotated iPad an unlisted modal
+    // renders sideways or mis-sized, and two of the four here (Subs and
+    // Play-by-play) sit on the scorekeeper's critical path. ui.tsx's sheet
+    // already carries this prop for the same reason.
+    <Modal transparent animationType="fade" onRequestClose={onClose} supportedOrientations={['portrait', 'landscape']}>
       <Pressable onPress={onClose} style={{ flex: 1, backgroundColor: '#000B', alignItems: 'center', justifyContent: 'center', padding: space(6) }}>
         <Pressable onPress={() => {}} style={{ width: '100%', maxWidth: 360, backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, padding: space(5) }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -813,7 +847,7 @@ function TimeoutModal({ teamName, period, onCancel, onSubmit }:
     return s;
   };
   return (
-    <Modal transparent animationType="fade" onRequestClose={onCancel}>
+    <Modal transparent animationType="fade" onRequestClose={onCancel} supportedOrientations={['portrait', 'landscape']}>
       <Pressable onPress={onCancel} style={{ flex: 1, backgroundColor: '#000B', alignItems: 'center', justifyContent: 'center', padding: space(6) }}>
         <Pressable onPress={() => {}} style={{ width: '100%', maxWidth: 360, backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, padding: space(5) }}>
           <Txt k="h2">Timeout — {teamName}</Txt>
@@ -1023,7 +1057,7 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
   };
 
   return (
-    <Modal transparent animationType="slide" onRequestClose={onClose}>
+    <Modal transparent animationType="slide" onRequestClose={onClose} supportedOrientations={['portrait', 'landscape']}>
       <View style={{ flex: 1, backgroundColor: '#000B', justifyContent: 'flex-end' }}>
         <View style={{ backgroundColor: colors.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: space(4), maxHeight: '85%' }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: space(3) }}>
@@ -1035,7 +1069,7 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
           <View style={{ height: space(3) }} />
 
           {mode === 0 ? (
-            <ScrollView style={{ maxHeight: 420 }}>
+            <ScrollView style={{ maxHeight: 420, flexShrink: 1 }}>
               <Txt k="label" style={{ marginBottom: 6 }}>
                 {lineupFull ? '1. Tap who comes OUT' : `On court (${onCourtIds.length}/${LINEUP_SIZE}) — tap to take OUT`}
               </Txt>
@@ -1085,7 +1119,7 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
           ) : (
             <>
               <Txt k="label" style={{ marginBottom: 6 }}>Pick your {target} on court ({selected.filter(id => !fouledOut.has(id)).length}/{target})</Txt>
-              <ScrollView style={{ maxHeight: 380 }}>
+              <ScrollView style={{ maxHeight: 380, flexShrink: 1 }}>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                   {roster.map(p => {
                     const out = fouledOut.has(p.id);
@@ -1141,7 +1175,7 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
 function PlayByPlayModal({ events, nameOf, teamOf, canDelete, onDelete, onClose }:
   { events: { id: string; period: number; type: EventType; playerId: string | null; teamId: string; note?: string }[]; nameOf: (id: string | null) => string; teamOf: (teamId: string) => PlayLogTeam; canDelete: boolean; onDelete: (id: string) => void; onClose: () => void }) {
   return (
-    <Modal transparent animationType="slide" onRequestClose={onClose}>
+    <Modal transparent animationType="slide" onRequestClose={onClose} supportedOrientations={['portrait', 'landscape']}>
       <View style={{ flex: 1, backgroundColor: '#000B', justifyContent: 'flex-end' }}>
         <View style={{ backgroundColor: colors.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: space(4), maxHeight: '80%' }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: space(3) }}>
@@ -1159,7 +1193,7 @@ function PlayByPlayModal({ events, nameOf, teamOf, canDelete, onDelete, onClose 
             <Txt k="body" color={colors.muted}>No events logged yet.</Txt>
           ) : (
             <FlatList
-              style={{ maxHeight: 460 }}
+              style={{ maxHeight: 460, flexShrink: 1 }}
               data={events}
               keyExtractor={e => e.id}
               // The sheet is inside a Modal, so nothing else scrolls behind it.

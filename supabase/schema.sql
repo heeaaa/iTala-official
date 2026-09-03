@@ -372,11 +372,18 @@ $$;
 -- Scoring rights for ONE game. The community drop-in space is a single shared
 -- league holding everyone's games, so rights there are per game: only the
 -- creator (or a Super Admin) may score. Everywhere else the league rules apply.
+--
+-- `is_authed_user()` is not redundant. The shared-space branch never consults
+-- `can_score`, so it is the only thing standing between an ANONYMOUS session and
+-- a game whose created_by happens to equal its uid - and games.created_by is now
+-- stamped from auth.uid() by a trigger, so that is no longer a hypothetical
+-- combination. Guest sessions watch; they never score.
 create or replace function public.can_score_row(p_league_id text, p_created_by uuid)
 returns boolean language sql stable security definer set search_path = public as $$
   select public.is_admin()
       or case when public.is_shared_rec(p_league_id)
-              then p_created_by is not null and p_created_by = auth.uid()
+              then public.is_authed_user()
+                   and p_created_by is not null and p_created_by = auth.uid()
               else public.can_score(p_league_id) end;
 $$;
 
@@ -451,8 +458,28 @@ begin
 end $$;
 
 -- Games: per-row check so a community drop-in game is writable only by whoever
--- created it. created_by is set server-side by rec_setup_game; the client never
--- sends it, so a client write cannot clear it.
+-- created it. created_by is stamped server-side - by rec_setup_game on the
+-- bundle insert, and by the games_own_creator trigger below on every other
+-- write.
+--
+-- Precisely what that guarantees, because the difference matters to anyone
+-- relying on it: an ESTABLISHED creator cannot be REPLACED, in one statement,
+-- by a client sending a different uid. It is not an absolute invariant.
+-- Clearing is permitted, because `on delete set null` on the auth.users foreign
+-- key is an UPDATE and intercepting it would leave rows pointing at deleted
+-- accounts - so anyone who may write the row at all can null the column in one
+-- statement and stamp a new uid in the next.
+--
+-- That two-step is inert everywhere it could matter. In the shared space the
+-- clear is itself refused, because this policy's WITH CHECK re-evaluates
+-- can_score_row(league_id, NULL) on the post-trigger row and an unowned row
+-- there belongs to nobody. Everywhere else can_score_row falls through to
+-- can_score() and never reads the column. What is left is a Super Admin, who
+-- can already write anything, and pre-stamping a normal-league game against a
+-- later is_shared flip, for which no client path exists (pinned as X1 in
+-- tests/sql/league_roles.test.sql). Closing it properly would mean permitting
+-- NULL only when the old uid is gone from auth.users, which costs this trigger
+-- its "reads no table, needs no elevated rights" property.
 drop policy if exists "games_write_scorer" on public.games;
 create policy "games_write_scorer" on public.games for all
   using (public.can_score_row(league_id, created_by))
@@ -463,6 +490,52 @@ drop policy if exists "events_write_scorer" on public.events;
 create policy "events_write_scorer" on public.events for all
   using (public.can_score_game(game_id))
   with check (public.can_score_game(game_id));
+
+-- games.created_by belongs to the SERVER.
+--
+-- This is not tidiness, it is what makes the policy above usable by the person
+-- the policy exists to protect. PostgREST turns `.upsert(row)` into
+-- `insert ... on conflict (id) do update set <the payload columns>`, and
+-- PostgreSQL applies the INSERT policy's WITH CHECK to the row PROPOSED for
+-- insertion - before it discovers that a conflict will send that row down the
+-- UPDATE path instead. `gameToRow` in src/sync/sync.ts omits created_by (by
+-- design: a client must not be able to set it), so the proposed row carries
+-- null, can_score_row sees an unowned row in a shared rec league, and the whole
+-- statement is refused with 42501. The STORED row names the caller as its
+-- creator and the update alone would have been allowed, but that is never
+-- reached. Every lineup, substitution, period, attendance and finish write on a
+-- public drop-in game failed exactly that way: the scorekeeper saw a starting
+-- five that reverted a second later and a game that would not finish, because
+-- the server row still said {} and 'live' and the next snapshot said so too.
+--
+-- Stamping the caller on INSERT makes the proposed row a legitimate row for
+-- that caller, so the statement gets as far as the conflict, where the EXISTING
+-- row's created_by decides - which is the rule this schema always meant to
+-- apply. A stranger is still refused there; their own new game is still theirs.
+--
+-- The UPDATE branch keeps an established creator from being overwritten by a
+-- client that does send the column: a device with stale local state would
+-- otherwise hand the game to whoever wrote last and lock the real creator out
+-- for good. It deliberately lets a NULL through, because `on delete set null`
+-- on the auth.users foreign key is an UPDATE, and intercepting that would leave
+-- the row pointing at an account that no longer exists.
+--
+-- SECURITY INVOKER on purpose: it reads no table, so it needs no extra rights.
+create or replace function public.games_own_creator()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  if tg_op = 'INSERT' then
+    if new.created_by is null then new.created_by := auth.uid(); end if;
+  elsif old.created_by is not null
+        and new.created_by is not null
+        and new.created_by is distinct from old.created_by then
+    new.created_by := old.created_by;
+  end if;
+  return new;
+end $$;
+drop trigger if exists games_own_creator on public.games;
+create trigger games_own_creator before insert or update on public.games
+  for each row execute function public.games_own_creator();
 
 -- ---- RPCs ---------------------------------------------------------------------
 -- Super Admins mint single-use league-creation codes.
@@ -537,7 +610,26 @@ begin
       coalesce(nullif(team->>'color', ''), '#12D7D0'),
       coalesce((select array_agg(p->>'id') from jsonb_array_elements(team->'players') p), '{}')
     )
-    on conflict (id) do update set name = excluded.name, color = excluded.color, player_ids = excluded.player_ids;
+    -- SCOPED to p_league_id, and not merely for tidiness. This function is
+    -- SECURITY DEFINER, so RLS does not run inside it, and it authorises on the
+    -- caller-supplied p_league_id while upserting caller-supplied ROW ids. Every
+    -- signed-in user holds a league they may write - can_score is true for all
+    -- of them on the shared community space - and every id in the database is
+    -- readable through the read_all_* policies. Without this clause any user
+    -- could name a team in somebody else's league and rewrite its name, colour
+    -- and roster; the foreign row keeps its own league_id, so it is a pure
+    -- cross-league write that no policy ever sees.
+    --
+    -- The WHERE makes the conflicting update match zero rows, and the FOUND
+    -- check turns that into a refusal rather than a silent no-op:
+    -- BULK_IMPORT_ROSTER is in MUST_NOT_FAIL_SILENTLY (src/sync/sync.ts), so a
+    -- rejected RPC rolls the local import back and tells the person. A skip
+    -- would leave them holding a roster the server never stored.
+    on conflict (id) do update set name = excluded.name, color = excluded.color, player_ids = excluded.player_ids
+    where public.teams.league_id = p_league_id;
+    if not found then
+      raise exception 'Team id % already exists in another league.', team->>'id';
+    end if;
 
     for ply in select * from jsonb_array_elements(team->'players') loop
       -- players.name is NOT NULL, and a pasted roster can legitimately contain a
@@ -549,7 +641,11 @@ begin
       values (ply->>'id', p_league_id,
               coalesce(nullif(ply->>'name', ''), 'Player'),
               nullif(ply->>'number', ''))
-      on conflict (id) do update set name = excluded.name, number = excluded.number;
+      on conflict (id) do update set name = excluded.name, number = excluded.number
+      where public.players.league_id = p_league_id;
+      if not found then
+        raise exception 'Player id % already exists in another league.', ply->>'id';
+      end if;
     end loop;
   end loop;
 end $$;
@@ -567,6 +663,7 @@ create or replace function public.rec_setup_game(
   p_teams jsonb
 ) returns void language plpgsql security definer set search_path = public as $$
 declare team jsonb; ply jsonb; home_id text; away_id text; i int := 0;
+        existing_league text; existing_creator uuid;
 begin
   -- A Super Admin may start a drop-in game without a provider account.
   --
@@ -604,6 +701,45 @@ begin
 
   if not public.can_score(p_league_id) then raise exception 'Scorekeeper access required.'; end if;
 
+  -- THE GAME ID MUST NOT ALREADY NAME A ROW THIS CALLER MAY NOT WRITE.
+  --
+  -- Game ids are minted on the device by uid() in src/lib/format.ts - a base36
+  -- clock plus a base36 random - so they are guessable enough to be squatted
+  -- ahead of use, and every id already in the database is readable anyway
+  -- through the read_all_games policy.
+  --
+  -- The squat: an attacker inserts a game row under the id the victim is about
+  -- to use. The shared community space accepts a new game from any signed-in
+  -- user (by design - it is shared), and games_own_creator stamps the attacker
+  -- as its creator. The victim's rec_setup_game then took the conflict branch,
+  -- left created_by pointing at the attacker, and RETURNED SUCCESSFULLY - after
+  -- which every write the victim makes to their own game is refused 42501 by
+  -- can_score_row. That is exactly the broken-game symptom this schema just
+  -- finished fixing, handed to an attacker.
+  --
+  -- The cross-league case is the same hole from the other end. This function is
+  -- SECURITY DEFINER, so RLS does not run inside it, and it authorised on the
+  -- caller-supplied p_league_id while upserting a caller-supplied game id, never
+  -- checking the stored row's league. can_score('rec-shared') is true for every
+  -- signed-in user, so everyone held a valid p_league_id and could name any game
+  -- row in the product, moving it into the shared space and rewriting its teams
+  -- and location.
+  --
+  -- Raising, not skipping: REC_SETUP_GAME is in MUST_NOT_FAIL_SILENTLY
+  -- (src/sync/sync.ts), so a rejected RPC rolls the local bundle back and shows
+  -- the person an alert, and they can start the game again under a fresh id. A
+  -- silent skip would hand them a game the server says belongs to somebody else,
+  -- with no message - the same failure in a quieter costume.
+  select g.league_id, g.created_by into existing_league, existing_creator
+    from public.games g where g.id = p_game_id;
+  if existing_league is not null then
+    if existing_league <> p_league_id then
+      raise exception 'Game id % already exists in another league.', p_game_id;
+    elsif not public.can_score_row(existing_league, existing_creator) then
+      raise exception 'Game id % was created by someone else.', p_game_id;
+    end if;
+  end if;
+
   -- Teams + their players.
   for team in select * from jsonb_array_elements(p_teams) loop
     -- teams.color is NOT NULL — never let a missing color abort the import.
@@ -614,12 +750,24 @@ begin
       coalesce(nullif(team->>'color', ''), '#12D7D0'),
       coalesce((select array_agg(p->>'id') from jsonb_array_elements(team->'players') p), '{}')
     )
-    on conflict (id) do update set name = excluded.name, color = excluded.color, player_ids = excluded.player_ids;
+    -- Scoped to p_league_id for the reason spelled out in bulk_import_roster:
+    -- a definer function upserting caller-supplied row ids, with no policy
+    -- underneath it, is a cross-league write into any team in the product
+    -- unless the conflict update says which league it is allowed to touch.
+    on conflict (id) do update set name = excluded.name, color = excluded.color, player_ids = excluded.player_ids
+    where public.teams.league_id = p_league_id;
+    if not found then
+      raise exception 'Team id % already exists in another league.', team->>'id';
+    end if;
 
     for ply in select * from jsonb_array_elements(team->'players') loop
       insert into public.players (id, league_id, name, number)
       values (ply->>'id', p_league_id, coalesce(nullif(ply->>'name', ''), 'Player'), nullif(ply->>'number', ''))
-      on conflict (id) do update set name = excluded.name, number = excluded.number;
+      on conflict (id) do update set name = excluded.name, number = excluded.number
+      where public.players.league_id = p_league_id;
+      if not found then
+        raise exception 'Player id % already exists in another league.', ply->>'id';
+      end if;
     end loop;
 
     if i = 0 then home_id := team->>'id'; else away_id := team->>'id'; end if;
@@ -635,7 +783,16 @@ begin
           1, p_track_misses, p_track_turnovers, auth.uid())
   on conflict (id) do update set home_team_id = excluded.home_team_id,
                                  away_team_id = excluded.away_team_id,
-                                 location = excluded.location;
+                                 location = excluded.location
+  where public.games.league_id = p_league_id
+    and public.can_score_row(public.games.league_id, public.games.created_by);
+  -- The pre-check above already rejected both of these cases with a message that
+  -- names which one it was; repeating the condition at the point of the write is
+  -- what stops two concurrent calls interleaving between the check and the
+  -- upsert, where neither would see the other's row.
+  if not found then
+    raise exception 'Game id % is already in use.', p_game_id;
+  end if;
 end $$;
 grant execute on function public.rec_setup_game(text,text,boolean,bigint,text,text,boolean,boolean,jsonb) to authenticated;
 
@@ -751,9 +908,31 @@ create or replace function public.add_player(
 ) returns void language plpgsql security definer set search_path = public as $$
 begin
   if not public.can_score(p_league_id) then raise exception 'Scorekeeper access required.'; end if;
+  -- Scoped to p_league_id. Same shape of hole as the other two definer RPCs: RLS
+  -- does not run in here, the authorisation is on the caller-supplied
+  -- p_league_id, and p_player_id is a caller-supplied row id. Every signed-in
+  -- user can pass can_score('rec-shared'), so an unscoped conflict update let
+  -- anybody rename any player in any league in the product. The foreign row's
+  -- league_id never changes, so nothing about it is visible as a league write.
   insert into public.players (id, league_id, name, number)
   values (p_player_id, p_league_id, p_name, p_number)
-  on conflict (id) do update set name = excluded.name, number = excluded.number;
+  on conflict (id) do update set name = excluded.name, number = excluded.number
+  where public.players.league_id = p_league_id;
+  if not found then
+    raise exception 'Player id % already exists in another league.', p_player_id;
+  end if;
+  -- The team update was already league-scoped, and it stays a silent no-op when
+  -- it matches nothing. Deliberate, and different from the player upsert above:
+  -- a raise here would roll the player insert back with it, losing the player
+  -- entirely rather than just its team wiring, which the next full push or pull
+  -- repairs. A cross-league team id cannot corrupt anything from here anyway -
+  -- the WHERE already refuses it.
+  --
+  -- (This used to argue that `check` in src/sync/sync.ts would swallow the
+  -- error too, since ADD_PLAYER is not in MUST_NOT_FAIL_SILENTLY. That is no
+  -- longer true: check now collects row-level refusals into PushOutcome.refused
+  -- and the chip turns red. The rollback above is the reason that survives -
+  -- and a raise would additionally pin an outbox entry that can never succeed.)
   update public.teams
      set player_ids = array_append(array_remove(player_ids, p_player_id), p_player_id)
    where id = p_team_id and league_id = p_league_id;
