@@ -169,6 +169,17 @@ export function Txt({ k = 'body', style, children, color, numberOfLines, adjusts
 }
 
 // Primary button uses the brand gradient; ghost/danger are outlined.
+//
+// The two kinds must end up the SAME height, because they are routinely placed
+// side by side in a `flexDirection: 'row'` (Home's Drop-In / New League bar, the
+// Cancel / confirm pairs in the attendance, duplicate-league and timeout
+// sheets). Two things used to break that:
+//   * ghost paints its 1px border on the Pressable, so its box is 2px taller
+//     than primary, whose padding lives on the inner gradient. Primary now
+//     carries a transparent border of the same width, so both box models match.
+//   * a row stretches both Pressables to the tallest of them, but the gradient
+//     sized itself to its own padding and left bare background below it -
+//     `flexGrow` makes it fill the height it was actually given.
 export function Button({ title, onPress, kind = 'primary', style, disabled }:
   { title: string; onPress: () => void; kind?: 'primary' | 'ghost' | 'danger'; style?: ViewStyle; disabled?: boolean }) {
   if (kind === 'primary') {
@@ -177,11 +188,11 @@ export function Button({ title, onPress, kind = 'primary', style, disabled }:
         accessibilityRole="button"
         accessibilityLabel={title}
         accessibilityState={{ disabled: !!disabled }}
-        style={({ pressed }) => [{ borderRadius: radius.md, opacity: disabled ? 0.4 : pressed ? 0.9 : 1 }, style]}>
+        style={({ pressed }) => [{ borderRadius: radius.md, borderWidth: 1, borderColor: 'transparent', opacity: disabled ? 0.4 : pressed ? 0.9 : 1 }, style]}>
         <LinearGradient
           colors={brandGradient}
           start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-          style={{ paddingVertical: 14, paddingHorizontal: 18, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', width: '100%' }}>
+          style={{ paddingVertical: 14, paddingHorizontal: 18, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', width: '100%', flexGrow: 1 }}>
           <Text style={{ fontFamily: font.bodyBold, fontSize: 15, color: colors.bg, letterSpacing: 0.3, textAlign: 'center' }}>{title}</Text>
         </LinearGradient>
       </Pressable>
@@ -913,8 +924,8 @@ export function ProfileSheet({ visible, onClose, user, role, busy, error, onGoog
             {(onMintCode || onPromos) ? (
               <>
                 <Txt k="label" color={colors.brandTeal} style={{ marginTop: space(3) }}>SUPER ADMIN</Txt>
-                {onMintCode ? (<><RowBtn label="🎟  Create league-creation code" onPress={onMintCode} /><Line /></>) : null}
-                {onPromos ? (<><RowBtn label="📣  Sponsor promos" onPress={onPromos} /><Line /></>) : null}
+                {onMintCode ? (<><RowBtn label="Create league-creation code" onPress={onMintCode} /><Line /></>) : null}
+                {onPromos ? (<><RowBtn label="Sponsor promos" onPress={onPromos} /><Line /></>) : null}
               </>
             ) : null}
             <RowBtn label={busy ? 'Signing out…' : 'Sign out'} color={colors.red} onPress={onSignOut} disabled={busy} />

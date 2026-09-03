@@ -189,7 +189,7 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
             {isAdmin && !league.isShared && !isRec && (
               <View style={{ marginTop: space(3) }}>
                 <Button
-                  title={league.isArchived ? '📤 Unarchive league' : '🗄 Archive league'}
+                  title={league.isArchived ? 'Unarchive league' : 'Archive league'}
                   kind="ghost"
                   onPress={() => {
                     if (league.isArchived) {
@@ -207,7 +207,7 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
                   }}
                 />
                 <Button
-                  title="🗑 Delete league permanently"
+                  title="Delete league permanently"
                   kind="danger"
                   style={{ marginTop: space(2) }}
                   onPress={() => {
@@ -384,7 +384,7 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
                     ))}
                     {canCleanup && league.games.some(g => g.status === 'final') && (
                       <Button
-                        title="🧹 Clean up old games"
+                        title="Clean up old games"
                         kind="ghost"
                         onPress={openCleanupMenu}
                         style={{ marginTop: space(1) }}
@@ -489,14 +489,14 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
                 {/* 🏆 AWARDS — computed live; appear after 6 games; official at season close */}
                 {league.isClosed && finalsCount >= 6 && (
                   <Button
-                    title="🎉 View & share Season Recap"
+                    title="View & share Season Recap"
                     onPress={() => navigation.navigate('SeasonRecap', { leagueId })}
                     style={{ marginBottom: space(2) }}
                   />
                 )}
                 {finalsCount >= 6 && (
                   <Button
-                    title="🏅 Share award cards"
+                    title="Share award cards"
                     kind="ghost"
                     onPress={() => navigation.navigate('ShareCard', { leagueId, kind: 'season' })}
                     style={{ marginBottom: space(3) }}
@@ -543,7 +543,7 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
           <>
             {owner && !isRec && league.teams.length === 0 && (
               <Button
-                title="📋 Bulk import roster (paste teams & players)"
+                title="Bulk import roster (paste teams & players)"
                 kind="ghost"
                 style={{ marginBottom: space(3) }}
                 onPress={() => navigation.navigate('BulkImport', { leagueId })}

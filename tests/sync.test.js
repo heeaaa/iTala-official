@@ -107,7 +107,32 @@ class Device {
     this.syncState = 'saving';
     beginPush(touched);
     const p = enqueuePush(() => pushAction(this.client, action, next)).then(
-      () => { confirmPending(touched); noteReachable(); this.persist(); this.syncState = 'saved'; },
+      outcome => {
+        // A RESOLVED push is not by itself a save, and mirroring that is the
+        // whole point of this branch. `pushAction` reports a row-level refusal
+        // in its resolved value (a rejection would fire the bundle rollback
+        // below for writes that are not bundles), so a caller that confirms on
+        // resolution alone marks a write the server threw away as saved - which
+        // takes it out of the outbox for ever. Same shape as StoreProvider.
+        //
+        // The `|| []` is deliberate rather than defensive: it makes this branch
+        // read a pre-fix `pushAction`, which resolves undefined, as "nothing was
+        // refused", so R1/R2 below fail on their assertions rather than on a
+        // TypeError.
+        const refused = (outcome && outcome.refused) || [];
+        if (refused.length > 0) {
+          const rejection = new Error(refused.join('; '));
+          failPending(touched, rejection);
+          // The server ANSWERED. Marking the device offline here would be a
+          // second untruth.
+          noteReachable();
+          this.persist();
+          this.syncState = 'error';
+          this.pushErrors.push(rejection.message);
+          return;
+        }
+        confirmPending(touched); noteReachable(); this.persist(); this.syncState = 'saved';
+      },
       e => {
         failPending(touched, e);
         noteUnreachable(e);
@@ -1919,6 +1944,191 @@ async function o19_both_transports_leave_the_same_ledger() {
 }
 
 /* ==========================================================================
+   GROUP R - the writes that resolved having written nothing
+   ==========================================================================
+
+   Group O2 covered the request that never ARRIVED. This one covers the two
+   remaining ways a push resolved while the server held nothing, both reachable
+   on a perfectly good connection.
+
+   R1  the server ANSWERED and refused the row. `check` logged it and returned,
+       so the push resolved, `confirmPending` retired the token out of the
+       outbox filter, and the next snapshot handed back the stale row. The badge
+       read "Everything on this device is saved to the server".
+
+   R2  CREATE_GAME names its row `id`, not `gameId`, so the ledger minted no
+       token for it at all. A game created offline had no entry, no outbox row
+       and no protection, and the next pull deleted it.
+   ========================================================================== */
+
+// A refusal, not an outage: the response carries an error and NO status, so
+// nothing in the transport classifier can mistake it for a lost connection.
+const REFUSED_GAME = { message: 'new row violates row-level security policy for table "games"' };
+
+async function r1_a_refused_game_write_is_queued_not_confirmed() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  // Retire the seed's own writes so every count below is about this test.
+  A.applySnapshot(await A.snapshot());
+  eq('R1.1 a clean ledger to start from', pendingCount(), 0);
+  eq('R1.2 and the device believes it is online', netStatus(), 'online');
+
+  server.failures['upsert:games'] = REFUSED_GAME;
+  A.dispatch({ t: 'SET_LINEUP', leagueId: 'lg1', gameId: 'g1', side: 'home', playerIds: ['p1'] });
+  await A.settle();
+
+  eq('R1.3 the five is on the board', A.game().homeOnCourt, ['p1']);
+  eq('R1.4 and the server does not have it', server.find('games', 'g1').home_on_court, []);
+  ok('R1.5 the push reported the refusal instead of a save',
+     A.pushErrors.some(m => /row-level security/.test(m)), A.pushErrors.join(' | '));
+  eq('R1.6 so the write is QUEUED, not confirmed', unsyncedCount(), 1);
+  ok('R1.7 and it reached the disk, where a relaunch can find it',
+     A.disk.outbox.some(e => e.kind === 'game' && e.gameId === 'g1'),
+     JSON.stringify(A.disk.outbox));
+  eq('R1.8 the device did not report it saved', A.syncState, 'error');
+  // The refusal is not an outage, and saying it is would send the probe loop
+  // after a connection that is answering perfectly well.
+  eq('R1.9 the device is still online', netStatus(), 'online');
+
+  // What the person is actually told. Red and counted, not green.
+  const chip = describeSync({
+    enabled: true, net: netStatus(), pending: unsyncedCount(),
+    writeState: A.syncState === 'error' ? 'error' : 'saved', lastError: null,
+  });
+  eq('R1.10 the chip is the failed state', chip.phase, 'failed');
+  eq('R1.11 in the bad tone', chip.tone, 'bad');
+  ok('R1.12 and it does NOT claim everything is saved',
+     !/Everything on this device is saved/.test(chip.detail), chip.detail);
+
+  // The reported ending: the next snapshot used to win.
+  A.applySnapshot(await A.snapshot());
+  eq('R1.13 the pull does not revert the five', A.game().homeOnCourt, ['p1']);
+  ok('R1.14 nor does the autosave destroy the durable copy',
+     A.disk.state.leagues[0].games[0].homeOnCourt.join(',') === 'p1',
+     JSON.stringify(A.disk.state.leagues[0].games[0].homeOnCourt));
+  eq('R1.15 the entry is still queued after the pull', unsyncedCount(), 1);
+
+  // And the recovery path, which is what makes a red chip acceptable: the
+  // rights come back, the drain replays the whole row, and it clears.
+  delete server.failures['upsert:games'];
+  const sent = await A.drain();
+  eq('R1.16 the queued row is replayed once the refusal lifts', sent, 1);
+  eq('R1.17 and the server now holds it', server.find('games', 'g1').home_on_court, ['p1']);
+  eq('R1.18 nothing is left waiting', unsyncedCount(), 0);
+}
+
+// The stat half of the same defect. ADD_EVENT is critical, so its INSERT
+// rethrows - but the game row it also pushes when a foul benches a player goes
+// through `check`, and so did every other non-critical write. This pins the
+// general rule rather than the one action: a refusal is reported, whatever the
+// caller then does with it.
+async function r2_a_refusal_is_reported_by_the_push_itself() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.applySnapshot(await A.snapshot());
+
+  server.failures['upsert:games'] = REFUSED_GAME;
+  const outcome = await pushAction(
+    A.client,
+    { t: 'SET_PERIOD', leagueId: 'lg1', gameId: 'g1', period: 3 },
+    A.state,
+  );
+  // Read defensively so a push that reports nothing fails on the assertion
+  // rather than on a TypeError - the pre-fix shape resolves undefined.
+  const said = (outcome && outcome.refused) || [];
+  ok('R2.1 the push RESOLVES rather than rejecting', !!outcome, String(outcome));
+  eq('R2.2 and names the write the server refused', said.length, 1);
+  ok('R2.3 with the label and the server words attached',
+     /UPSERT_games/.test(String(said[0])) && /row-level security/.test(String(said[0])),
+     String(said[0]));
+
+  // A clean write reports nothing, which is the other half of the contract.
+  delete server.failures['upsert:games'];
+  const clean = await pushAction(
+    A.client,
+    { t: 'SET_PERIOD', leagueId: 'lg1', gameId: 'g1', period: 3 },
+    A.state,
+  );
+  eq('R2.4 an accepted write refuses nothing', (clean && clean.refused) || 'no outcome at all', []);
+
+  // And a bundle write still REJECTS, because its local half has to roll back.
+  server.failures['rpc:rec_setup_game'] = { message: 'Scorekeeper access required.' };
+  let threw = null;
+  try {
+    await pushAction(A.client, {
+      t: 'REC_SETUP_GAME', leagueId: 'lg1', gameId: 'gRec', location: '',
+      teams: [{ id: 'tH', name: 'Warriors', players: [] }],
+    }, A.state);
+  } catch (e) { threw = (e && e.message) || String(e); }
+  ok('R2.5 an all-or-nothing bundle still rejects, so its rollback still fires',
+     !!threw && /Scorekeeper access required/.test(threw), String(threw));
+}
+
+async function r3_a_game_created_offline_is_queued_and_survives_the_pull() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.applySnapshot(await A.snapshot());
+  eq('R3.1 a clean ledger to start from', pendingCount(), 0);
+
+  server.offline(true);
+  A.dispatch({ t: 'CREATE_GAME', id: 'g9', leagueId: 'lg1', homeTeamId: 'tH', awayTeamId: 'tA' });
+  await A.settle();
+
+  ok('R3.2 the game is in the list', !!A.game('g9'));
+  eq('R3.3 the server never got it', server.has('games', 'g9'), false);
+  eq('R3.4 so it is QUEUED rather than reported saved', unsyncedCount(), 1);
+  ok('R3.5 and it reached the disk, where a relaunch can find it',
+     A.disk.outbox.some(e => e.kind === 'game' && e.gameId === 'g9'),
+     JSON.stringify(A.disk.outbox));
+  eq('R3.6 the device knows it is offline', netStatus(), 'offline');
+
+  // The reported ending: the next pull deleted the game and the autosave made
+  // it permanent.
+  server.offline(false);
+  noteReachable();
+  await A.pull();
+  ok('R3.7 the pull does not delete the game', !!A.game('g9'));
+  ok('R3.8 nor does the autosave destroy the durable copy',
+     A.disk.state.leagues[0].games.some(g => g.id === 'g9'),
+     A.disk.state.leagues[0].games.map(g => g.id).join(','));
+
+  const sent = await A.drain();
+  eq('R3.9 the queued game reaches the server on reconnect', sent, 1);
+  ok('R3.10 and the row is really there', server.has('games', 'g9'));
+  eq('R3.11 nothing is left waiting', unsyncedCount(), 0);
+
+  // The force-quit, which is where it used to become unrecoverable.
+  const B = relaunch(A);
+  await B.pull();
+  ok('R3.12 reopening still has the game', !!B.game('g9'));
+}
+
+// A created game that is then deleted must NOT be put back by the queued
+// create. `pruneOutbox` already covers this for every other game write; the new
+// entry has to be covered by the same rule rather than becoming an exception.
+async function r4_a_created_game_deleted_before_it_syncs_is_not_resurrected() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.applySnapshot(await A.snapshot());
+
+  server.offline(true);
+  A.dispatch({ t: 'CREATE_GAME', id: 'g9', leagueId: 'lg1', homeTeamId: 'tH', awayTeamId: 'tA' });
+  await A.settle();
+  eq('R4.1 the create is queued', unsyncedCount(), 1);
+
+  A.dispatch({ t: 'DELETE_GAME', leagueId: 'lg1', gameId: 'g9' });
+  await A.settle();
+  ok('R4.2 the game is gone locally', !A.game('g9'));
+
+  server.offline(false);
+  noteReachable();
+  const sent = await A.drain();
+  eq('R4.3 the drain sends nothing for a game the device no longer has', sent, 0);
+  eq('R4.4 and the queue is empty', unsyncedCount(), 0);
+  eq('R4.5 the server was never asked to create it', server.has('games', 'g9'), false);
+}
+
+/* ==========================================================================
    GROUP T - the read that was not the whole table
    ==========================================================================
 
@@ -2744,6 +2954,10 @@ const TESTS = [
   ['O17 a dead read is not a bad read', o17_a_dead_read_is_not_a_bad_read],
   ['O18 one transport, two spellings', o18_one_transport_two_spellings],
   ['O19 both transports leave the same ledger', o19_both_transports_leave_the_same_ledger],
+  ['R1 a refused game write is queued, not confirmed', r1_a_refused_game_write_is_queued_not_confirmed],
+  ['R2 a refusal is reported by the push itself', r2_a_refusal_is_reported_by_the_push_itself],
+  ['R3 a game created offline is queued and survives the pull', r3_a_game_created_offline_is_queued_and_survives_the_pull],
+  ['R4 a created game deleted before it syncs is not resurrected', r4_a_created_game_deleted_before_it_syncs_is_not_resurrected],
   ['T1 a capped reply is not the whole table', t1_a_capped_reply_is_not_the_whole_table],
   ['T2 paging does not assume the server cap', t2_paging_does_not_assume_the_servers_cap],
   ['T3 an unfinishable read fails rather than truncating', t3_an_unfinishable_read_fails_rather_than_truncating],

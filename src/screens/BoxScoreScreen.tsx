@@ -173,7 +173,7 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
         <Button title="Share box-score card" onPress={onSharePress} kind="ghost" style={{ marginBottom: space(2) }} />
         {game.status === 'final' && (
           <Button
-            title="🏅 Player achievement cards"
+            title="Player achievement cards"
             kind="ghost"
             style={{ marginBottom: space(2) }}
             onPress={() => setCardPickOpen(v => !v)}
@@ -201,7 +201,7 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
         )}
         {game.status === 'final' && league && canScore(league) && (
           <Button
-            title={game.attendance ? `📋 Attendance (${game.attendance.length} present)` : '📋 Record attendance'}
+            title={game.attendance ? `Attendance (${game.attendance.length} present)` : 'Record attendance'}
             kind="ghost"
             style={{ marginBottom: space(3) }}
             onPress={() => {

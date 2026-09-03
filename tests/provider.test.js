@@ -282,6 +282,112 @@ async function p3_a_truncated_read_must_not_delete_the_game() {
      (B.league() || {}).name, 'BPBL');
 }
 
+// The server ANSWERS and refuses the row - RLS, a closed league, a membership
+// that lapsed mid-game. Not an outage: the response carries an error and NO
+// status, so nothing in the transport classifier can mistake it for one.
+//
+// This is the path `check` used to swallow. The push RESOLVED, the provider
+// called confirmPending, and `outboxSnapshot`/`drainableEntries` both filter on
+// an unconfirmed entry - so the write never reached disk, was never retried, and
+// the next snapshot retired it on ordering alone and handed back the server's
+// stale row. Measured on this harness before the fix: unsyncedCount() 0, an
+// empty outbox key, phase 'saved', and the lineup reverted by the next pull.
+async function p4_a_refused_write_is_not_reported_saved() {
+  wipeDisk();
+  const server = new FakeServer();
+  const A = new Phone(server);
+  await A.settle();
+  await seed(A);
+  eq('P4.1 nothing is waiting after a clean seed', A.ctx.pendingWrites, 0);
+
+  server.failures['upsert:games'] =
+    { message: 'new row violates row-level security policy for table "games"' };
+  A.ctx.dispatch({ t: 'SET_LINEUP', leagueId: 'lg1', gameId: 'g1', side: 'home', playerIds: ['p1'] });
+  await A.settle();
+
+  const g = () => (A.league() || { games: [] }).games.find(x => x.id === 'g1') || {};
+  eq('P4.2 the five is on the board', g().homeOnCourt, ['p1']);
+  eq('P4.3 and the server does not have it', server.find('games', 'g1').home_on_court, []);
+  eq('P4.4 so the write is QUEUED, not confirmed', A.ctx.pendingWrites, 1);
+  eq('P4.5 the provider recorded a failed write', A.ctx.syncState, 'error');
+  eq('P4.6 a refusal is not an outage, so the device stays online', A.ctx.net, 'online');
+  eq('P4.7 the chip is the failed state', A.ctx.sync.phase, 'failed');
+  eq('P4.8 in the bad tone', A.ctx.sync.tone, 'bad');
+  ok('P4.9 and it does not claim everything is saved',
+     !/Everything on this device is saved/.test(A.ctx.sync.detail), A.ctx.sync.detail);
+  ok('P4.10 the queue reached disk, where a relaunch can find it',
+     /"gameId":"g1"/.test(String(disk()['hoops.outbox.v1'])), String(disk()['hoops.outbox.v1']));
+
+  // A pull while it is pinned must not hand the stale five back.
+  await A.ctx.refresh();
+  await A.settle();
+  eq('P4.11 a refresh does not revert the five', g().homeOnCourt, ['p1']);
+  ok('P4.12 nor does the autosave destroy the durable copy',
+     /"homeOnCourt":\["p1"\]/.test(String(disk()['hoops.state.v1'])));
+
+  // The rights come back. The provider's own reconnect wiring drains it, which
+  // is what makes a red chip a state the app can leave rather than a dead end.
+  // Pull-to-refresh rather than the foreground handler, and the reason is a
+  // limitation of THIS harness rather than of the app. A Phone is never
+  // unmounted (a force-quit has no cleanups), so by this point eight
+  // StoreProviders are mounted at once over ONE module-level ledger - which on a
+  // real device is impossible. `__emitAppState` reaches every one of them, and
+  // the preflight provider, whose state holds a league with no games at all,
+  // then runs `pruneOutbox` and drops this queued GAME entry as a write for a
+  // deleted game. `refresh()` goes through the same drain but only through the
+  // phone under test. The foreground and reconnect wiring itself is covered by
+  // P2 and P5.
+  delete server.failures['upsert:games'];
+  await A.ctx.refresh();
+  await A.settle();
+  eq('P4.13 the queued row is replayed', server.find('games', 'g1').home_on_court, ['p1']);
+  eq('P4.14 nothing is left waiting', A.ctx.pendingWrites, 0);
+  ok('P4.15 and the chip has cleared', A.ctx.sync.tone === 'ok', `${A.ctx.sync.phase} / ${A.ctx.sync.label}`);
+}
+
+// A game created with no connection. CREATE_GAME names its row `id`, not
+// `gameId`, so `recordPending` minted no token for it: no ledger entry, no
+// outbox row, and a push through the non-critical `check`. Nothing anywhere held
+// it open, so the next pull deleted it and the autosave made that permanent.
+async function p5_a_game_created_offline_survives_a_force_quit() {
+  wipeDisk();
+  const server = new FakeServer();
+  const A = new Phone(server);
+  await A.settle();
+  await seed(A);
+
+  server.offline(true);
+  A.ctx.dispatch({ t: 'CREATE_GAME', id: 'g9', leagueId: 'lg1', homeTeamId: 'tH', awayTeamId: 'tA' });
+  await A.settle();
+
+  ok('P5.1 the game is in the list', !!(A.league() || { games: [] }).games.find(x => x.id === 'g9'));
+  eq('P5.2 the server never got it', server.has('games', 'g9'), false);
+  eq('P5.3 the provider knows it is offline', A.ctx.net, 'offline');
+  eq('P5.4 and the create is QUEUED rather than reported saved', A.ctx.pendingWrites, 1);
+  eq('P5.5 the banner says so', A.ctx.sync.phase, 'offline-pending');
+  ok('P5.6 the queue is on disk', /"gameId":"g9"/.test(String(disk()['hoops.outbox.v1'])),
+     String(disk()['hoops.outbox.v1']));
+
+  // Force-quit mid-outage, reopen with the connection back. The boot pull used
+  // to hydrate a snapshot that had never heard of the game, delete it, and
+  // autosave the deletion.
+  A.quit();
+  server.offline(false);
+  const B = new Phone(server);
+  await B.settle();
+  // The boot pull flips the connection back to online and the reconnect effect
+  // drains from there. The explicit refresh is belt and braces: see P4 for why
+  // a suite that keeps every Phone mounted cannot rely on a broadcast handler
+  // to be the one that drains.
+  await B.ctx.refresh();
+  await B.settle();
+
+  ok('P5.7 reopening still has the game', !!(B.league() || { games: [] }).games.find(x => x.id === 'g9'));
+  ok('P5.8 and the durable copy agrees', /"id":"g9"/.test(String(disk()['hoops.state.v1'])));
+  ok('P5.9 the queued create reached the server', server.has('games', 'g9'));
+  eq('P5.10 nothing is left waiting', B.ctx.pendingWrites, 0);
+}
+
 /* --------------------------------------------------------------- preflight --
  * A harness whose storage or whose server wiring silently does nothing can
  * report any result it likes, in either direction. Both were briefly true here:
@@ -353,6 +459,8 @@ const groups = [
   ['P1 online stats survive a force-quit', p1_online_stats_survive_a_force_quit],
   ['P2 offline round trip survives a force-quit', p2_offline_round_trip_survives_a_force_quit],
   ['P3 a truncated read must not delete the game', p3_a_truncated_read_must_not_delete_the_game],
+  ['P4 a refused write is not reported saved', p4_a_refused_write_is_not_reported_saved],
+  ['P5 a game created offline survives a force-quit', p5_a_game_created_offline_survives_a_force_quit],
 ];
 
 (async () => {

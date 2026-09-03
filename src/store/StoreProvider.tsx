@@ -1734,7 +1734,37 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         // nothing to undo it, which is a worse bug than the request it saves.
         beginPush(pushTokens);
         void enqueuePush(() => pushAction(sb, action, next))
-          .then(() => {
+          .then((outcome) => {
+            // A push can come back having written NOTHING and still resolve.
+            //
+            // A row-level rejection - RLS, a closed league, a revoked
+            // membership - is a request that ARRIVED and was refused. It cannot
+            // reject the promise, because the bundle rollback below is keyed off
+            // rejection and would fire for writes that are not bundles, so
+            // `pushAction` reports it in the resolved value instead.
+            //
+            // Confirming those tokens was the lie: `outboxSnapshot` and
+            // `drainableEntries` both filter on an unconfirmed entry, so a
+            // confirmed one never reached disk and was never retried, and the
+            // next snapshot retired it on ordering alone and handed back the
+            // server's stale row. The badge said "Everything on this device is
+            // saved to the server" while the lineup on screen existed nowhere
+            // else. Treat it as the failure it is: pin, queue, and say so.
+            const refused = (outcome && outcome.refused) || [];
+            if (refused.length > 0) {
+              const rejection = new Error(refused.join('; '));
+              failPending(pushTokens, rejection);
+              // The server ANSWERED. Calling this offline would be a second
+              // untruth, and would send the probe loop after a live connection.
+              noteReachable();
+              persistOutbox();
+              trace('PERSIST', `REFUSED t=${action.t} tokens=${pushTokens.join(',') || 'none'}`);
+              setLastSyncError(describeSyncFailure(rejection));
+              const refusalDetail = technicalSyncDetail(rejection);
+              setLastSyncErrorDetail(refusalDetail ? `${action.t}: ${refusalDetail}` : null);
+              setSyncState('error');
+              return;
+            }
             // The server has it. The ledger entry stays until a snapshot read
             // after this moment confirms it — an older one is still in flight.
             confirmPending(pushTokens);

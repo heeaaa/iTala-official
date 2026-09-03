@@ -120,6 +120,28 @@ const SECTIONS = {
     'on delete set null;',
   ),
 
+  // Row-level security itself: the enable switches plus the whole shipped policy
+  // block. Everything else here loads the FUNCTIONS behind a policy; this loads
+  // the policy, so a suite can issue the write a device actually issues and find
+  // out what the server does with it. Needs `authz` (the policies call
+  // can_score/can_score_row/can_score_game/is_owner) and the events table that
+  // harness.sql provides.
+  rls: () => slice(
+    'alter table public.profiles      enable row level security;',
+    'alter table public.events        enable row level security;',
+  ) + '\n' + slice(
+    '-- ---- policies ----',
+    '  with check (public.can_score_game(game_id));',
+  ),
+
+  // The BEFORE trigger that makes games.created_by server-owned. Separate from
+  // `rls` on purpose: the policy and the trigger are two halves of one rule, and
+  // a suite that loaded only one of them would be testing a schema nobody ships.
+  games_creator: () => slice(
+    '-- games.created_by belongs to the SERVER.',
+    'for each row execute function public.games_own_creator();',
+  ),
+
   // rec_setup_game: creates or joins a drop-in league, writes teams/players/game
   // in one transaction, and stamps created_by server-side.
   rec_setup: () => slice(
@@ -131,6 +153,14 @@ const SECTIONS = {
   bulk_roster: () => slice(
     'create or replace function public.bulk_import_roster(p_league_id text, p_teams jsonb)',
     'grant execute on function public.bulk_import_roster(text,jsonb) to authenticated;',
+  ),
+
+  // add_player: the late-sub path. The third SECURITY DEFINER RPC that upserts a
+  // caller-supplied row id, so it belongs in the same cross-league coverage as
+  // rec_setup_game and bulk_import_roster.
+  add_player: () => slice(
+    'create or replace function public.add_player(',
+    'grant execute on function public.add_player(text,text,text,text,text) to authenticated;',
   ),
 };
 

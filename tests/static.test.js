@@ -775,6 +775,74 @@ for (const f of srcFiles) {
      'delete was reachable only by a left-swipe, which screen readers intercept');
 }
 
+// ---------------------------------------------------------------------------
+// CHECK 15 - the two Button kinds must stay the same size. They sit side by
+// side in a row in five places (Home's Drop-In / New League bar and the
+// Cancel / confirm pairs in the attendance, duplicate-league and timeout
+// sheets), and they drifted apart twice over: ghost paints a 1px border on the
+// Pressable while primary's padding lives on the inner gradient, and the
+// gradient sized itself to that padding instead of filling the height a row
+// stretch had already given the Pressable - so the primary button was visibly
+// shorter with bare background under it.
+//
+// Structural only. It cannot measure a rendered height; it guards the three
+// declarations that make the two box models identical, and on-device
+// confirmation is still required.
+// ---------------------------------------------------------------------------
+{
+  const ui = read('src/components/ui.tsx');
+  const primary = ui.slice(ui.indexOf("if (kind === 'primary')"), ui.indexOf('const fg = kind ==='));
+  ok('ui.tsx primary Button reserves the same 1px border box as ghost',
+     /borderWidth: 1, borderColor: 'transparent'/.test(primary),
+     'without it primary is 2px shorter than the ghost beside it');
+  ok('ui.tsx primary Button gradient fills the height it is given',
+     /flexGrow: 1/.test(primary),
+     'a row stretch grows the Pressable; the gradient must grow with it');
+  ok('ui.tsx both Button kinds use the same vertical padding',
+     (ui.match(/paddingVertical: 14, paddingHorizontal: 18/g) || []).length >= 2,
+     'equal borders do not help if the padding differs');
+
+  // Home's action bar: plain text labels. The basketball emoji came from a
+  // different font with a taller line box, which grew the ghost button beyond
+  // its neighbour and read as "basketball Drop-In" to a screen reader.
+  const leagues = read('src/screens/LeaguesScreen.tsx');
+  const barButtons = [...leagues.matchAll(
+    /<Button title="([^"]*)"[^>]*onPress=\{(?:\(\) => )?(?:navigation\.navigate\('RecGame'\)|onNewLeague)\}/g)];
+  ok('LeaguesScreen action bar still has its two buttons', barButtons.length === 2,
+     `matched ${barButtons.length} - the check below proves nothing otherwise`);
+  for (const m of barButtons) {
+    ok(`LeaguesScreen action-bar button "${m[1]}" has a plain-text label`,
+       !/[^\x20-\x7E]/.test(m[1]),
+       'decorative glyphs change the line height and are spoken aloud');
+  }
+
+  // No EMOJI in any tappable label, app-wide. Two distinct costs, both real:
+  // an emoji renders from a fallback font with a taller line box, so a row
+  // holding one is taller than a row that does not (the Home bar defect above);
+  // and `Button` passes `title` straight to `accessibilityLabel`, so a screen
+  // reader announced "basketball Drop-In" and "memo Log".
+  //
+  // Non-emoji glyphs are deliberately still allowed - ▶ ✎ ✓ ✕ ★ ▾ ⇩ ⇄ ↺ ↻ stand
+  // in for an icon set the app does not have, and stripping them would leave
+  // unlabelled controls. The line is drawn at pictographs: anything in the
+  // emoji planes, the two that live outside them (✨ ⏱), and anything wearing a
+  // U+FE0F emoji-presentation selector.
+  const EMOJI = /[\u{1F000}-\u{1FAFF}\u{2728}\u{23F1}]|️/u;
+  let labelCount = 0;
+  for (const f of srcFiles) {
+    const src = read(f);
+    for (const m of src.matchAll(/<(?:Button|RowBtn|MiniBtn)\b[^>]*?\b(?:title|label)=(?:"([^"\n]*)"|\{[^}]*?["'`]([^"'`\n]*)["'`])/g)) {
+      const label = m[1] ?? m[2] ?? '';
+      labelCount++;
+      if (!label) continue;
+      ok(`${f} button label "${label}" carries no emoji`, !EMOJI.test(label),
+         'emoji inflate the line box and are read aloud by screen readers');
+    }
+  }
+  ok('button labels were found to scan', labelCount > 20,
+     `only ${labelCount} matched - the pattern has drifted and proves nothing`);
+}
+
 
 // ---------------------------------------------------------------------------
 // CHECK 16 - lint tooling must exist and CI must run it (F-09). The project had
@@ -1017,6 +1085,69 @@ for (const f of srcFiles) {
   for (const name of ['AUTH_SETUP', 'CODE_REVIEW', 'DEPLOYMENT', 'TROUBLESHOOTING']) {
     ok(`${name}.md lives in docs/`, exists(`docs/${name}.md`) && !exists(`${name}.md`),
        'the guides moved to docs/; only README.md and CLAUDE.md belong at the root');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CHECK 25 - every schema slice anchor still resolves.
+//
+// tests/sql/run.js loads suites by cutting named regions out of supabase/
+// schema.sql with literal `slice(from, to)` anchors, so that the assertions run
+// against the shipped SQL rather than a copy of it. The failure mode that
+// creates is quiet: rename or delete a chunk of schema.sql and the anchor stops
+// matching, `slice` throws, and the SQL suite that depended on it reports an
+// error - but ONLY on a machine with PostgreSQL. Without a database the whole
+// SQL runner skips, so a broken anchor reaches CI unnoticed and the protection
+// a suite was written to provide is silently gone.
+//
+// This check needs no database. It is also how a deleted safeguard gets caught:
+// the `games_creator` section anchors on the games_own_creator trigger, so
+// removing that trigger from schema.sql fails here rather than only in a
+// database run.
+// ---------------------------------------------------------------------------
+{
+  const runner = read('tests/sql/run.js');
+  const schema = read('supabase/schema.sql').replace(/\r\n/g, '\n');
+  const start = runner.indexOf('const SECTIONS = {');
+  ok('tests/sql/run.js still declares a SECTIONS map', start >= 0,
+     'the anchor check below cannot run without it');
+  if (start >= 0) {
+    const body = runner.slice(start);
+    // Only the string literals that are ARGUMENTS to a slice() call. A plain
+    // regex over the file also swallows psql arguments, log strings and the
+    // runner's own help text, none of which are schema anchors. Anchors contain
+    // parentheses of their own ("...lock_admin() to anon..."), so paren depth
+    // cannot be counted without consuming string literals whole - hence a
+    // scanner rather than a pattern.
+    const anchors = [];
+    for (let i = body.indexOf('slice('); i >= 0; i = body.indexOf('slice(', i + 1)) {
+      let j = i + 'slice('.length;
+      let depth = 1;
+      while (j < body.length && depth > 0) {
+        const c = body[j];
+        if (c === "'") {
+          let s = '';
+          j++;
+          while (j < body.length && body[j] !== "'") {
+            if (body[j] === '\\') { s += body[j] + body[j + 1]; j += 2; }
+            else s += body[j++];
+          }
+          j++;
+          anchors.push(s.replace(/\\n/g, '\n').replace(/\\'/g, "'").replace(/\\\\/g, '\\'));
+          continue;
+        }
+        if (c === '(') depth++;
+        else if (c === ')') depth--;
+        j++;
+      }
+    }
+    ok('schema slice anchors were found to check', anchors.length > 0,
+       'the regex matched nothing - it has drifted from run.js');
+    for (const a of anchors) {
+      const label = a.length > 60 ? a.slice(0, 57).replace(/\n/g, ' ') + '...' : a.replace(/\n/g, ' ');
+      ok(`schema.sql still contains slice anchor "${label}"`, schema.includes(a),
+         'the SQL suite using it would throw, and skip silently with no database');
+    }
   }
 }
 

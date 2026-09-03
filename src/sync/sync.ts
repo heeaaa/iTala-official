@@ -487,13 +487,20 @@ function transportFailure(res: { error?: any; status?: number } | null | undefin
 // Logs PostgREST/RLS-style errors from a Supabase response, and rethrows the
 // ones that mean the request never arrived.
 //
-// A ROW-LEVEL rejection keeps the old behaviour deliberately: the server was
-// reached, it made a decision, and a non-critical write can reconverge on the
-// next pull rather than interrupting a live game. A TRANSPORT failure cannot -
-// it wrote nothing, for any action, so resolving it is always a false 'saved'.
-// The fix lives here rather than in the list of critical actions because the
-// mechanism is the response, not the action: fixing it at the call sites would
-// leave every helper that inspects a response free to swallow it again.
+// A ROW-LEVEL rejection is logged and returned from here deliberately: the
+// server was reached, it made a decision, and the remaining writes of a
+// multi-write action are still worth attempting. It must NOT throw - the
+// all-or-nothing bundle writes are rolled back by their own rejection, and
+// `MUST_NOT_FAIL_SILENTLY` in the catch below classifies by ACTION, so a refusal
+// turned into a throw would fire a bundle rollback for writes that are not
+// bundles. What a refusal must not do any longer is vanish; see the wrapper in
+// `pushAction`, which collects it into `PushOutcome.refused`.
+//
+// A TRANSPORT failure cannot be handled that way - it wrote nothing, for any
+// action, so resolving it is always a false 'saved'. The fix lives here rather
+// than in the list of critical actions because the mechanism is the response,
+// not the action: fixing it at the call sites would leave every helper that
+// inspects a response free to swallow it again.
 //
 // `any` is deliberate: this only ever reads .error off an arbitrary PostgREST
 // response shape, and narrowing it would mean restating every response type.
@@ -506,6 +513,17 @@ function check(label: string, res: { error: any; status?: number }): void {
   }
   warn(`[sync] ${label} rejected:`, res.error.message ?? res.error);
 }
+
+/**
+ * The same helper, under a name `pushAction` can still reach after it shadows
+ * `check` with its own per-call collector.
+ *
+ * Shadowing is what keeps the twenty-odd call sites in `pushAction` untouched,
+ * and leaving them untouched is the point: a refusal has to be collected at
+ * EVERY write, and a change that renamed the calls would only have to be got
+ * right once to be got wrong the next time a write is added.
+ */
+const classifyWrite = check;
 
 // For writes where a silent failure means the user LOSES data they can see on
 // screen (creating a drop-in game, importing a roster). These rethrow so the
@@ -566,12 +584,42 @@ function missingRow(label: string, id: string | undefined, leagueId: string): ne
   );
 }
 
-export async function pushAction(sb: SupabaseClient, action: Action, state: AppState): Promise<void> {
+/**
+ * What a push achieved, for a caller that has to decide whether to CONFIRM the
+ * pending-ledger entries it recorded for that action.
+ *
+ * `refused` holds the row-level rejections this one action collected, in the
+ * order they happened, each already labelled with the write it belongs to. Empty
+ * means every write the action attempted was accepted - the only case in which
+ * "the server has it" is a true statement.
+ *
+ * A REJECTION of the promise still means what it always did: the request never
+ * arrived, or the write was one whose failure has to interrupt the user.
+ */
+export interface PushOutcome {
+  refused: string[];
+}
+
+export async function pushAction(sb: SupabaseClient, action: Action, state: AppState): Promise<PushOutcome> {
+  // Per CALL, not per module. Pushes are serialised by `enqueuePush` today, but
+  // a module-level array would silently attribute one action's refusal to the
+  // next one the moment anything ran two of them concurrently - and a
+  // mis-attributed refusal pins the wrong write and confirms the wrong one.
+  const refused: string[] = [];
+  // Shadows the module-level `check` on purpose, so every existing call site
+  // reports through here without being rewritten. `classifyWrite` is that same
+  // helper: it rethrows a transport failure (nothing arrived, nothing to
+  // collect) and logs a row-level rejection, which is what is left in `.error`
+  // by the time control returns.
+  const check = (label: string, res: { error: any; status?: number }): void => {
+    classifyWrite(label, res);
+    if (res?.error) refused.push(`${label}: ${res.error.message ?? String(res.error)}`);
+  };
   try {
     switch (action.t) {
       case 'DUPLICATE_LEAGUE': {
         const l = state.leagues.find(x => x.id === action.newLeagueId);
-        if (!l) return;
+        if (!l) return { refused };
         // Server: owners of the source league duplicate without a creation code.
         check('DUPLICATE_LEAGUE', await sb.rpc('create_league', {
           p_id: l.id, p_name: l.name, p_season: l.season,
@@ -600,7 +648,7 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
 
       case 'ADD_LEAGUE': {
         const l = state.leagues.find(x => x.id === action.id);
-        if (!l) return;
+        if (!l) return { refused };
         // League creation is an RPC, not a table insert: the server validates
         // (and consumes) the single-use creation code, inserts the row, and
         // records the caller as the league's owner — all atomically.
@@ -623,7 +671,7 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
       case 'ADD_TEAM': {
         const l = state.leagues.find(x => x.id === action.leagueId);
         const t = action.id ? l?.teams.find(x => x.id === action.id) : l?.teams[l.teams.length - 1];
-        if (!l || !t) return;
+        if (!l || !t) return { refused };
         check('UPSERT_teams', await sb.from('teams').upsert({
           id: t.id, league_id: l.id, name: t.name, color: t.color,
           logo: t.logo ?? null, coach: t.coach ?? null, team_only: !!t.teamOnly, player_ids: t.playerIds,
@@ -633,7 +681,7 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
       case 'UPDATE_TEAM': {
         const l = state.leagues.find(x => x.id === action.leagueId);
         const t = l?.teams.find(x => x.id === action.teamId);
-        if (!l || !t) return;
+        if (!l || !t) return { refused };
         check('UPSERT_teams', await sb.from('teams').upsert({
           id: t.id, league_id: l.id, name: t.name, color: t.color,
           logo: t.logo ?? null, coach: t.coach ?? null, team_only: !!t.teamOnly, player_ids: t.playerIds,
@@ -647,7 +695,7 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
       case 'ADD_PLAYER': {
         const l = state.leagues.find(x => x.id === action.leagueId);
         const p = action.id ? l?.players.find(x => x.id === action.id) : l?.players[l.players.length - 1];
-        if (!l || !p) return;
+        if (!l || !p) return { refused };
         // ONE transaction server-side (player insert + team player_ids update).
         // Two separate writes let a realtime re-pull land in between, briefly
         // hydrating a player no team claimed — the "vanishing new player" bug.
@@ -660,7 +708,7 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
       case 'UPDATE_PLAYER': {
         const l = state.leagues.find(x => x.id === action.leagueId);
         const p = l?.players.find(x => x.id === action.playerId);
-        if (!l || !p) return;
+        if (!l || !p) return { refused };
         check('UPSERT_players', await sb.from('players').upsert({
           id: p.id, league_id: l.id, name: p.name, number: p.number ?? null,
         }));
@@ -684,7 +732,7 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
       case 'CREATE_GAME': {
         const l = state.leagues.find(x => x.id === action.leagueId);
         const g = l?.games.find(x => x.id === action.id);
-        if (!l || !g) return;
+        if (!l || !g) return { refused };
         check('UPSERT_games', await sb.from('games').upsert(gameToRow(g)));
         break;
       }
@@ -876,7 +924,7 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
 
       case 'HYDRATE':
         // Local hydrate only — no server write.
-        return;
+        return { refused };
 
       case 'ROLLBACK_BUNDLE':
         // Local only, and deliberately so. This action exists BECAUSE the server
@@ -884,7 +932,7 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
         // transactions, so nothing was written and there is nothing to delete.
         // Pushing anything here would risk removing rows a retry had since
         // succeeded in creating.
-        return;
+        return { refused };
     }
   } catch (e: unknown) {
     // Network or auth errors should never crash the UI. They'll reconverge on
@@ -915,6 +963,9 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
     // on the next pull rather than interrupting a live game.
     if (MUST_NOT_FAIL_SILENTLY.has(action.t) || isNetworkFailure(msg)) throw e;
   }
+  // Resolved, and honest about what that means: `refused` is empty only when the
+  // server accepted every write this action attempted.
+  return { refused };
 }
 
 /* ---------- Replay: re-send an outbox entry ---------------------------------
