@@ -1190,6 +1190,177 @@ for (const f of srcFiles) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// CHECK 26 - orientation. Tablets rotate so a scorekeeper can run the live
+// tracker in landscape; phones stay portrait, because a phone that reflows the
+// stat pad under someone's thumb mid-game is worse than no landscape at all.
+//
+// Three things hold that together, and each fails silently:
+//
+//  * `orientation` must be on the navigator's screenOptions, never on an
+//    individual Stack.Screen. react-native-screens resolves an unset screen to
+//    SCREEN_ORIENTATION_UNSPECIFIED on Android, which OVERRIDES the manifest
+//    lock - so setting it per-screen frees rotation on every screen that did
+//    not set it. The app would look correct on iOS and be wrong on Android.
+//  * The iPhone plist array must keep BOTH portrait values. Expo's own plugin
+//    writes Portrait + PortraitUpsideDown for `orientation: "portrait"`, so
+//    dropping UpsideDown here is a silent behaviour change, not a tidy-up.
+//  * An iOS Modal defaults to portrait ONLY. An unlisted modal on a rotated
+//    iPad renders sideways or mis-sized.
+//
+// Structural only: none of this proves a device actually rotates. See the
+// orientation section of tests/MANUAL-REGRESSION.md.
+// ---------------------------------------------------------------------------
+{
+  const appTsx = read('App.tsx');
+  const optsStart = appTsx.indexOf('screenOptions={{');
+  ok('App.tsx declares navigator screenOptions', optsStart >= 0,
+     'the orientation checks below cannot run without it');
+  if (optsStart >= 0) {
+    const optsRaw = appTsx.slice(optsStart, appTsx.indexOf('}}', optsStart));
+    // Comment lines are dropped first. The comment above this option explains
+    // the platform split and quotes `orientation: "portrait"` while doing it,
+    // so a scan of the raw text finds prose before it finds the option and
+    // then reports on the prose - passing, or failing, for the wrong reason.
+    const opts = optsRaw.split(/\r?\n/)
+      .filter(line => { const t = line.trim();
+        return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')); })
+      .join('\n');
+    ok('App.tsx sets orientation in screenOptions', /\borientation:/.test(opts),
+       'without it every screen inherits the manifest/plist default only');
+    // Read the VALUE, not the whole options object: an `isTablet` anywhere
+    // else in screenOptions (a tablet-only header, say) would satisfy a bare
+    // /isTablet/ test while orientation itself stayed a constant. The value
+    // runs from `orientation:` to the next option key, since it is a
+    // multi-line nested ternary.
+    const after = opts.slice(opts.indexOf('orientation:') + 'orientation:'.length);
+    const nextKey = after.search(/\n\s*[A-Za-z_$][\w$]*\s*:/);
+    const orientValue = (nextKey === -1 ? after : after.slice(0, nextKey)).replace(/\s+/g, ' ').trim();
+    ok('App.tsx orientation is device-class dependent', /isTablet/.test(orientValue),
+       'a constant here would rotate phones too, or lock tablets - value: ' + orientValue);
+
+    // Both arms are asserted literally, because on Android every one of these
+    // four words maps to a DIFFERENT ActivityInfo constant and three of the
+    // four plausible simplifications are silent behaviour changes:
+    //
+    //   'portrait'    -> SENSOR_PORTRAIT       (allows upside-down)
+    //   'portrait_up' -> SCREEN_ORIENTATION_PORTRAIT (matches the manifest)
+    //   'all'         -> FULL_SENSOR           (IGNORES the user's rotate lock)
+    //   'default'     -> UNSPECIFIED           (rotates, but honours the lock)
+    //
+    // A tester cannot tell these apart by looking, and the collapsed forms
+    // read like tidy-ups, so they are guarded by name.
+    ok('the phone arm is portrait on iOS and portrait_up on Android',
+       /Platform\.OS === 'ios' \? 'portrait' : 'portrait_up'/.test(orientValue),
+       'collapsing this to a bare \'portrait\' newly lets ANDROID phones flip ' +
+       'upside-down (SENSOR_PORTRAIT), which the manifest lock does not allow - ' +
+       'value: ' + orientValue);
+    ok('the tablet arm is all on iOS and default on Android',
+       /Platform\.OS === 'ios' \? 'all' : 'default'/.test(orientValue),
+       'value: ' + orientValue);
+    ok('the Android tablet arm is never the sensor-driven \'all\'',
+       !/isTablet\s*\?\s*'all'/.test(orientValue) && /'default'/.test(orientValue),
+       'Android \'all\' is FULL_SENSOR, which deliberately ignores the user\'s ' +
+       'auto-rotate lock: a tablet lying flat on a scorer\'s table would reflow ' +
+       'the stat pad mid-game even though its owner locked rotation. ' +
+       '\'default\' still overrides the manifest lock, so the tablet rotates, ' +
+       'but it leaves the final say with the system - value: ' + orientValue);
+  }
+  // The footgun: never per-screen.
+  // The footgun: never per-screen. The real failure mode of a guard like this
+  // is a scan that quietly stops matching, leaving a loop that passes because
+  // it inspected nothing: `[^;]*?` gives up on any screen whose props contain a
+  // semicolon (an inline arrow body with a statement in it), and the pattern
+  // cannot see a non-self-closing <Stack.Screen>...</Stack.Screen> at all. So
+  // the scan asserts its own reach before it asserts anything about content.
+  // Comments are dropped first, for the reason the value check above gives:
+  // App.tsx's own comment explains that orientation must never live on a
+  // Stack.Screen, so a scan of the raw text counts prose as a screen and
+  // reports on documentation instead of code.
+  const appCode = appTsx.split(/\r?\n/)
+    .filter(line => { const t = line.trim();
+      return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')
+        || t.startsWith('{/*')); })
+    .join('\n');
+  const screenTags = (appCode.match(/<Stack\.Screen\b/g) || []).length;
+  const screenMatches = [...appCode.matchAll(/<Stack\.Screen\b[^;]*?\/>/g)];
+  ok('App.tsx registers screens at all', screenTags > 0,
+     'the per-screen orientation guard below is vacuous with no screens to scan');
+  ok('the Stack.Screen scan reaches every registered screen',
+     screenMatches.length === screenTags,
+     'scanned ' + screenMatches.length + ' of ' + screenTags + ' <Stack.Screen> tags - '
+     + 'the unscanned ones could each be setting their own orientation');
+  ok('no Stack.Screen uses the wrapped form the scan cannot read',
+     !/<\/Stack\.Screen>/.test(appCode),
+     'a <Stack.Screen>...</Stack.Screen> body is invisible to the self-closing scan');
+  for (const m of screenMatches) {
+    // \borientation\b rather than /orientation:/ : the shorthand form
+    // options={{ orientation }} carries no colon and would slip through.
+    ok('no Stack.Screen sets its own orientation', !/\borientation\b/.test(m[0]),
+       'on Android an unset screen resolves to UNSPECIFIED and overrides the ' +
+       'manifest lock, so a per-screen value frees rotation everywhere else');
+  }
+
+  const appJson = JSON.parse(read('app.json'));
+  const plist = appJson.expo?.ios?.infoPlist ?? {};
+  const phone = plist.UISupportedInterfaceOrientations;
+  const pad = plist['UISupportedInterfaceOrientations~ipad'];
+  ok('app.json pins iPhone orientations explicitly', Array.isArray(phone),
+     'without this key Expo overwrites iOS orientation from the global key');
+  ok('iPhone keeps BOTH portrait values',
+     Array.isArray(phone) && phone.includes('UIInterfaceOrientationPortrait')
+       && phone.includes('UIInterfaceOrientationPortraitUpsideDown'),
+     'Expo writes both for orientation:portrait; dropping one changes behaviour');
+  ok('iPhone is not allowed to rotate to landscape',
+     Array.isArray(phone) && !phone.some(o => /Landscape/.test(o)),
+     'phones must stay portrait - a mid-game reflow is the thing we are avoiding');
+  ok('iPad is allowed to rotate to landscape',
+     Array.isArray(pad) && pad.some(o => /Landscape/.test(o)),
+     'this key is the whole feature');
+  ok('app.json still drives the Android manifest lock',
+     appJson.expo?.orientation === 'portrait',
+     'the global key no longer affects iOS, but it is what locks Android');
+
+  // Every RN Modal must opt into landscape. Comment lines are skipped: ui.tsx
+  // discusses `<Modal>` in prose while explaining why one component does NOT
+  // use one, and a guard that fails on documentation trains people to ignore it.
+  // Comment lines are dropped first: ui.tsx discusses `<Modal>` in prose while
+  // explaining why one component does NOT use one, and a guard that fails on
+  // documentation trains people to ignore it.
+  //
+  // The scan then runs over the whole (comment-free) file rather than line by
+  // line, because a line-by-line `<Modal ...>` match silently skips any modal
+  // whose props are wrapped across lines - the commonest thing to happen to a
+  // modal that is gaining a prop. The tag count is asserted against the match
+  // count so that a form this pattern cannot read fails loudly instead of
+  // dropping out of coverage.
+  let modalsScanned = 0;
+  for (const f of srcFiles) {
+    const code = read(f).split(/\r?\n/)
+      .filter(line => { const t = line.trim();
+        return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('{/*')); })
+      .join('\n');
+    const tags = (code.match(/<Modal\b/g) || []).length;
+    if (!tags) continue;
+    const matches = [...code.matchAll(/<Modal\b[^>]*>/g)];
+    ok(`${f} Modal scan reaches every <Modal> tag`, matches.length === tags,
+       `scanned ${matches.length} of ${tags} - an unscanned Modal is unguarded`);
+    for (const m of matches) {
+      modalsScanned++;
+      ok(`${f} Modal declares supportedOrientations`,
+         /supportedOrientations=/.test(m[0]),
+         'iOS defaults a Modal to portrait only; it renders wrong on a rotated iPad');
+    }
+  }
+  // LiveGameScreen's four sheets (subs, play-by-play, timeout, exit) are the
+  // ones a scorekeeper meets mid-game on a rotated iPad, so the total is
+  // pinned: a refactor that hides them from this scan must fail here.
+  ok('the Modal scan found every modal in src', modalsScanned >= 5,
+     `found ${modalsScanned}; src had 5 when this guard was written, four of ` +
+     'them in LiveGameScreen - a drop means the scan went blind, not that the ' +
+     'modals went away');
+}
+
 console.log('='.repeat(64));
 console.log(`STATIC CHECKS:  ${pass} passed,  ${fail} failed,  ${warn} warnings`);
 if (problems.length) {

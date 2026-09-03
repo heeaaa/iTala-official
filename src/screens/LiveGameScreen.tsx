@@ -801,7 +801,11 @@ function SyncDetailModal({ sync, technical, onClose }:
   const color = syncToneColor[sync.tone];
   const waiting = sync.pending > 0;
   return (
-    <Modal transparent animationType="fade" onRequestClose={onClose}>
+    // iOS defaults a Modal to portrait ONLY. On a rotated iPad an unlisted modal
+    // renders sideways or mis-sized, and two of the four here (Subs and
+    // Play-by-play) sit on the scorekeeper's critical path. ui.tsx's sheet
+    // already carries this prop for the same reason.
+    <Modal transparent animationType="fade" onRequestClose={onClose} supportedOrientations={['portrait', 'landscape']}>
       <Pressable onPress={onClose} style={{ flex: 1, backgroundColor: '#000B', alignItems: 'center', justifyContent: 'center', padding: space(6) }}>
         <Pressable onPress={() => {}} style={{ width: '100%', maxWidth: 360, backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, padding: space(5) }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -843,7 +847,7 @@ function TimeoutModal({ teamName, period, onCancel, onSubmit }:
     return s;
   };
   return (
-    <Modal transparent animationType="fade" onRequestClose={onCancel}>
+    <Modal transparent animationType="fade" onRequestClose={onCancel} supportedOrientations={['portrait', 'landscape']}>
       <Pressable onPress={onCancel} style={{ flex: 1, backgroundColor: '#000B', alignItems: 'center', justifyContent: 'center', padding: space(6) }}>
         <Pressable onPress={() => {}} style={{ width: '100%', maxWidth: 360, backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, padding: space(5) }}>
           <Txt k="h2">Timeout — {teamName}</Txt>
@@ -1053,7 +1057,7 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
   };
 
   return (
-    <Modal transparent animationType="slide" onRequestClose={onClose}>
+    <Modal transparent animationType="slide" onRequestClose={onClose} supportedOrientations={['portrait', 'landscape']}>
       <View style={{ flex: 1, backgroundColor: '#000B', justifyContent: 'flex-end' }}>
         <View style={{ backgroundColor: colors.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: space(4), maxHeight: '85%' }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: space(3) }}>
@@ -1065,7 +1069,7 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
           <View style={{ height: space(3) }} />
 
           {mode === 0 ? (
-            <ScrollView style={{ maxHeight: 420 }}>
+            <ScrollView style={{ maxHeight: 420, flexShrink: 1 }}>
               <Txt k="label" style={{ marginBottom: 6 }}>
                 {lineupFull ? '1. Tap who comes OUT' : `On court (${onCourtIds.length}/${LINEUP_SIZE}) — tap to take OUT`}
               </Txt>
@@ -1115,7 +1119,7 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
           ) : (
             <>
               <Txt k="label" style={{ marginBottom: 6 }}>Pick your {target} on court ({selected.filter(id => !fouledOut.has(id)).length}/{target})</Txt>
-              <ScrollView style={{ maxHeight: 380 }}>
+              <ScrollView style={{ maxHeight: 380, flexShrink: 1 }}>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                   {roster.map(p => {
                     const out = fouledOut.has(p.id);
@@ -1171,7 +1175,7 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
 function PlayByPlayModal({ events, nameOf, teamOf, canDelete, onDelete, onClose }:
   { events: { id: string; period: number; type: EventType; playerId: string | null; teamId: string; note?: string }[]; nameOf: (id: string | null) => string; teamOf: (teamId: string) => PlayLogTeam; canDelete: boolean; onDelete: (id: string) => void; onClose: () => void }) {
   return (
-    <Modal transparent animationType="slide" onRequestClose={onClose}>
+    <Modal transparent animationType="slide" onRequestClose={onClose} supportedOrientations={['portrait', 'landscape']}>
       <View style={{ flex: 1, backgroundColor: '#000B', justifyContent: 'flex-end' }}>
         <View style={{ backgroundColor: colors.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: space(4), maxHeight: '80%' }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: space(3) }}>
@@ -1189,7 +1193,7 @@ function PlayByPlayModal({ events, nameOf, teamOf, canDelete, onDelete, onClose 
             <Txt k="body" color={colors.muted}>No events logged yet.</Txt>
           ) : (
             <FlatList
-              style={{ maxHeight: 460 }}
+              style={{ maxHeight: 460, flexShrink: 1 }}
               data={events}
               keyExtractor={e => e.id}
               // The sheet is inside a Modal, so nothing else scrolls behind it.

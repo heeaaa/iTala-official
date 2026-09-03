@@ -701,6 +701,130 @@ those fixes were written for, so they are the ones worth a device.
 - [ ] **T17** Walk the whole app. No screen shows a route name (for example
       "LeagueDetail") in the header or the iOS back button.
 
+## P11 - orientation: tablets rotate, phones do not (NEW, never run)
+
+Tablets may now rotate so a scorekeeper can run the live tracker in landscape on
+an iPad. Phones stay portrait-locked exactly as before. Automation can only see
+the wiring: `tests/static.test.js` CHECK 26 guards the plist arrays, the single
+navigator-level `orientation`, and `supportedOrientations` on every modal, and
+`tests/reducer.test.js` GROUP S (DC1-DC11) covers the phone-vs-tablet decision
+itself. **Nothing automated has ever seen a device turn.** Everything below is
+device-only.
+
+**Build vehicle matters more here than anywhere else in this document.** Expo Go
+runs its own binary, so it applies neither `Info.plist`
+(`UISupportedInterfaceOrientations~ipad`) nor the Android manifest's portrait
+lock. Orientation results from Expo Go are meaningless in both directions - a
+phone may rotate there and still be correctly locked in a real build, and an
+iPad may refuse to rotate there and be fine. Use a development build, or the
+cheapest honest vehicle: `eas build --profile preview-simulator --platform ios`
+(`eas.json` sets `ios.simulator: true`, so it installs straight onto a simulator
+with no device provisioning). Android needs a dev build or an APK.
+
+### Phones must NOT rotate (the regression nobody remembers to check)
+
+This is the case that hurts a real user, and it is the one that fails silently:
+a single `orientation` on one `Stack.Screen` frees rotation on every screen that
+does not set one. Do these on **both** an iPhone and an Android phone, in a real
+build.
+
+- [ ] **O1** Walk every screen with the device turned on its side: Home, League
+      detail, Teams, Roster, Standings, Leaderboards, Game setup, Live tracker,
+      Box score, Career, Settings, Admin. Nothing rotates anywhere.
+- [ ] **O2** Mid-game on the live tracker, turn the phone to landscape and hold
+      it there while logging four or five stats. The layout does not reflow, the
+      stat pad does not move under your thumb, and no stat lands on the wrong
+      player.
+- [ ] **O3** Turn the phone upside-down (180°) on iOS. It does not flip. (The
+      plist keeps `PortraitUpsideDown`, which is what Expo itself writes for
+      `orientation: "portrait"`, so this must behave exactly as the previous
+      build did - if the old build flipped here, so should this one.)
+- [ ] **O4** With the phone's own rotation lock **off** and auto-rotate on,
+      repeat O1 and O2. The app still does not rotate.
+- [ ] **O5** Open each sheet on a phone (subs, play-by-play, timeout, sync
+      detail, attendance, duplicate league) and turn the device. The sheet stays
+      portrait and stays usable. `supportedOrientations` on a modal must not
+      have accidentally freed rotation on phones.
+
+### iPad rotates, and the live tracker is usable there
+
+- [ ] **O6** Rotate on Home. The app follows the device into landscape and back.
+- [ ] **O7** Start a game and rotate the tracker into landscape. Both team
+      panels, the score, the clock and the stat pad are all reachable; nothing
+      is clipped off the bottom or hidden behind the home indicator.
+- [ ] **O8** In landscape, open the **Subs** sheet. It opens the right way up,
+      fills the screen sensibly rather than rendering a portrait-shaped box on
+      its side, and its confirm button is on-screen and tappable without the
+      keyboard or a scroll trick.
+- [ ] **O9** In landscape, open the **Play-by-play** sheet. Same: correct
+      orientation, the list scrolls, and the ✕-per-line confirmation Alert is
+      readable and its buttons are reachable.
+- [ ] **O10** In landscape, trigger the **timeout** sheet and tap the sync badge
+      for the **sync detail** sheet. Both render upright with reachable buttons.
+      (These four sheets - SyncDetail, Timeout, Subs and PlayByPlay - are the
+      ones that gained `supportedOrientations`; a missed one renders sideways
+      or mis-sized, which is the specific bug this checklist is looking for.)
+- [ ] **O11** Rotate back to portrait with each sheet still open. It stays open,
+      keeps its state (selected players, scroll position) and stays usable.
+- [ ] **O11a** With the iPad rotation lock on (Control Centre), rotate. iOS
+      honours the lock itself, so the app stays put; unlock and it rotates.
+
+### Android tablet
+
+- [ ] **O12** Rotate on Home. It follows the device.
+- [ ] **O13** Rotate **mid-game** on the live tracker, then log an event
+      immediately after the rotation settles. The event is recorded once,
+      against the right player, and the score matches what you logged.
+- [ ] **O14** Same rotation, then check nothing was lost: the running score,
+      period, clock, fouls, on-court lineup and the play-by-play list are all
+      exactly as before the turn.
+- [ ] **O15** After rotating, the app is still on the tracker - no navigation
+      reset back to Home or League detail, and the back gesture goes where it
+      did before. (An Activity recreation that loses the navigation state shows
+      up here.)
+- [ ] **O16** Rotate ten times quickly mid-game, then log a stat. Still one
+      event, still the right player, no duplicate.
+- [ ] **O17** If a **foldable** is available: log a stat folded (phone-sized
+      display), unfold, and confirm the app starts allowing rotation without a
+      restart, and that nothing in the game was lost across the fold.
+- [ ] **O17a** Turn the Android tablet's own auto-rotate **off** (Quick
+      Settings), then rotate it mid-game. The app must NOT rotate. The tablet
+      arm is 'default' (UNSPECIFIED) precisely so the system - and therefore
+      the user's lock - has the final say: a tablet lying flat on a scorer's
+      table with rotation locked must stay put. Turn auto-rotate back on and
+      confirm it rotates again.
+
+### iPad multitasking
+
+- [ ] **O18** Put iTala in **Split View** at the narrow (≈320pt) width beside
+      another app. It still runs, text is readable, the live tracker is usable
+      or at least degrades legibly, and it does **not** decide it is a phone and
+      lock itself portrait.
+- [ ] **O19** **Slide Over** at ≈320pt: same check, then rotate the iPad while
+      iTala is in the Slide Over panel. No crash, no stuck layout.
+- [ ] **O20** Resize from full screen to Split View **while a sheet is open**.
+      The sheet survives the resize and stays dismissible.
+
+### Rotating at the wrong moment
+
+- [ ] **O21** Rotate an iPad while the **keyboard is up** (renaming a team, or
+      the roster paste box). The field keeps focus and its text, the keyboard
+      reappears in the new orientation, and the field is not hidden behind it.
+- [ ] **O22** Rotate while a native **Alert** is up - the exit guard on the live
+      tracker is the one to use. The Alert stays up, stays readable, and its
+      buttons still work; the game underneath is unchanged whichever button you
+      choose.
+- [ ] **O23** Rotate during a sync (log stats offline, re-enable wifi, rotate
+      while the badge is still amber). Sync completes and the badge settles
+      green; no stat is lost or duplicated.
+- [ ] **O24** Rotate, background the app, rotate the device again while it is
+      backgrounded, then foreground it. The app comes back in the current
+      orientation with the game intact.
+- [ ] **O25** With VoiceOver on an iPad, rotate mid-game. Focus is not thrown to
+      the top of the screen mid-sequence, and the stat pad's labels still read
+      correctly in landscape. (P6 covers the labels themselves; this is only
+      about surviving the rotation.)
+
 ## Known limitations (not bugs)
 
 - Push notifications are limited in Expo Go. Use a build.

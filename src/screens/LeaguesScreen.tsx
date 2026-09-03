@@ -361,7 +361,17 @@ Share this with the organizer. It can create exactly one league, then expires.`)
               key={ref.gameId}
               onPress={() => navigation.navigate('LiveGame', { leagueId: ref.leagueId, gameId: ref.gameId, spectator: ref.spectator })}
               style={{
-                width: liveRefs.length === 1 ? windowW - space(4) * 2 : windowW * 0.78,
+                // Capped, because these are proportions of the window and a
+                // tablet in landscape is 1366pt wide: a single card would be
+                // 1334pt, wider than most laptop screens, and the carousel
+                // would show about one card per swipe on a display that could
+                // hold three. The cap only ever engages on a tablet - every
+                // phone width stays well under it, so the phone layout is
+                // untouched.
+                width: Math.min(
+                  liveRefs.length === 1 ? windowW - space(4) * 2 : windowW * 0.78,
+                  520,
+                ),
                 backgroundColor: colors.surface, borderRadius: 14, padding: 14,
                 borderWidth: 1, borderColor: colors.brandTeal,
                 flexDirection: 'row', alignItems: 'center', gap: 12,

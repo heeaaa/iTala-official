@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -15,6 +15,7 @@ import { DMSans_400Regular, DMSans_500Medium, DMSans_700Bold } from '@expo-googl
 import { StoreProvider } from './src/store/StoreProvider';
 import { AdminProvider } from './src/store/AdminProvider';
 import { colors, font } from './src/theme';
+import { useIsTablet } from './src/lib/deviceClass';
 import { RootStackParams } from './src/navigation';
 
 import LeaguesScreen from './src/screens/LeaguesScreen';
@@ -83,6 +84,10 @@ export default function App() {
     return () => clearTimeout(t);
   }, []);
 
+  // Tablets rotate; phones do not. Called before the early return below, because
+  // a hook cannot be conditional.
+  const isTablet = useIsTablet();
+
   const ready = loaded || !!error || timedOut;
 
   if (!ready) {
@@ -107,6 +112,52 @@ export default function App() {
                   headerTitleStyle: { fontFamily: font.displaySemi },
                   headerShadowVisible: false,
                   contentStyle: { backgroundColor: colors.bg },
+                  // Tablets rotate so a scorekeeper can run the live tracker in
+                  // landscape; phones stay exactly as they are.
+                  //
+                  // The OS-level ceilings are set elsewhere and this only picks
+                  // within them: app.json's ios.infoPlist pins iPhone to
+                  // portrait and lets iPad rotate (setting
+                  // UISupportedInterfaceOrientations explicitly makes Expo skip
+                  // its own iOS orientation plugin, which logs a warning about
+                  // ignoring `orientation` - that warning is expected), while
+                  // app.json's global `orientation: "portrait"` still writes the
+                  // Android manifest lock. iOS intersects the plist with the
+                  // value below, so JS can never widen past it. Android's
+                  // setRequestedOrientation overrides the manifest, so on that
+                  // platform the value below is the whole story.
+                  //
+                  // This MUST live in screenOptions and never on an individual
+                  // Stack.Screen. react-native-screens resolves a screen with no
+                  // orientation to SCREEN_ORIENTATION_UNSPECIFIED on Android,
+                  // which OVERRIDES the manifest's portrait lock - so setting it
+                  // on some screens silently frees rotation on every other one.
+                  //
+                  // Every arm of this is platform-specific, because the same
+                  // word means different things on each side and an approximate
+                  // match here is a real bug, not an untidy one.
+                  //
+                  // PHONES. iOS 'portrait' is Portrait+UpsideDown, exactly what
+                  // the plist already says. Android 'portrait' would map to
+                  // SENSOR_PORTRAIT and newly ALLOW upside-down, so it takes
+                  // 'portrait_up' (= SCREEN_ORIENTATION_PORTRAIT) to match the
+                  // manifest. Opposite words, identical no-op.
+                  //
+                  // TABLETS. iOS 'all' is UIInterfaceOrientationMaskAll, which
+                  // UIKit still intersects with the Control Centre rotation
+                  // lock - so a locked iPad stays put. Android 'all' maps to
+                  // SCREEN_ORIENTATION_FULL_SENSOR, which is the constant that
+                  // deliberately IGNORES the user's auto-rotate setting. On a
+                  // tablet lying flat on a scorer's table that is precisely the
+                  // mid-game reflow the phone lock exists to prevent, inflicted
+                  // on someone who explicitly asked for it not to happen.
+                  // 'default' maps to SCREEN_ORIENTATION_UNSPECIFIED instead:
+                  // still a runtime value, so it still overrides the manifest's
+                  // portrait lock and the tablet rotates - but the system, and
+                  // therefore the user's lock, decides.
+                  orientation: isTablet
+                    ? (Platform.OS === 'ios' ? 'all' : 'default')
+                    : (Platform.OS === 'ios' ? 'portrait' : 'portrait_up'),
                 }}>
                 <Stack.Screen name="Leagues" component={LeaguesScreen} options={{ headerShown: false, title: 'Home' }} />
                 <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
