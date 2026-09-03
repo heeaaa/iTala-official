@@ -431,19 +431,49 @@ export function reducer(state: AppState, a: Action): AppState {
       // a league, so a detail read for one this device has never heard of is a
       // race with a delete, not a new league.
       if (!local) return state;
+      // The SAME freshly-created-bundle guard the full HYDRATE applies, and for
+      // the same reason. This read is issued the moment a league's detail is
+      // wanted, and the screen straight after a drop-in game is created is one
+      // of the two callers (LiveGameScreen), so it routinely goes out while
+      // that bundle's single transaction is still on the wire. The reply is
+      // then a snapshot taken BEFORE the write, and replacing teams and players
+      // with it deletes the two teams and their players - while the pending
+      // ledger legitimately keeps the game row, because that write is still
+      // open. What is left is a game pointing at teams the device no longer
+      // has, which is the "?" team name this guard was written to prevent.
+      //
+      // HYDRATE has carried this since the guard existed; HYDRATE_LEAGUE
+      // arrived later with the scoped pull and never got it, so the bug came
+      // back on exactly the path a user with no membership in the community
+      // space takes - their pull never covers it, so its detail is always
+      // fetched this way.
+      const bundles = activeBundles().filter(b => b.leagueId === a.leagueId);
+      const guardedGames = new Set(bundles.flatMap(b => b.gameIds));
+      const guardedTeams = new Set(bundles.flatMap(b => b.teamIds));
+      const guardedPlayers = new Set(bundles.flatMap(b => b.playerIds));
       return {
         ...state,
-        leagues: state.leagues.map(l => l.id !== a.leagueId ? l : {
-          ...l,
-          teams: a.detail.teams,
-          players: a.detail.players,
+        leagues: state.leagues.map(l => {
+          if (l.id !== a.leagueId) return l;
+          const haveTeams = new Set(a.detail.teams.map(t => t.id));
+          const havePlayers = new Set(a.detail.players.map(p => p.id));
           // The same reconciliation a full pull applies, for the same reason: a
           // lineup or a basket logged while this read was in flight must not be
           // reverted by it. See sync/pendingEvents.ts.
-          games: reconcileLeagueGames(l.id, a.detail.games, a.snapshotAt, l.games),
-          events: reconcileLeagueEvents(l.id, a.detail.events, a.snapshotAt),
-          _redo: l._redo,
-          detailLoaded: true,
+          const games = reconcileLeagueGames(l.id, a.detail.games, a.snapshotAt, l.games);
+          const haveGames = new Set(games.map(g => g.id));
+          return {
+            ...l,
+            // Appended, never substituted: the server's copy of a row it does
+            // have always wins, exactly as it does in HYDRATE.
+            teams: [...a.detail.teams, ...l.teams.filter(t => guardedTeams.has(t.id) && !haveTeams.has(t.id))],
+            players: [...a.detail.players, ...l.players.filter(p => guardedPlayers.has(p.id) && !havePlayers.has(p.id))],
+            // Prepended, so a just-created game stays at the top of its list.
+            games: [...l.games.filter(g => guardedGames.has(g.id) && !haveGames.has(g.id)), ...games],
+            events: reconcileLeagueEvents(l.id, a.detail.events, a.snapshotAt),
+            _redo: l._redo,
+            detailLoaded: true,
+          };
         }),
       };
     }
