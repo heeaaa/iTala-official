@@ -388,6 +388,73 @@ async function p5_a_game_created_offline_survives_a_force_quit() {
   eq('P5.10 nothing is left waiting', B.ctx.pendingWrites, 0);
 }
 
+/* --------------------------------------------------------------------------
+ * A LEAGUE-DETAIL READ MUST NOT STRIP A DROP-IN BUNDLE THAT IS STILL IN FLIGHT.
+ *
+ * The reported bug: a plain signed-in user starts a PUBLIC (community) drop-in
+ * game, and the card in the Community Drop-in space then names its teams "?"
+ * and "?" (GamesOnDateScreen falls back to '?' when a team id resolves to
+ * nothing).
+ *
+ * `rec_setup_game` writes the league, both teams, every player and the game in
+ * ONE server transaction, so until it commits the server answers a detail read
+ * with nothing at all. HYDRATE_LEAGUE replaced `teams` and `players` with that
+ * reply outright, while the pending ledger correctly KEPT the game row - whose
+ * write is still open. The result is a game whose home and away team ids name
+ * rows the device no longer holds.
+ *
+ * It bites a non-admin specifically. Nothing grants a membership of the shared
+ * space for a public game (supabase/schema.sql: rec_setup_game only inserts
+ * league_members for a PRIVATE space, and RecGameScreen only reloads
+ * memberships when !makePublic), so `computeScope` never covers 'rec-shared'
+ * for them and its detail is only ever fetched through this path. A Super Admin
+ * is seeded as owner of every league, so their pulls cover it and go through
+ * HYDRATE - which has carried the bundle guard all along.
+ * -------------------------------------------------------------------------- */
+async function p6_a_detail_read_must_not_strip_an_in_flight_dropin_bundle() {
+  wipeDisk();
+  const server = new FakeServer();
+  const A = new Phone(server);
+  await A.settle();
+
+  // The community space as a plain user meets it: present in the catalogue (the
+  // leagues read is never scoped) with no detail, because no pull covers it.
+  server.rows.leagues.push({
+    id: 'rec-shared', name: 'Community Drop-in Games (Papawis)', season: 'Drop-In',
+    kind: 'recreational', foul_out_limit: null, track_misses: true, track_turnovers: true,
+    is_shared: true, is_closed: null, is_archived: null, created_at: 1,
+  });
+  await A.ctx.refresh();
+  await A.settle();
+  eq('P6.0 the space arrived with no detail', !!(A.league('rec-shared') || {}).detailLoaded, false);
+
+  // Slow on purpose. It stands for the window in which the bundle transaction
+  // has not committed, which is exactly when the next screen asks for detail.
+  server.latency['rpc:rec_setup_game'] = 3000;
+  A.ctx.dispatch({
+    t: 'REC_SETUP_GAME', leagueId: 'rec-shared', gameId: 'gPub', location: 'Court 2',
+    trackMisses: true, trackTurnovers: true, createdBy: 'u1',
+    teams: [
+      { id: 'tPubA', name: 'Alpha', color: '#12D7D0', players: [{ id: 'pPubA', name: 'Ana', number: '1' }] },
+      { id: 'tPubB', name: 'Bravo', color: '#C7F000', players: [{ id: 'pPubB', name: 'Ben', number: '2' }] },
+    ],
+  });
+
+  // LiveGameScreen (and LeagueDetailScreen) call this whenever a league's
+  // detail is missing - which is the very next screen after creation.
+  void A.ctx.loadLeagueDetail('rec-shared');
+  await A.settle(40);
+
+  const lg = A.league('rec-shared') || { teams: [], players: [], games: [] };
+  const ids = JSON.stringify(lg.teams.map(t => t.id));
+  ok('P6.1 the new drop-in game is still on the device', !!lg.games.find(x => x.id === 'gPub'));
+  ok('P6.2 ...and the home team that names it survived the detail read',
+     !!lg.teams.find(t => t.id === 'tPubA'), `teams on device: ${ids}`);
+  ok('P6.3 ...and the away team',
+     !!lg.teams.find(t => t.id === 'tPubB'), `teams on device: ${ids}`);
+  eq('P6.4 ...and both rosters', lg.players.length, 2);
+}
+
 /* --------------------------------------------------------------- preflight --
  * A harness whose storage or whose server wiring silently does nothing can
  * report any result it likes, in either direction. Both were briefly true here:
@@ -461,6 +528,7 @@ const groups = [
   ['P3 a truncated read must not delete the game', p3_a_truncated_read_must_not_delete_the_game],
   ['P4 a refused write is not reported saved', p4_a_refused_write_is_not_reported_saved],
   ['P5 a game created offline survives a force-quit', p5_a_game_created_offline_survives_a_force_quit],
+  ['P6 a detail read must not strip an in-flight drop-in bundle', p6_a_detail_read_must_not_strip_an_in_flight_dropin_bundle],
 ];
 
 (async () => {
