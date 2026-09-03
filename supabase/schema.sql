@@ -458,9 +458,28 @@ begin
 end $$;
 
 -- Games: per-row check so a community drop-in game is writable only by whoever
--- created it. created_by is server-owned - stamped by rec_setup_game on the
--- bundle insert and by the games_own_creator trigger below on every other write
--- - so a client write can neither claim it nor clear it.
+-- created it. created_by is stamped server-side - by rec_setup_game on the
+-- bundle insert, and by the games_own_creator trigger below on every other
+-- write.
+--
+-- Precisely what that guarantees, because the difference matters to anyone
+-- relying on it: an ESTABLISHED creator cannot be REPLACED, in one statement,
+-- by a client sending a different uid. It is not an absolute invariant.
+-- Clearing is permitted, because `on delete set null` on the auth.users foreign
+-- key is an UPDATE and intercepting it would leave rows pointing at deleted
+-- accounts - so anyone who may write the row at all can null the column in one
+-- statement and stamp a new uid in the next.
+--
+-- That two-step is inert everywhere it could matter. In the shared space the
+-- clear is itself refused, because this policy's WITH CHECK re-evaluates
+-- can_score_row(league_id, NULL) on the post-trigger row and an unowned row
+-- there belongs to nobody. Everywhere else can_score_row falls through to
+-- can_score() and never reads the column. What is left is a Super Admin, who
+-- can already write anything, and pre-stamping a normal-league game against a
+-- later is_shared flip, for which no client path exists (pinned as X1 in
+-- tests/sql/league_roles.test.sql). Closing it properly would mean permitting
+-- NULL only when the old uid is gone from auth.users, which costs this trigger
+-- its "reads no table, needs no elevated rights" property.
 drop policy if exists "games_write_scorer" on public.games;
 create policy "games_write_scorer" on public.games for all
   using (public.can_score_row(league_id, created_by))
@@ -904,11 +923,16 @@ begin
   end if;
   -- The team update was already league-scoped, and it stays a silent no-op when
   -- it matches nothing. Deliberate, and different from the player upsert above:
-  -- ADD_PLAYER is NOT in MUST_NOT_FAIL_SILENTLY, so a raise here would be
-  -- swallowed by `check` in src/sync/sync.ts AND would roll back the player
-  -- insert with it - losing the player entirely rather than just its team
-  -- wiring, which the next full push or pull repairs. A cross-league team id
-  -- cannot corrupt anything from here: the WHERE already refuses it.
+  -- a raise here would roll the player insert back with it, losing the player
+  -- entirely rather than just its team wiring, which the next full push or pull
+  -- repairs. A cross-league team id cannot corrupt anything from here anyway -
+  -- the WHERE already refuses it.
+  --
+  -- (This used to argue that `check` in src/sync/sync.ts would swallow the
+  -- error too, since ADD_PLAYER is not in MUST_NOT_FAIL_SILENTLY. That is no
+  -- longer true: check now collects row-level refusals into PushOutcome.refused
+  -- and the chip turns red. The rollback above is the reason that survives -
+  -- and a raise would additionally pin an outbox entry that can never succeed.)
   update public.teams
      set player_ids = array_append(array_remove(player_ids, p_player_id), p_player_id)
    where id = p_team_id and league_id = p_league_id;

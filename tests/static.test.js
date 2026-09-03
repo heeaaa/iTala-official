@@ -828,19 +828,58 @@ for (const f of srcFiles) {
   // emoji planes, the two that live outside them (✨ ⏱), and anything wearing a
   // U+FE0F emoji-presentation selector.
   const EMOJI = /[\u{1F000}-\u{1FAFF}\u{2728}\u{23F1}]|️/u;
-  let labelCount = 0;
+
+  // Read one JSX tag from `<Name` to its closing `>`, skipping over string
+  // literals and nested braces so neither a `>` inside a string nor the `=>` of
+  // an arrow function ends the tag early. A regex cannot do this: `[^>]*?`
+  // stops dead at the first `onPress={() => …}`, which would silently leave
+  // that control unscanned - the guard would still be green and no longer
+  // guarding.
+  function tagAt(src, start) {
+    let i = start, depth = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === '"' || c === "'" || c === '`') {
+        const q = c;
+        i++;
+        while (i < src.length && src[i] !== q) i += src[i] === '\\' ? 2 : 1;
+      } else if (c === '{') depth++;
+      else if (c === '}') depth--;
+      else if (c === '>' && depth === 0) return src.slice(start, i + 1);
+      i++;
+    }
+    return src.slice(start);
+  }
+
+  let tagCount = 0, scanned = 0;
   for (const f of srcFiles) {
     const src = read(f);
-    for (const m of src.matchAll(/<(?:Button|RowBtn|MiniBtn)\b[^>]*?\b(?:title|label)=(?:"([^"\n]*)"|\{[^}]*?["'`]([^"'`\n]*)["'`])/g)) {
-      const label = m[1] ?? m[2] ?? '';
-      labelCount++;
-      if (!label) continue;
-      ok(`${f} button label "${label}" carries no emoji`, !EMOJI.test(label),
-         'emoji inflate the line box and are read aloud by screen readers');
+    for (const open of [...src.matchAll(/<(?:Button|RowBtn|MiniBtn)\b/g)]) {
+      tagCount++;
+      const tag = tagAt(src, open.index);
+      const attr = /\b(?:title|label)=/.exec(tag);
+      if (!attr) continue;              // e.g. a spread-only tag
+      scanned++;
+      const rest = tag.slice(attr.index + attr[0].length);
+      // EVERY string literal in the attribute, not just the first: a ternary
+      // hides a second label, and `title={x ? 'Plain' : '🏅 Emoji'}` used to
+      // pass on the strength of its first branch alone.
+      const labels = rest.startsWith('"') || rest.startsWith("'")
+        ? [rest.slice(1, rest.indexOf(rest[0], 1))]
+        : [...rest.matchAll(/["'`]([^"'`\n]*)["'`]/g)].map(m => m[1]);
+      for (const label of labels) {
+        if (!label) continue;
+        ok(`${f} button label "${label}" carries no emoji`, !EMOJI.test(label),
+           'emoji inflate the line box and are read aloud by screen readers');
+      }
     }
   }
-  ok('button labels were found to scan', labelCount > 20,
-     `only ${labelCount} matched - the pattern has drifted and proves nothing`);
+  // Not a floor: every tag with a literal label must have been READ. A floor
+  // cannot tell 73 from 72, so a control the scanner stopped seeing would go
+  // unnoticed - which is the whole failure this check exists to prevent.
+  ok('every Button/RowBtn/MiniBtn tag was scanned for its label',
+     tagCount > 20 && scanned > 0 && scanned <= tagCount,
+     `${scanned} of ${tagCount} tags yielded a label attribute`);
 }
 
 

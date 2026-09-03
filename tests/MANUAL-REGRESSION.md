@@ -265,7 +265,7 @@ Highest probability of defects. Each of these was a real bug at some point.
 
 ### Drop-in cleanup and auto-hide
 
-- [ ] **R104** With finished drop-in games present, the "🧹 Clean up old games"
+- [ ] **R104** With finished drop-in games present, the "Clean up old games"
       button appears in the Games tab.
 - [ ] **R105** Gating: Private = anyone who can score there. Community =
       Super Admin only. Verify with a non-admin account.

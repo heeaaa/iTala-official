@@ -92,9 +92,15 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   // rule — one shared league holding everyone's pickup games, scoreable only by
   // whoever started each one — and that is worth stating out loud rather than
   // leaving people to guess.
+  // The trailing hint is not padding: tapping a team to see its on-court five
+  // is the ONLY thing a spectator can do here, and it is invisible - the chips
+  // carry no affordance of their own. The line it replaced said so, and dropping
+  // it while adding the reason would have traded one missing explanation for
+  // another. No eye emoji: same reasoning as the button labels, and a screen
+  // reader reads this string out.
   const spectatorReason = league?.kind === 'recreational' && league?.isShared
-    ? '👁  Spectator — only whoever started this drop-in game can score it.'
-    : '👁  Spectator — you do not have scoring access to this league.';
+    ? 'Spectator. Only whoever started this game can score it. Tap a team to see its on-court 5.'
+    : 'Spectator. You cannot score in this league. Tap a team to see its on-court 5.';
 
   const [activeSide, setActiveSide] = useState<'home' | 'away'>('home');
   // `armed` drives rendering; `armedRef` is the authority for whether a tap may
