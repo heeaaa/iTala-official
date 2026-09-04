@@ -216,6 +216,15 @@ export default function PlayerProfileScreen({ route, navigation }: ScreenProps<'
         </>
       )}
 
+      <Button
+        title="Report this information"
+        kind="ghost"
+        style={{ marginTop: space(5) }}
+        onPress={() => navigation.navigate('ReportContent', {
+          recordType: 'player', recordId: playerId, leagueId, teamId: team?.id, label: player.name,
+        })}
+      />
+
       </ScrollView>
 
       {/* Off-screen shareable stat card */}

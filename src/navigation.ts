@@ -26,6 +26,13 @@ export type RootStackParams = {
   ManagePromos: undefined;
   BulkImport: { leagueId: string };
   PlayerProfile: { leagueId: string; playerId: string };
+  ReportContent: {
+    recordType: 'player' | 'team' | 'game' | 'league';
+    recordId: string;
+    leagueId: string;
+    teamId?: string;
+    label: string;
+  };
 };
 
 export type ScreenProps<T extends keyof RootStackParams> = NativeStackScreenProps<RootStackParams, T>;

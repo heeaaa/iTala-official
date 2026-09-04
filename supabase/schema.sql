@@ -1169,6 +1169,119 @@ $$;
 grant execute on function public.lock_admin() to anon, authenticated;
 
 -- =============================================================================
+-- 5b) CONTENT REPORTS — private UGC/privacy review queue
+-- =============================================================================
+-- Reports are never part of the public read model. A signed-in app session may
+-- submit through the narrow SECURITY DEFINER RPC below; only Super Admins can
+-- read or update the review columns. There is deliberately no delete policy.
+create table if not exists public.content_reports (
+  id               uuid primary key default gen_random_uuid(),
+  reference        text not null unique,
+  record_type      text not null check (record_type in ('player','team','game','league')),
+  record_id        text not null,
+  league_id        text not null,
+  team_id          text,
+  reporter_user_id uuid not null,
+  reason           text not null check (reason in (
+    'Incorrect information',
+    'Remove personal information',
+    'I’m the player, parent or guardian',
+    'Inappropriate or abusive content',
+    'Unauthorized image',
+    'Other privacy concern'
+  )),
+  explanation      text,
+  contact_email    text,
+  status           text not null default 'New' check (status in ('New','Reviewing','Resolved','Rejected')),
+  resolution_note  text,
+  submitted_at     timestamptz not null default now(),
+  reviewed_at      timestamptz,
+  reviewed_by      uuid
+);
+create index if not exists content_reports_status_idx on public.content_reports (status, submitted_at);
+alter table public.content_reports enable row level security;
+
+drop policy if exists "content_reports_admin_read" on public.content_reports;
+drop policy if exists "content_reports_admin_update" on public.content_reports;
+create policy "content_reports_admin_read" on public.content_reports
+  for select using (public.is_admin());
+create policy "content_reports_admin_update" on public.content_reports
+  for update using (public.is_admin()) with check (public.is_admin());
+
+revoke all on table public.content_reports from public, anon, authenticated;
+grant select, update on table public.content_reports to authenticated;
+
+create or replace function public.submit_content_report(
+  p_record_type text,
+  p_record_id text,
+  p_league_id text,
+  p_team_id text,
+  p_reason text,
+  p_explanation text default null,
+  p_contact_email text default null
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  ref text;
+  submitted timestamptz := now();
+  actual_league text;
+begin
+  if uid is null then raise exception 'An app session is required.'; end if;
+  if p_record_type not in ('player','team','game','league') then raise exception 'Unsupported record type.'; end if;
+  if p_reason not in (
+    'Incorrect information', 'Remove personal information',
+    'I’m the player, parent or guardian', 'Inappropriate or abusive content',
+    'Unauthorized image', 'Other privacy concern'
+  ) then raise exception 'Unsupported report reason.'; end if;
+  if length(coalesce(p_explanation, '')) > 2000 then raise exception 'Explanation is too long.'; end if;
+  if length(coalesce(p_contact_email, '')) > 254 then raise exception 'Contact email is too long.'; end if;
+  if nullif(btrim(coalesce(p_contact_email, '')), '') is not null
+     and btrim(p_contact_email) !~* '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'
+  then raise exception 'Enter a valid contact email or leave it blank.'; end if;
+
+  if p_record_type = 'league' then
+    select id into actual_league from public.leagues where id = p_record_id;
+  elsif p_record_type = 'team' then
+    select league_id into actual_league from public.teams where id = p_record_id;
+  elsif p_record_type = 'game' then
+    select league_id into actual_league from public.games where id = p_record_id;
+  else
+    select league_id into actual_league from public.players where id = p_record_id;
+  end if;
+  if actual_league is null or actual_league <> p_league_id then
+    raise exception 'The reported record could not be found in that league.';
+  end if;
+  if p_team_id is not null and not exists (
+    select 1 from public.teams t
+     where t.id = p_team_id and t.league_id = actual_league
+       and (p_record_type <> 'player' or p_record_id = any(t.player_ids))
+  ) then raise exception 'The team context is invalid.'; end if;
+
+  -- Human-readable but non-sequential: it is safe to show to the reporter and
+  -- does not disclose report volume.
+  ref := 'ITR-' || to_char(submitted at time zone 'UTC', 'YYYYMMDD') || '-'
+      || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 8));
+
+  insert into public.content_reports (
+    reference, record_type, record_id, league_id, team_id, reporter_user_id,
+    reason, explanation, contact_email, submitted_at
+  ) values (
+    ref, p_record_type, p_record_id, actual_league, p_team_id, uid,
+    p_reason, nullif(btrim(coalesce(p_explanation, '')), ''),
+    nullif(lower(btrim(coalesce(p_contact_email, ''))), ''), submitted
+  );
+
+  return jsonb_build_object('reference', ref, 'submitted_at', submitted);
+end;
+$$;
+revoke all on function public.submit_content_report(text,text,text,text,text,text,text) from public;
+grant execute on function public.submit_content_report(text,text,text,text,text,text,text) to anon, authenticated;
+
+-- =============================================================================
 -- 6) REALTIME — publish event changes so live games stream to spectators
 -- =============================================================================
 -- The supabase_realtime publication ships with the project; we add our tables.

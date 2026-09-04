@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Pressable } from 'react-native';
-import { Screen, Txt, Card, Pill, TeamBadge, Empty } from '../components/ui';
+import { Screen, Txt, Card, Pill, TeamBadge, Empty, Button } from '../components/ui';
 import { useLeague } from '../store/StoreProvider';
 import { colors, space, font } from '../theme';
 import { ScreenProps } from '../navigation';
@@ -116,6 +116,14 @@ export default function TeamProfileScreen({ route, navigation }: ScreenProps<'Te
           </Pressable>
         ))}
       </Card>
+      <Button
+        title="Report this information"
+        kind="ghost"
+        style={{ marginTop: space(5) }}
+        onPress={() => navigation.navigate('ReportContent', {
+          recordType: 'team', recordId: teamId, leagueId, teamId, label: team.name,
+        })}
+      />
     </Screen>
   );
 }

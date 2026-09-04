@@ -1574,6 +1574,51 @@ for (const f of srcFiles) {
      + 'both can be on screen at once');
 }
 
+// ---------------------------------------------------------------------------
+// CONTENT REPORTING - the four public content surfaces must keep their report
+// route, and the server queue must remain write-via-RPC and private by default.
+// ---------------------------------------------------------------------------
+{
+  const navigation = read('src/navigation.ts');
+  const app = read('App.tsx');
+  const form = read('src/screens/ReportContentScreen.tsx');
+  const schema = read('supabase/schema.sql');
+  const surfaces = [
+    'src/screens/PlayerProfileScreen.tsx',
+    'src/screens/TeamProfileScreen.tsx',
+    'src/screens/BoxScoreScreen.tsx',
+    'src/screens/LeagueDetailScreen.tsx',
+  ];
+
+  ok('content-report route is typed and registered',
+     /ReportContent:/.test(navigation) && /name="ReportContent"/.test(app),
+     'the report action must open a real registered screen');
+  for (const path of surfaces) {
+    const source = read(path);
+    ok(`${path} exposes Report this information`,
+       source.includes('Report this information') && source.includes("navigate('ReportContent'"),
+       'players, teams, games and leagues all need an in-app reporting route');
+  }
+  ok('report form offers every required concern without requiring contact details',
+     /REPORT_REASONS\.map/.test(form) && /Contact email \(optional\)/.test(form)
+       && /Explanation \(optional\)/.test(form),
+     'the reporter should be able to submit without disclosing unnecessary personal information');
+  ok('content reports are submitted through a definer RPC',
+     /function public\.submit_content_report/.test(schema)
+       && /security definer[\s\S]*?set search_path = public[\s\S]*?insert into public\.content_reports/.test(schema),
+     'clients must not receive direct insert access to the private review table');
+  ok('content report table is RLS-private and has no public read policy',
+     /alter table public\.content_reports enable row level security/.test(schema)
+       && /revoke all on table public\.content_reports from public, anon, authenticated/.test(schema)
+       && !/content_reports[^\n]*read_all/.test(schema),
+     'reports can contain privacy requests and contact emails, so they must never enter the public read model');
+  for (const status of ['New', 'Reviewing', 'Resolved', 'Rejected']) {
+    ok(`content reports support ${status} status`, schema.includes(`'${status}'`),
+       'administrators need the complete review lifecycle');
+  }
+  ok('content reports carry an internal resolution note', /resolution_note\s+text/.test(schema),
+     'administrators need a private place to record the outcome');
+}
 
 console.log('='.repeat(64));
 console.log(`STATIC CHECKS:  ${pass} passed,  ${fail} failed,  ${warn} warnings`);
