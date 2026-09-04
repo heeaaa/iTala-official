@@ -37,6 +37,7 @@ import ShareCardScreen from './src/screens/ShareCardScreen';
 import ManagePromosScreen from './src/screens/ManagePromosScreen';
 import BulkImportScreen from './src/screens/BulkImportScreen';
 import PlayerProfileScreen from './src/screens/PlayerProfileScreen';
+import ReportContentScreen from './src/screens/ReportContentScreen';
 
 const Stack = createNativeStackNavigator<RootStackParams>();
 
@@ -178,6 +179,7 @@ export default function App() {
                 <Stack.Screen name="ManagePromos" component={ManagePromosScreen} options={{ ...brandHeader, title: 'Sponsor Promos' }} />
                 <Stack.Screen name="BulkImport" component={BulkImportScreen} options={{ ...brandHeader, title: 'Bulk Import' }} />
                 <Stack.Screen name="PlayerProfile" component={PlayerProfileScreen} options={{ ...brandHeader, title: 'Player' }} />
+                <Stack.Screen name="ReportContent" component={ReportContentScreen} options={{ title: 'Report Information' }} />
               </Stack.Navigator>
             </NavigationContainer>
           </AdminProvider>

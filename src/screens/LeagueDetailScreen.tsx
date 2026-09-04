@@ -652,6 +652,16 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
             )}
           </>
         )}
+        {!showSettings && (
+          <Button
+            title="Report this information"
+            kind="ghost"
+            style={{ marginTop: space(5), marginBottom: scorer && !isRec && !seasonOver ? space(16) : 0 }}
+            onPress={() => navigation.navigate('ReportContent', {
+              recordType: 'league', recordId: leagueId, leagueId, label: league.name,
+            })}
+          />
+        )}
       </ScrollView>
 
       {scorer && !showSettings && !isRec && !seasonOver && (

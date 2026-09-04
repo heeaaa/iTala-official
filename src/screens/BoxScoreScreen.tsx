@@ -298,6 +298,15 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
             ))
           }
         </Card>
+        <Button
+          title="Report this information"
+          kind="ghost"
+          style={{ marginTop: space(5) }}
+          onPress={() => navigation.navigate('ReportContent', {
+            recordType: 'game', recordId: gameId, leagueId,
+            label: `${homeTeam.name} vs ${awayTeam.name}`,
+          })}
+        />
       </ScrollView>
 
       {/* Off-screen share card — captured by react-native-view-shot. Rendered at
