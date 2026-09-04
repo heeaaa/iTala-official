@@ -170,16 +170,23 @@ export function Txt({ k = 'body', style, children, color, numberOfLines, adjusts
 
 // Primary button uses the brand gradient; ghost/danger are outlined.
 //
-// The two kinds must end up the SAME height, because they are routinely placed
+// The two kinds must end up the SAME SIZE, because they are routinely placed
 // side by side in a `flexDirection: 'row'` (Home's Drop-In / New League bar, the
 // Cancel / confirm pairs in the attendance, duplicate-league and timeout
-// sheets). Two things used to break that:
-//   * ghost paints its 1px border on the Pressable, so its box is 2px taller
-//     than primary, whose padding lives on the inner gradient. Primary now
-//     carries a transparent border of the same width, so both box models match.
+// sheets). Three things broke that in turn:
+//   * ghost paints its 1px border on the Pressable, so its box was 2px taller
+//     than primary, whose padding lives on the inner gradient.
 //   * a row stretches both Pressables to the tallest of them, but the gradient
 //     sized itself to its own padding and left bare background below it -
 //     `flexGrow` makes it fill the height it was actually given.
+//   * primary then matched ghost's OUTER box with a 1px transparent border, but
+//     RN lays children out inside the border, so the colored pill was drawn 2px
+//     narrower and 2px shorter than the ghost outline next to it - the Home bar
+//     read as "Drop-In is longer than New League". The border is gone and its
+//     1px is folded into the gradient's own padding (14+1, 18+1) instead: the
+//     outer box is exactly the size it was, for every caller including the
+//     ones that pass extra padding through `style`, but the gradient now reaches
+//     the edges. Keep the two paddings one apart or the kinds drift again.
 export function Button({ title, onPress, kind = 'primary', style, disabled }:
   { title: string; onPress: () => void; kind?: 'primary' | 'ghost' | 'danger'; style?: ViewStyle; disabled?: boolean }) {
   if (kind === 'primary') {
@@ -188,11 +195,11 @@ export function Button({ title, onPress, kind = 'primary', style, disabled }:
         accessibilityRole="button"
         accessibilityLabel={title}
         accessibilityState={{ disabled: !!disabled }}
-        style={({ pressed }) => [{ borderRadius: radius.md, borderWidth: 1, borderColor: 'transparent', opacity: disabled ? 0.4 : pressed ? 0.9 : 1 }, style]}>
+        style={({ pressed }) => [{ borderRadius: radius.md, opacity: disabled ? 0.4 : pressed ? 0.9 : 1 }, style]}>
         <LinearGradient
           colors={brandGradient}
           start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-          style={{ paddingVertical: 14, paddingHorizontal: 18, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', width: '100%', flexGrow: 1 }}>
+          style={{ paddingVertical: 15, paddingHorizontal: 19, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', width: '100%', flexGrow: 1 }}>
           <Text style={{ fontFamily: font.bodyBold, fontSize: 15, color: colors.bg, letterSpacing: 0.3, textAlign: 'center' }}>{title}</Text>
         </LinearGradient>
       </Pressable>

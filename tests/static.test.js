@@ -779,28 +779,56 @@ for (const f of srcFiles) {
 // CHECK 15 - the two Button kinds must stay the same size. They sit side by
 // side in a row in five places (Home's Drop-In / New League bar and the
 // Cancel / confirm pairs in the attendance, duplicate-league and timeout
-// sheets), and they drifted apart twice over: ghost paints a 1px border on the
-// Pressable while primary's padding lives on the inner gradient, and the
+// sheets), and they drifted apart three times over: ghost paints a 1px border on
+// the Pressable while primary's padding lives on the inner gradient; the
 // gradient sized itself to that padding instead of filling the height a row
 // stretch had already given the Pressable - so the primary button was visibly
-// shorter with bare background under it.
+// shorter with bare background under it; and the transparent border that fixed
+// the OUTER box left the colored pill drawn 2px inside it, because RN lays
+// children out within the border. Home read as "Drop-In is longer than New
+// League". Primary now carries no border and folds that 1px into the gradient's
+// own padding, so the outer box is unchanged and the gradient reaches the edges.
 //
-// Structural only. It cannot measure a rendered height; it guards the three
-// declarations that make the two box models identical, and on-device
-// confirmation is still required.
+// Structural only. It cannot measure a rendered size; it guards the declarations
+// that make the two box models identical, and on-device confirmation is still
+// required.
 // ---------------------------------------------------------------------------
 {
   const ui = read('src/components/ui.tsx');
   const primary = ui.slice(ui.indexOf("if (kind === 'primary')"), ui.indexOf('const fg = kind ==='));
-  ok('ui.tsx primary Button reserves the same 1px border box as ghost',
-     /borderWidth: 1, borderColor: 'transparent'/.test(primary),
-     'without it primary is 2px shorter than the ghost beside it');
+  const ghost = ui.slice(ui.indexOf('const fg = kind ==='), ui.indexOf('export function Card'));
+
+  ok('ui.tsx primary Button does not inset its gradient behind a border',
+     !/borderWidth:/.test(primary),
+     'RN lays children inside the border, so any border on the Pressable draws '
+     + 'the pill narrower and shorter than the ghost outline beside it');
   ok('ui.tsx primary Button gradient fills the height it is given',
      /flexGrow: 1/.test(primary),
      'a row stretch grows the Pressable; the gradient must grow with it');
-  ok('ui.tsx both Button kinds use the same vertical padding',
-     (ui.match(/paddingVertical: 14, paddingHorizontal: 18/g) || []).length >= 2,
-     'equal borders do not help if the padding differs');
+  ok('ui.tsx primary Button gradient fills the width it is given',
+     /width: '100%'/.test(primary),
+     'without it the gradient shrinks to its text and the pill is narrower than ghost');
+
+  // The real invariant, read off the source rather than hard-coded: ghost spends
+  // 1px of its box on a visible border, primary spends none, so primary's
+  // padding must be exactly 1 greater on each axis for the two outer boxes to
+  // match. Parsing both means this fails if either side is retuned alone.
+  const pad = (src) => {
+    const m = /paddingVertical: (\d+), paddingHorizontal: (\d+)/.exec(src);
+    return m ? { v: +m[1], h: +m[2] } : null;
+  };
+  const pPad = pad(primary), gPad = pad(ghost);
+  const gBorder = /borderWidth: 1\b/.test(ghost) ? 1 : 0;
+  ok('ui.tsx both Button kinds declare their padding where this check can read it',
+     !!pPad && !!gPad && gBorder === 1,
+     `primary=${JSON.stringify(pPad)} ghost=${JSON.stringify(gPad)} ghostBorder=${gBorder}`
+     + ' - the size comparison below proves nothing otherwise');
+  if (pPad && gPad) {
+    ok('ui.tsx the two Button kinds occupy the same box',
+       pPad.v === gPad.v + gBorder && pPad.h === gPad.h + gBorder,
+       `primary ${pPad.v}/${pPad.h} vs ghost ${gPad.v}/${gPad.h} + ${gBorder}px border`
+       + ' - side-by-side buttons would render different sizes');
+  }
 
   // Home's action bar: plain text labels. The basketball emoji came from a
   // different font with a taller line box, which grew the ghost button beyond
@@ -1360,6 +1388,192 @@ for (const f of srcFiles) {
      'them in LiveGameScreen - a drop means the scan went blind, not that the ' +
      'modals went away');
 }
+
+// ---------------------------------------------------------------------------
+// CHECK 27 - a game is created by Tip off, not on the way to the lineup screen.
+//
+// NewGameScreen used to dispatch CREATE_GAME and then navigate to
+// SelectLineup. The row existed - locally, on disk and, once pushed, on the
+// server - before anyone had chosen a lineup, so backing out of the lineup
+// screen left a live game on the League page, in the calendar and on every
+// other device reading `status = 'live'`. It happened most visibly when it was
+// least wanted: a team with no players disables Tip off, and the only thing
+// left to do IS back out.
+//
+// Neither a status filter nor a cleanup-on-unmount would have covered it.
+// GamesOnDateScreen renders 'scheduled' rows too, LeaguesScreen treats any
+// non-live/non-final server row as a live card, and an unmount cleanup cannot
+// run at all when the app is force-quit. Not creating the row is the only
+// version with nothing left over.
+//
+// Structural, because the harness stubs React's hooks with constants and
+// cannot mount a screen. It pins WHERE the write lives, which is the property
+// that regressed.
+// ---------------------------------------------------------------------------
+{
+  const newGame = read('src/screens/NewGameScreen.tsx');
+  const lineup = read('src/screens/SelectLineupScreen.tsx');
+  ok('NewGameScreen does not create the game', !/'CREATE_GAME'/.test(newGame),
+     'a game created before the lineup screen is live on the League page even if Tip off is never pressed');
+  ok('SelectLineupScreen creates the game', /'CREATE_GAME'/.test(lineup),
+     'Tip off is the only place the game may come into existence');
+  ok('NewGameScreen hands the teams to the lineup screen', /pending:\s*\{/.test(newGame),
+     'without the pending teams the lineup screen has no game row to read them from');
+  ok('SelectLineupScreen reads the pending teams', /pending\?\.homeTeamId/.test(lineup),
+     'it must fall back to the route params when the game row does not exist yet');
+  // The drop-in flow must keep working: REC_SETUP_GAME creates its game with
+  // its teams and players in one transaction, so that path arrives with the row
+  // already present and no `pending`.
+  ok('the drop-in flow still navigates without pending teams',
+     /replace\('SelectLineup',\s*\{\s*leagueId:\s*recId,\s*gameId\s*\}\)/.test(read('src/screens/RecGameScreen.tsx')),
+     'RecGameScreen must keep using the already-created game row');
+  ok('SelectLineupScreen still updates an existing game rather than recreating it',
+     /'SET_LINEUPS'/.test(lineup),
+     'the drop-in game already exists; Tip off there is a lineup write, not a creation');
+  ok('SelectLineup declares the pending param', /pending\?:\s*\{/.test(read('src/navigation.ts')),
+     'an undeclared route param is a runtime-only failure');
+}
+
+// ---------------------------------------------------------------------------
+// CHECK 28 - every reducer case that MINTS an id must be resolved by
+// stampActionIds first.
+//
+// The reducer runs twice for one dispatch: once in the provider's wrapper, to
+// produce the rows pushAction mirrors, and again in useReducer for the rows the
+// screen renders. A `uid()` INSIDE the reducer therefore runs twice and returns
+// two different ids, so the server and the device end up disagreeing about what
+// the row is called - the duplicated team with no logo, the dangling awayTeamId
+// that renders "?", and "This game couldn't be loaded".
+//
+// ADD_EVENT, ADD_TEAM, ADD_PLAYER and DUPLICATE_LEAGUE are all stamped now.
+// This is the check that stops the FIFTH one from being added without stamping:
+// it reads the reducer body, maps every `uid()` back to the `case` it sits in,
+// and requires stampActionIds to handle that action type. A new id-minting case
+// fails here rather than in a bug report six weeks later.
+//
+// Structural. It proves where the ids are resolved, not that the resolution is
+// correct - GROUP IDS/IDS2 in tests/reducer.test.js do that behaviourally.
+// ---------------------------------------------------------------------------
+{
+  // Newline-normalised: this repo has mixed line endings and the slices below
+  // are cut on newline anchors, so a CRLF checkout would silently yield empty
+  // slices and a check that asserts nothing.
+  const store = read('src/store/StoreProvider.tsx').replace(/\r\n/g, '\n');
+  const rStart = store.indexOf('export function reducer(');
+  const rEnd = store.indexOf('\ninterface Ctx', rStart);
+  const stampStart = store.indexOf('export function stampActionIds(');
+  const stampEnd = store.indexOf('\n}\n', stampStart);
+  ok('StoreProvider still has a reducer and a stampActionIds to read',
+     rStart > 0 && rEnd > rStart && stampStart > 0 && stampEnd > stampStart,
+     'the checks below prove nothing if the slices are empty');
+
+  const reducerBody = store.slice(rStart, rEnd);
+  const stampBody = store.slice(stampStart, stampEnd);
+
+  // Which `case` is a given offset inside? The reducer is one flat switch, so
+  // the nearest preceding `case 'X':` is the owner.
+  const caseAt = (offset) => {
+    let name = null;
+    for (const m of reducerBody.matchAll(/case '([A-Z_]+)'/g)) {
+      if (m.index > offset) break;
+      name = m[1];
+    }
+    return name;
+  };
+
+  const minting = new Set();
+  for (const m of reducerBody.matchAll(/\buid\(\)/g)) {
+    const c = caseAt(m.index);
+    if (c) minting.add(c);
+  }
+  ok('CHECK 26 reads a reducer that still mints ids at all', minting.size > 0,
+     'no uid() found inside the reducer - either it moved, or this check has gone vacuous');
+
+  for (const t of minting) {
+    ok(`reducer case ${t} mints an id, so stampActionIds must resolve it first`,
+       new RegExp(`action\\.t === '${t}'`).test(stampBody),
+       'the reducer runs twice per dispatch, so a uid() here gives the server one '
+       + 'id and the screen another - the duplicate-team / "?" away-team bug');
+  }
+
+  // The clock, held to the fields it is allowed to land in. A timestamp that
+  // drifts a millisecond between the two runs is survivable; an IDENTITY, a
+  // sort key or a dedup key computed from the clock is the same bug as uid().
+  const CLOCK_FIELDS = new Set(['createdAt', 'scheduledAt', 'finishedAt', 'ts']);
+  for (const m of reducerBody.matchAll(/Date\.now\(\)/g)) {
+    const lineStart = reducerBody.lastIndexOf('\n', m.index) + 1;
+    const before = reducerBody.slice(lineStart, m.index);
+    const props = [...before.matchAll(/(\w+)\s*:/g)];
+    const field = props.length ? props[props.length - 1][1] : '(unknown)';
+    ok(`reducer Date.now() in case ${caseAt(m.index)} lands in a timestamp field, not an identity`,
+       CLOCK_FIELDS.has(field),
+       `it is assigned to "${field}" - the two reducer runs read the clock separately, `
+       + 'so anything used as an id, a sort key or a dedup key must be stamped instead');
+  }
+
+  ok('the reducer draws no randomness of its own', !/Math\.random/.test(reducerBody),
+     'a random value differs between the two runs exactly as uid() did');
+
+  // The Tip-off double-tap guard. `start()` dispatches CREATE_GAME and only
+  // then calls navigation.replace, and the Button has no busy state, so two
+  // taps in one frame both arrive with the id minted on the previous screen.
+  ok('CREATE_GAME is idempotent on the game id',
+     /case 'CREATE_GAME'[\s\S]{0,1500}?l\.games\.some\(g => g\.id === a\.id\)/.test(reducerBody),
+     'without it two taps on Tip off put two Game objects with one id into state - '
+     + 'duplicate React keys, and every per-game aggregate counting the game twice');
+}
+
+// ---------------------------------------------------------------------------
+// CHECK 29 - the lineup screen must not paint an EMPTY team as ready.
+//
+// `target` is Math.min(LINEUP_SIZE, roster.length), so a team with no players
+// has target 0 - and a bare `selected.length === target` is 0 === 0, which
+// painted that team's "0/0" in the green this screen uses to mean "this side is
+// set", directly above a Tip off button that could never enable. The user is
+// then looking at two green chips and a dead control, with the only explanation
+// ("No players on this team yet") scrolled off the top.
+//
+// Structural only, and deliberately so: the readiness rule and the chip colour
+// both live inside a component, and this harness stubs React's hooks with
+// constants and cannot mount one. It pins the two source expressions that make
+// the rule true. Whether the chip actually renders grey, and whether the
+// blocking line is announced before the disabled button, still needs a device -
+// see tests/MANUAL-REGRESSION.md.
+// ---------------------------------------------------------------------------
+{
+  const lineup = read('src/screens/SelectLineupScreen.tsx');
+
+  ok('SelectLineupScreen only greens the lineup chip when the team HAS a roster',
+     /target > 0 && selected\.length === target \? colors\.green/.test(lineup),
+     'target is 0 for an empty roster, so "selected.length === target" alone paints 0/0 green');
+
+  // Green must still be reachable, or the check above could be satisfied by a
+  // chip that is never green at all.
+  ok('...and a filled lineup can still be green', /colors\.green/.test(lineup),
+     'the ready state has to remain expressible');
+
+  // Tip off itself was never wrong - it is gated on a non-empty selection, not
+  // on the chip - but that is the invariant the chip is supposed to agree with,
+  // so it is asserted here rather than assumed.
+  ok('Tip off is gated on an actual selection per side',
+     /\(homeTeam\.teamOnly \|\| home\.length > 0\) && \(awayTeam\.teamOnly \|\| away\.length > 0\)/.test(lineup),
+     'a team-only opponent needs no lineup; every other side needs at least one player');
+
+  // The reason, next to the control. A disabled button with no explanation is
+  // the reported complaint; naming the teams is what makes it actionable.
+  ok('SelectLineupScreen names the teams that are blocking Tip off',
+     /blockingHint/.test(lineup),
+     'a dimmed Tip off with no reason beside it is what was reported');
+  // Grouped, not a single verb for both sides. A roster can be deselected to
+  // zero, so one team can need a player ADDED while the other needs one PICKED
+  // in the same render; one shared verb told the user to go add players to a
+  // team that already had five.
+  ok('...and distinguishes "add a player" from "pick a starter" PER TEAM',
+     /needAdding/.test(lineup) && /needPicking/.test(lineup),
+     'an empty roster and an unpicked lineup need different instructions, and '
+     + 'both can be on screen at once');
+}
+
 
 console.log('='.repeat(64));
 console.log(`STATIC CHECKS:  ${pass} passed,  ${fail} failed,  ${warn} warnings`);

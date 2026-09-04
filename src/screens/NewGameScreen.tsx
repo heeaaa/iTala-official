@@ -1,14 +1,13 @@
 import React, { useState } from 'react';
 import { View, ScrollView } from 'react-native';
 import { Screen, Txt, Card, Button, Field, TeamBadge } from '../components/ui';
-import { useStore, useLeague } from '../store/StoreProvider';
+import { useLeague } from '../store/StoreProvider';
 import { colors, space } from '../theme';
 import { uid } from '../lib/format';
 import { ScreenProps } from '../navigation';
 
 export default function NewGameScreen({ route, navigation }: ScreenProps<'NewGame'>) {
   const { leagueId } = route.params;
-  const { dispatch } = useStore();
   const league = useLeague(leagueId);
   const [home, setHome] = useState<string | null>(null);
   const [away, setAway] = useState<string | null>(null);
@@ -26,9 +25,18 @@ export default function NewGameScreen({ route, navigation }: ScreenProps<'NewGam
 
   const start = () => {
     if (!home || !away) return;
+    // The game row is deliberately NOT created here. Creating it on the way to
+    // the lineup screen meant a game that was never tipped off - because the
+    // user backed out, or because one side had no players and Tip off was
+    // correctly disabled - was already live on the League page, in the calendar
+    // and, once pushed, on every other device reading `status = 'live'`.
+    // The id is minted now so the lineup screen and the live screen agree on
+    // it; SelectLineup creates the row when Tip off is actually pressed.
     const gameId = uid();
-    dispatch({ t: 'CREATE_GAME', id: gameId, leagueId, homeTeamId: home, awayTeamId: away, location: location || undefined });
-    navigation.replace('SelectLineup', { leagueId, gameId });
+    navigation.replace('SelectLineup', {
+      leagueId, gameId,
+      pending: { homeTeamId: home, awayTeamId: away, location: location || undefined },
+    });
   };
   return (
     <Screen>

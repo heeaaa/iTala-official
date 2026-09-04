@@ -31,7 +31,11 @@ export default function CreateLeagueScreen({ route, navigation }: ScreenProps<'C
   return (
     <Screen scroll>
       <Txt k="h1" style={{ marginBottom: space(5) }}>New League</Txt>
-      <Field label="League name" value={name} onChangeText={setName} placeholder="Sunday Run, Office League…" />
+      {/* Keep this hint SHORT. "Sunday Run, Office League…" overflowed the
+          input, and Android then stretched the hint to fill the line - users
+          saw "S u n d a y  R u n, O f fi c e", letter-spaced and cut off. A
+          placeholder that fits the field is never justified. */}
+      <Field label="League name" value={name} onChangeText={setName} placeholder="Sunday Run" />
       <Field label="Season" value={season} onChangeText={setSeason} placeholder="Spring 2026" />
       <Card style={{ marginTop: space(2) }}>
         <Toggle

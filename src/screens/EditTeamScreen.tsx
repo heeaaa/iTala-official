@@ -4,7 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { Screen, Txt, Button, Field, TeamBadge } from '../components/ui';
 import { useStore, useLeague } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
-import { colors, space, radius, font, teamColors } from '../theme';
+import { colors, space, radius, font, teamColors, describeColor } from '../theme';
 import { ScreenProps } from '../navigation';
 import { Player } from '../types';
 
@@ -128,7 +128,7 @@ export default function EditTeamScreen({ route, navigation }: ScreenProps<'EditT
         </View>
 
         <Field label="Team name" value={name} onChangeText={setName} />
-        <Field label="Coach (optional)" value={coach} onChangeText={setCoach} placeholder="Coach Bogs" />
+        <Field label="Coach (optional)" value={coach} onChangeText={setCoach} placeholder="Full name" />
         <Button
           title={savedTick ? '✓ Saved' : 'Save details'}
           kind={savedTick ? 'ghost' : 'primary'}
@@ -136,10 +136,18 @@ export default function EditTeamScreen({ route, navigation }: ScreenProps<'EditT
           style={{ marginTop: space(1), marginBottom: space(4) }}
         />
 
-        {/* Color */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+        {/* Color: a name and a chip, never the hex. "#3A78FF" meant nothing to
+            most users - but replacing it with a bare dot would have gone the
+            other way and communicated the current color by hue ALONE, which is
+            no use to a color-blind user and nothing for a screen reader to read.
+            The name carries the meaning; the chip shows the actual color. */}
+        <View
+          accessible
+          accessibilityLabel={`Team color: ${describeColor(team.color)}`}
+          style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
           <Txt k="label" style={{ flex: 1 }}>Team color</Txt>
-          <Txt k="body" color={colors.muted} style={{ fontSize: 12 }}>{team.color.toUpperCase()}</Txt>
+          <Txt k="body" color={colors.muted} style={{ fontSize: 12, marginRight: 8 }}>{describeColor(team.color)}</Txt>
+          <View style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: team.color, borderWidth: 1, borderColor: colors.line }} />
         </View>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: space(3) }}>
           {teamColors.map(c => (
@@ -248,7 +256,17 @@ export default function EditTeamScreen({ route, navigation }: ScreenProps<'EditT
 // with a gap so it reads clearly even for very dark swatches.
 function Swatch({ c, selected, onPress }: { c: string; selected: boolean; onPress: () => void }) {
   return (
-    <Pressable onPress={onPress} hitSlop={4}
+    // 34 + 5 + 5 = 44x44, Apple's HIG minimum. At hitSlop 4 it was 42 and
+    // every swatch was 2pt short, on a grid of 60 adjacent targets where a
+    // mistap silently changes the team's color. `gap: 10` on the rows means
+    // neighboring hit areas now abut exactly rather than overlapping.
+    <Pressable onPress={onPress} hitSlop={5}
+      accessibilityRole="button"
+      // The grid is 60 unlabeled circles. Without a name and a selected state
+      // a screen reader announced sixty identical "button"s and gave no way to
+      // tell which one the team is currently using.
+      accessibilityLabel={describeColor(c)}
+      accessibilityState={{ selected }}
       style={{
         width: 34, height: 34, borderRadius: 17,
         alignItems: 'center', justifyContent: 'center',
