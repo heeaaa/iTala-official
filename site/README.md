@@ -8,6 +8,8 @@ declaration tables in `docs/DEPLOYMENT.md` that it has to agree with. Those are 
 site/
   index.html          minimal landing page
   privacy/index.html  the privacy policy
+  terms/index.html    terms of use
+  content-policy/     content and moderation policy
   support/index.html  support contacts and help route
   style.css           shared styles, light and dark
   _headers            security headers, applied by Cloudflare to every response
@@ -38,8 +40,9 @@ To verify a change before pushing:
 npx wrangler@4 deploy --dry-run     # should read the assets directory, not error
 ```
 
-Paste the deployed `/privacy/` URL into both store listings. A custom domain can
-be attached later without changing the path.
+Paste the deployed `/privacy/`, `/terms/`, `/content-policy/` and `/support/` URLs into the
+relevant store-listing fields and review notes. A custom domain can be attached later without
+changing the paths.
 
 `site/README.md` itself is excluded from the upload by `.assetsignore` - without
 that it would be served at `/README.md`.

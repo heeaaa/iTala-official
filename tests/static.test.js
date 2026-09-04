@@ -1647,6 +1647,60 @@ for (const f of srcFiles) {
      'users and reviewers must be able to discover the support route from home');
 }
 
+// ---------------------------------------------------------------------------
+// LEGAL SITE - the Terms and Content Policy must remain deployable, discoverable
+// from the landing page, and connected to the existing privacy/support routes.
+// These checks protect the stable URLs supplied to app-store review.
+// ---------------------------------------------------------------------------
+{
+  const landing = read('site/index.html');
+  const legalPages = [
+    {
+      path: 'site/terms/index.html',
+      route: './terms/',
+      title: '<title>iTala Terms of Use</title>',
+      required: ['Eligibility', 'Roles and league responsibility', 'Governing law'],
+    },
+    {
+      path: 'site/content-policy/index.html',
+      route: './content-policy/',
+      title: '<title>iTala Content Policy</title>',
+      required: ['Prohibited content', 'How to report content', 'Review and moderation'],
+    },
+  ];
+
+  for (const page of legalPages) {
+    const pageExists = exists(page.path);
+    ok(`${page.path} exists`, pageExists, 'the published legal URL must have an index document');
+    ok(`home links to ${page.route}`, landing.includes(`href="${page.route}"`),
+       'legal pages must be discoverable from the public landing page');
+    if (!pageExists) continue;
+
+    const html = read(page.path);
+    ok(`${page.path} has its document title`, html.includes(page.title), page.title);
+    ok(`${page.path} uses the shared legal-site stylesheet`,
+       html.includes('href="../style.css"'), 'policy pages must match the existing iTala design');
+    for (const heading of page.required) {
+      ok(`${page.path} covers ${heading}`, html.includes(heading), `missing: "${heading}"`);
+    }
+    for (const route of ['../privacy/', '../terms/', '../content-policy/', '../support/']) {
+      const isCurrentPage = (page.path.includes('/terms/') && route === '../terms/')
+        || (page.path.includes('/content-policy/') && route === '../content-policy/');
+      if (!isCurrentPage) {
+        ok(`${page.path} links to ${route}`, html.includes(`href="${route}"`),
+           'legal and support pages should not strand readers');
+      }
+    }
+  }
+
+  const privacy = read('site/privacy/index.html');
+  ok('privacy footer links to Terms and Content Policy',
+     /<footer>[\s\S]*href="\.\.\/terms\/"[\s\S]*href="\.\.\/content-policy\/"[\s\S]*<\/footer>/.test(privacy),
+     'all legal documents must be mutually discoverable');
+  ok('landing page shows a support email address', /href="mailto:[^"]+"/.test(landing),
+     'the public home page must expose a contact method without another click');
+}
+
 console.log('='.repeat(64));
 console.log(`STATIC CHECKS:  ${pass} passed,  ${fail} failed,  ${warn} warnings`);
 if (problems.length) {
