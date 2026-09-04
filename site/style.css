@@ -577,8 +577,13 @@ footer {
   .feature-grid { grid-template-columns: 1fr; }
   .feature-card,
   .feature-card-wide { grid-row: auto; min-height: 48rem; }
+  .feature-card-wide .feature-copy {
+    min-height: 16rem;
+    background: linear-gradient(to bottom, rgba(10,17,29,.98) 76%, rgba(10,17,29,0));
+  }
   .feature-card img,
   .feature-card-wide img { width: min(70%, 26rem); }
+  .feature-card-wide img { top: 16rem; bottom: auto; }
   .screen-stack { width: min(100%, 38rem); margin: 0 auto; }
   .landing-footer { grid-template-columns: 1fr; }
   .landing-footer nav { flex-wrap: wrap; }
@@ -604,7 +609,7 @@ footer {
   .section-heading { margin-bottom: 1.5rem; }
   .feature-card,
   .feature-card-wide { min-height: 38rem; }
-  .feature-card-wide img { right: 6%; bottom: -17%; width: 76%; }
+  .feature-card-wide img { top: 15rem; right: 6%; bottom: auto; width: 76%; }
   .feature-card:not(.feature-card-wide) img { top: 15rem; right: 6%; bottom: auto; width: 76%; }
   .screen-stack { min-height: 36rem; }
   .screen-stack img { width: 67%; border-radius: 1rem; }
