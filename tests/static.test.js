@@ -1620,6 +1620,33 @@ for (const f of srcFiles) {
      'administrators need a private place to record the outcome');
 }
 
+// ---------------------------------------------------------------------------
+// SUPPORT URL - App Store and Play review need a reachable support route with
+// a real contact method, not a landing page that leaves users at a dead end.
+// ---------------------------------------------------------------------------
+{
+  const supportPath = 'site/support/index.html';
+  const supportExists = exists(supportPath);
+  ok('a support page exists at /support/', supportExists,
+     'store listings need a stable, publicly reachable support URL');
+  if (supportExists) {
+    const support = read(supportPath);
+    ok('support page has a specific document title', /<title>iTala Support<\/title>/.test(support),
+       'the page must identify itself clearly in browsers and store review');
+    ok('support page provides a working email contact',
+       /href="mailto:[^"]+"/.test(support),
+       'a support URL without a contact method does not help users');
+    ok('support page links back to iTala', /href="\.\.\/"/.test(support),
+       'the standalone support route should not strand visitors');
+    ok('support page warns against sending sensitive account information',
+       /do not send passwords or other sensitive account information/i.test(support),
+       'support email should not encourage users to disclose credentials');
+  }
+  const landing = read('site/index.html');
+  ok('public home page visibly links to support', /href="\.\/support\/"/.test(landing),
+     'users and reviewers must be able to discover the support route from home');
+}
+
 console.log('='.repeat(64));
 console.log(`STATIC CHECKS:  ${pass} passed,  ${fail} failed,  ${warn} warnings`);
 if (problems.length) {

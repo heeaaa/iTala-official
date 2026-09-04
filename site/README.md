@@ -8,6 +8,7 @@ declaration tables in `docs/DEPLOYMENT.md` that it has to agree with. Those are 
 site/
   index.html          minimal landing page
   privacy/index.html  the privacy policy
+  support/index.html  support contacts and help route
   style.css           shared styles, light and dark
   _headers            security headers, applied by Cloudflare to every response
   .assetsignore       files here that are repo documentation, not published pages
