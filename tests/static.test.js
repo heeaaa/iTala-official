@@ -1390,7 +1390,7 @@ for (const f of srcFiles) {
 }
 
 // ---------------------------------------------------------------------------
-// CHECK 25 - a game is created by Tip off, not on the way to the lineup screen.
+// CHECK 27 - a game is created by Tip off, not on the way to the lineup screen.
 //
 // NewGameScreen used to dispatch CREATE_GAME and then navigate to
 // SelectLineup. The row existed - locally, on disk and, once pushed, on the
@@ -1435,7 +1435,7 @@ for (const f of srcFiles) {
 }
 
 // ---------------------------------------------------------------------------
-// CHECK 26 - every reducer case that MINTS an id must be resolved by
+// CHECK 28 - every reducer case that MINTS an id must be resolved by
 // stampActionIds first.
 //
 // The reducer runs twice for one dispatch: once in the provider's wrapper, to
@@ -1524,7 +1524,7 @@ for (const f of srcFiles) {
 }
 
 // ---------------------------------------------------------------------------
-// CHECK 27 - the lineup screen must not paint an EMPTY team as ready.
+// CHECK 29 - the lineup screen must not paint an EMPTY team as ready.
 //
 // `target` is Math.min(LINEUP_SIZE, roster.length), so a team with no players
 // has target 0 - and a bare `selected.length === target` is 0 === 0, which
@@ -1562,11 +1562,16 @@ for (const f of srcFiles) {
   // The reason, next to the control. A disabled button with no explanation is
   // the reported complaint; naming the teams is what makes it actionable.
   ok('SelectLineupScreen names the teams that are blocking Tip off',
-     /blockingNames/.test(lineup),
+     /blockingHint/.test(lineup),
      'a dimmed Tip off with no reason beside it is what was reported');
-  ok('...and distinguishes "add a player" from "pick a player"',
-     /needsRoster/.test(lineup),
-     'an empty roster and an unpicked lineup need different instructions');
+  // Grouped, not a single verb for both sides. A roster can be deselected to
+  // zero, so one team can need a player ADDED while the other needs one PICKED
+  // in the same render; one shared verb told the user to go add players to a
+  // team that already had five.
+  ok('...and distinguishes "add a player" from "pick a starter" PER TEAM',
+     /needAdding/.test(lineup) && /needPicking/.test(lineup),
+     'an empty roster and an unpicked lineup need different instructions, and '
+     + 'both can be on screen at once');
 }
 
 

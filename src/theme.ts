@@ -160,7 +160,13 @@ export function describeColor(hex: string): string {
   if (s < 10) return l >= 60 ? 'light grey' : l <= 35 ? 'dark grey' : 'grey';
   // +15 so each name is centred on its hue rather than starting at it.
   const hue = HUE_NAMES[Math.floor(((h + 15) % 360) / 30)];
-  return l >= 62 ? `light ${hue}` : l <= 38 ? `deep ${hue}` : hue;
+  // Every derived name carries its lightness band, INCLUDING the middle one.
+  // Bare `hue` would collide with the curated table - '#33C076' is named
+  // "green" there, and the shade grid's mid green derives "green" too - so a
+  // screen reader announced two different swatches identically. No curated
+  // name starts with light/mid/deep, so banding them all keeps the two name
+  // spaces disjoint.
+  return l >= 62 ? `light ${hue}` : l <= 38 ? `deep ${hue}` : `mid ${hue}`;
 }
 
 // Stat pad buttons — semantic, tuned for dark UI

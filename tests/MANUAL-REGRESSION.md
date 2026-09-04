@@ -64,13 +64,15 @@ Highest probability of defects. Each of these was a real bug at some point.
       into the league, open the live card) while it is still saving.
       *Expect:* the game and its teams persist. This is the exact race that used
       to delete them.
-- [ ] **R6** Pick a starting lineup, tap Next, then check the live tracker.
+- [ ] **R6** Pick a starting lineup, tap **Tip off**, then check the live tracker.
       *Expect:* the lineup you chose is already applied. You should not have to
-      re-select it.
+      re-select it. (N-40 moved creation to Tip off, so the game row and its
+      lineups are now written by that one press - see P12.)
 - [ ] **R7** Repeat R6 three or four times. The old bug was intermittent, so a
       single pass proves little.
 - [ ] **R8** Set team colours during creation (tap the colour swatch to cycle).
       *Expect:* chosen colours appear in the tracker, box score and share cards.
+      In **Edit Team** the colour is now NAMED, not shown as a hex code (N-40).
 - [ ] **R9** Per-game stat toggles at creation (track misses / turnovers off).
       *Expect:* the tracker and box score respect the per-game choice, not the
       league default.
@@ -211,7 +213,8 @@ Highest probability of defects. Each of these was a real bug at some point.
 ### Full game flow
 
 - [ ] **R69** Create a scheduled game (home vs away, date, location).
-- [ ] **R70** Select starting lineups for both teams.
+- [ ] **R70** Select starting lineups for both teams, then tap Tip off. Nothing
+      is saved until that press (N-40).
 - [ ] **R71** Log the full stat range: 2pt make/miss, 3pt make/miss, FT
       make/miss, rebound, assist, steal, block, turnover, foul.
 - [ ] **R72** Verify the live score updates correctly after each.
@@ -824,6 +827,58 @@ build.
       the top of the screen mid-sequence, and the stat pad's labels still read
       correctly in landscape. (P6 covers the labels themselves; this is only
       about surviving the rotation.)
+
+## P12 - game creation, the lineup gate, and the Button box (N-40, NEW, never run)
+
+N-40 moved WHEN a game comes into existence, changed a shared UI primitive, and
+reworked the colour picker's labels and hit areas. `tests/static.test.js`
+CHECK 27/28/29 pin where the write lives, that no reducer case mints an id
+outside `stampActionIds`, and the readiness colour rule - but the harness stubs
+React's hooks with constants and cannot mount a screen, so **nothing automated
+here has seen a pixel, a tap or a screen reader.** Everything below is
+device-only.
+
+- [ ] **R161** *The reported bug, end to end.* Redeem a league creation code as a
+      normal (non-admin) signed-in user. Add two teams and players. Edit the
+      first team, rename it and upload a logo. Go to the league, Start a Game,
+      pick lineups, Tip off. *Expect:* the tracker opens - no endless spinner.
+      Force-quit, reopen, open the league. *Expect:* the game shows BOTH team
+      names (no `?`), it opens, and Standings lists each team ONCE, the edited
+      one keeping its logo and roster.
+- [ ] **R162** Start a Game, pick the two teams, tap **Next: lineups**, then back
+      out with the OS back gesture. Check the League page and the calendar.
+      *Expect:* NO game anywhere. This is the defect N-40 fixed; before it a live
+      game appeared even though Tip off was never pressed.
+- [ ] **R163** Repeat R162 but back out from the lineup screen after selecting
+      players. Same expectation: nothing saved anywhere.
+- [ ] **R164** Start a game where one team has NO players. *Expect:* Tip off is
+      disabled, that team's chip reads `0/0` in GREY (not green), and a line
+      above the button names that team and says to add a player to it.
+- [ ] **R165** Now a mixed case: give both teams rosters, deselect every player
+      on one side, and use a second team whose roster is empty. *Expect:* the
+      line distinguishes the two - "add a player to X, and pick a starter for
+      Y" - and does NOT tell you to add players to the team that already has
+      five.
+- [ ] **R166** Double-tap **Tip off** as fast as you can, on the slowest device
+      you have. *Expect:* exactly ONE game in the league list, and games-played
+      in Standings counts it once. No duplicate-key warning in the console.
+- [ ] **R167** Drop-in flow regression: start a drop-in game from Home. *Expect:*
+      unchanged behaviour - the game already exists when the lineup screen
+      opens, and Tip off applies lineups rather than creating anything.
+- [ ] **R168** Home screen: look at the **Drop-In** and **New League** buttons
+      side by side. *Expect:* identical width AND height, with the New League
+      gradient reaching its edges rather than sitting inset. Check at the
+      largest system font size too.
+- [ ] **R169** New League screen: look at the League name placeholder. *Expect:*
+      normal text ("Sunday Run"), NOT letter-stretched or justified. Check on an
+      Android device with a large display size - that is where the old, longer
+      placeholder rendered as "S u n d a y  R u n, O f fi c e".
+- [ ] **R170** *Screen reader.* With VoiceOver, and again with TalkBack, open Edit
+      Team. *Expect:* the colour row announces a NAME ("Team color: azure"), not
+      a hex code; every swatch announces its own distinct name; the selected
+      swatch is announced as selected; and each swatch is comfortably tappable
+      (44x44). Then open a lineup screen with an empty team and confirm the
+      blocking line is reached BEFORE the dimmed Tip off button.
 
 ## Known limitations (not bugs)
 

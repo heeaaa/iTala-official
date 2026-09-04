@@ -86,12 +86,22 @@ export default function SelectLineupScreen({ route, navigation }: ScreenProps<'S
   // A disabled button with no reason next to it is the whole complaint: a team
   // with an empty roster can NEVER satisfy `ready`, so the user is left tapping
   // a dead control with the explanation ("No players on this team yet")
-  // scrolled off the top. Name the teams that are blocking, and say whether the
-  // fix is picking someone or adding someone.
-  const blocking = [homeTeam, awayTeam].filter(t => !t.teamOnly &&
-    (t === homeTeam ? home : away).length === 0);
-  const blockingNames = blocking.map(t => t.name).join(' and ');
-  const needsRoster = blocking.some(t => t.playerIds.length === 0);
+  // scrolled off the top.
+  //
+  // The two ways a side can block need DIFFERENT instructions, and a side can
+  // block for each reason at the same time: nothing stops you deselecting a
+  // full roster down to zero, so "pick someone" and "add someone" can both be
+  // true across the two teams. One shared verb sent the user to Manage Roster
+  // for a team that already had one, so group the teams by what each actually
+  // needs.
+  const blocked = [{ team: homeTeam, picked: home }, { team: awayTeam, picked: away }]
+    .filter(x => !x.team.teamOnly && x.picked.length === 0);
+  const needAdding = blocked.filter(x => x.team.playerIds.length === 0).map(x => x.team.name);
+  const needPicking = blocked.filter(x => x.team.playerIds.length > 0).map(x => x.team.name);
+  const blockingHint = [
+    needAdding.length ? `add a player to ${needAdding.join(' and ')}` : '',
+    needPicking.length ? `pick a starter for ${needPicking.join(' and ')}` : '',
+  ].filter(Boolean).join(', and ');
 
   const start = () => {
     const homeIds = homeTeam.teamOnly ? [] : home;
@@ -130,12 +140,10 @@ export default function SelectLineupScreen({ route, navigation }: ScreenProps<'S
       <View style={{ position: 'absolute', left: space(4), right: space(4), bottom: space(6) }}>
         {/* Above the button, so it comes first in reading order and a screen
             reader reaches it before the dimmed control it explains. */}
-        {!ready && blockingNames ? (
+        {!ready && blockingHint ? (
           <Txt k="body" color={colors.muted}
             style={{ marginBottom: 8, textAlign: 'center', fontSize: 13 }}>
-            {needsRoster
-              ? `Add at least one player to ${blockingNames} to start.`
-              : `Pick at least one player for ${blockingNames}.`}
+            To start, {blockingHint}.
           </Txt>
         ) : null}
         <Button title="Tip off  ▶" onPress={start} disabled={!ready} />
