@@ -3,32 +3,153 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>iTala</title>
-<meta name="description" content="iTala - basketball scorekeeping and stats for local leagues and drop-in games.">
+<title>iTala — Basketball, fully recorded</title>
+<meta name="description" content="Live basketball scoring, complete player stats, league standings and shareable game cards with iTala.">
 <link rel="stylesheet" href="./style.css">
 </head>
-<body>
-<header>
-  <h1>iTala</h1>
-  <p class="sub">Basketball scorekeeping and stats for local leagues and drop-in games.</p>
+<body class="landing">
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="landing-nav">
+  <a class="wordmark" href="./" aria-label="iTala home"><span aria-hidden="true">i</span>Tala</a>
+  <nav aria-label="Main navigation">
+    <a href="#features">Features</a>
+    <a href="#how-it-works">How it works</a>
+  </nav>
 </header>
-<main>
-  <p>
-    iTala tracks live box scores, standings, player careers and awards. Games can be scored
-    entirely offline on one device, or synced across several devices so a scorekeeper, a bench and
-    spectators all see the same game.
-  </p>
-  <h2>Legal</h2>
-  <ul>
-    <li><a href="./privacy/">Privacy policy</a></li>
-  </ul>
-  <h2>Support</h2>
-  <p>
-    Need help with iTala? Visit the <a href="./support/">support page</a> to contact us.
-  </p>
+
+<main id="main" class="landing-main">
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="hero-copy">
+      <p class="eyebrow"><span></span> Built for the next possession</p>
+      <h1 id="hero-title">Every game.<br><em>Fully recorded.</em></h1>
+      <p class="hero-lede">
+        Live scoring, complete player stats and league control—built for local basketball,
+        from tip-off to the final box score.
+      </p>
+      <div class="hero-actions">
+        <a class="button button-quiet" href="#features">See the app</a>
+      </div>
+    </div>
+
+    <div class="hero-visual">
+      <div class="hero-orbit" aria-hidden="true"></div>
+      <img
+        src="./assets/itala-live-scoring.png"
+        width="941"
+        height="1672"
+        alt="iTala live scoring screen and box score shown on two iPhones"
+        fetchpriority="high">
+    </div>
+  </section>
+
+  <div class="signal-strip" aria-label="iTala highlights">
+    <p><strong>01</strong> Live scoring</p>
+    <p><strong>02</strong> Offline-ready</p>
+    <p><strong>03</strong> Shareable results</p>
+  </div>
+
+  <section id="features" class="feature-intro section-shell" aria-labelledby="features-title">
+    <div class="section-heading">
+      <p class="eyebrow"><span></span> Game-changing details</p>
+      <h2 id="features-title">The whole season<br>in your pocket.</h2>
+      <p>Score the action. Follow every player. Share the moments that matter.</p>
+    </div>
+
+    <div class="feature-grid">
+      <article class="feature-card feature-card-wide">
+        <div class="feature-copy">
+          <p class="feature-number">01</p>
+          <h3>Score at game speed.</h3>
+          <p>Log plays fast, manage the floor and keep the live game moving—even when the connection drops.</p>
+        </div>
+        <img
+          src="./assets/itala-box-score.png"
+          width="1320"
+          height="2868"
+          alt="iTala box score with player totals and a play-by-play feed"
+          loading="lazy">
+      </article>
+
+      <article class="feature-card feature-card-dark">
+        <div class="feature-copy">
+          <p class="feature-number">02</p>
+          <h3>See who leads.</h3>
+          <p>Standings and player leaderboards update from every completed game.</p>
+        </div>
+        <img
+          src="./assets/itala-leaderboards.png"
+          width="1206"
+          height="2622"
+          alt="iTala league leaderboard showing points and rebounds leaders"
+          loading="lazy">
+      </article>
+
+      <article class="feature-card feature-card-accent">
+        <div class="feature-copy">
+          <p class="feature-number">03</p>
+          <h3>Share the moment.</h3>
+          <p>Turn game performances into polished Player of the Game cards.</p>
+        </div>
+        <img
+          src="./assets/itala-share-card.png"
+          width="1206"
+          height="2622"
+          alt="iTala Player of the Game share-card screen"
+          loading="lazy">
+      </article>
+    </div>
+  </section>
+
+  <section id="how-it-works" class="how section-shell" aria-labelledby="how-title">
+    <div class="how-copy">
+      <p class="eyebrow"><span></span> Three moves. One season.</p>
+      <h2 id="how-title">Set up.<br>Keep score.<br><em>Elevate.</em></h2>
+      <ol class="steps">
+        <li><span>01</span><div><strong>Create your league</strong><p>Add teams, rosters and the next matchup.</p></div></li>
+        <li><span>02</span><div><strong>Track every play</strong><p>Record stats live from the sideline.</p></div></li>
+        <li><span>03</span><div><strong>Finish and share</strong><p>Get box scores, standings and player records instantly.</p></div></li>
+      </ol>
+    </div>
+
+    <div class="screen-stack" aria-label="iTala player and league screens">
+      <img
+        class="screen-back"
+        src="./assets/itala-player-profile.png"
+        width="1320"
+        height="2868"
+        alt="iTala player profile with season averages and career highs"
+        loading="lazy">
+      <img
+        class="screen-front"
+        src="./assets/itala-leaderboards.png"
+        width="1206"
+        height="2622"
+        alt="iTala league leaders screen"
+        loading="lazy">
+    </div>
+  </section>
+
+  <section id="availability" class="final-cta section-shell" aria-labelledby="cta-title">
+    <p class="eyebrow"><span></span> Record. Track. Elevate.</p>
+    <h2 id="cta-title">Your next game<br>starts here.</h2>
+    <p>iTala is getting ready for tip-off</p>
+  </section>
 </main>
-<footer>
-  <p>iTala</p>
+
+<footer class="landing-footer">
+  <div>
+    <a class="wordmark" href="./" aria-label="iTala home"><span aria-hidden="true">i</span>Tala</a>
+    <p>Basketball, fully recorded.</p>
+  </div>
+  <nav aria-label="Legal and support links">
+    <a href="./privacy/">Privacy Policy</a>
+    <a href="./terms/">Terms of Use</a>
+    <a href="./content-policy/">Content Policy</a>
+    <a href="./support/">Support</a>
+    <a href="mailto:abejohanna@gmail.com">Email support</a>
+  </nav>
+  <p class="copyright">&copy; 2026 iTala</p>
 </footer>
 </body>
 </html>
