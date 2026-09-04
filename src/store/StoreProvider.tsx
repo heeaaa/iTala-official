@@ -215,7 +215,10 @@ export type Action =
   | { t: 'SET_GAME_STATUS'; leagueId: string; gameId: string; status: Game['status'] }
   | { t: 'SET_ATTENDANCE'; leagueId: string; gameId: string; playerIds: string[] }
   | { t: 'SET_PERIOD'; leagueId: string; gameId: string; period: number }
-  | { t: 'DUPLICATE_LEAGUE'; sourceLeagueId: string; newLeagueId: string; name: string; season: string }
+  // `newTeamIds`/`newPlayerIds` map a source row's id to the fresh id its copy
+  // gets. Resolved by stampActionIds, for the same reason ADD_EVENT's id is:
+  // the reducer runs twice and must produce the same rows both times.
+  | { t: 'DUPLICATE_LEAGUE'; sourceLeagueId: string; newLeagueId: string; name: string; season: string; newTeamIds?: Record<string, string>; newPlayerIds?: Record<string, string> }
   | { t: 'SET_LEAGUE_SETTINGS'; leagueId: string; trackMisses?: boolean; trackTurnovers?: boolean; isClosed?: boolean; isArchived?: boolean }
   | { t: 'REC_SETUP_GAME'; leagueId: string; gameId: string; location?: string; trackMisses?: boolean; trackTurnovers?: boolean; createdBy?: string; ensureLeague?: { name: string; isShared?: boolean }; teams: [RecTeamInput, RecTeamInput] }
   // Undo the local half of an all-or-nothing bundle whose server write failed.
@@ -299,6 +302,46 @@ export function stampActionIds(state: AppState, action: Action): Action {
     const stack = lg?._redo?.[action.gameId] ?? [];
     const top = stack[stack.length - 1];
     return top ? { ...action, eventId: top.id } : action;
+  }
+  // ROWS THAT ARE NOT EVENTS NEED THE SAME TREATMENT, AND FOR A WORSE REASON.
+  //
+  // ADD_TEAM, ADD_PLAYER and DUPLICATE_LEAGUE minted their new row's id with
+  // `uid()` INSIDE the reducer. The reducer runs twice for one dispatch - once
+  // in the wrapper below, to produce the state `pushAction` mirrors, and again
+  // in useReducer for the state the screen renders - so the two runs minted
+  // DIFFERENT ids for the same row. The server was sent the wrapper's id and
+  // the device kept React's, and from then on the two disagreed about what the
+  // row was called:
+  //
+  //   * the next snapshot hydrates the server's row ALONGSIDE the local one -
+  //     the same team twice, the phantom copy with no logo and no players,
+  //     because every later UPDATE_TEAM/ADD_PLAYER used the id on screen;
+  //   * a team that was never edited only ever existed locally under its React
+  //     id, so HYDRATE replaced it outright - and any game pointing at it was
+  //     left naming a team the device no longer has ("?" on the games list, and
+  //     "This game couldn't be loaded" on the live screen).
+  //
+  // Resolved once, here, exactly as the event ids are. An explicit id still
+  // passes straight through, so BulkImport/REC_SETUP_GAME callers are unchanged
+  // and the reducer's own `a.id ?? uid()` fallback still covers a direct
+  // reducer call in a test.
+  if (action.t === 'ADD_TEAM') {
+    return action.id !== undefined ? action : { ...action, id: uid() };
+  }
+  if (action.t === 'ADD_PLAYER') {
+    return action.id !== undefined ? action : { ...action, id: uid() };
+  }
+  if (action.t === 'DUPLICATE_LEAGUE') {
+    // A whole roster's worth of fresh ids, minted once and carried on the
+    // action so both reducer runs copy the source league into the same rows.
+    if (action.newTeamIds && action.newPlayerIds) return action;
+    const src = state.leagues.find(l => l.id === action.sourceLeagueId);
+    if (!src) return action;
+    const newTeamIds: Record<string, string> = {};
+    for (const t of src.teams) newTeamIds[t.id] = uid();
+    const newPlayerIds: Record<string, string> = {};
+    for (const p of src.players) newPlayerIds[p.id] = uid();
+    return { ...action, newTeamIds, newPlayerIds };
   }
   return action;
 }
@@ -572,6 +615,16 @@ export function reducer(state: AppState, a: Action): AppState {
 
     case 'CREATE_GAME':
       return mapLeague(state, a.leagueId, l => {
+        // Idempotent on the game id. Tip off is a single Button with no busy
+        // state, and `start()` dispatches before `navigation.replace` has taken
+        // the screen away, so two taps in one frame both reach here with the
+        // SAME id (the id is minted once, on the previous screen). Prepending
+        // twice put two games with one id in state: duplicate React keys, and
+        // every per-game aggregate - standings, games played - counted it
+        // twice until the next hydrate. A reducer may also legitimately be run
+        // more than once for one action, so this belongs here and not in a
+        // screen-level guard.
+        if (l.games.some(g => g.id === a.id)) return l;
         const game: Game = {
           id: a.id, leagueId: a.leagueId,
           homeTeamId: a.homeTeamId, awayTeamId: a.awayTeamId,
@@ -834,7 +887,7 @@ export function reducer(state: AppState, a: Action): AppState {
       if (!src || state.leagues.some(l => l.id === a.newLeagueId)) return state;
       const playerIdMap = new Map<string, string>();
       const players = src.players.map(pl => {
-        const nid = uid();
+        const nid = a.newPlayerIds?.[pl.id] ?? uid();
         playerIdMap.set(pl.id, nid);
         // Breadcrumb: remember who this copy is. If the source is itself a
         // copy, point at the ultimate origin so chains stay one hop deep.
@@ -842,7 +895,7 @@ export function reducer(state: AppState, a: Action): AppState {
       });
       const teams = src.teams.map(t => ({
         ...t,
-        id: uid(),
+        id: a.newTeamIds?.[t.id] ?? uid(),
         playerIds: t.playerIds.map(pid => playerIdMap.get(pid)!).filter(Boolean),
       }));
       const copy: League = {

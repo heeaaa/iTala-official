@@ -1,11 +1,14 @@
 const M = require(process.env.ITALA_BUNDLE || '../.test-bundle.js');
-const { reducer, teamBoxScore, gameScore, standings, careerStats, leagueAwards,
+const { reducer, stampActionIds, teamBoxScore, gameScore, standings, careerStats, leagueAwards,
         perfRating, lineScore, parseRoster, leaderboards, gamesPlayedMap,
         effectiveFoulLimit, fouledOutSet, playerFouls, winPctOf, outcomeOf,
         promoteStrayToTeam, claimOnce, courtKeyOf, reconcileLineup,
         setScopedError, clearScopedError, errorForScope, describeAuthFailure,
         diagnoseAuthFailure, sessionRecoveryPlan,
-        devLog, devWarn, relWarn } = M;
+        devLog, devWarn, relWarn,
+        // The pending ledger, for the one reducer case with side effects
+        // (HYDRATE reconciles, and reconciling retires entries). See GROUP IDS2.
+        recordPending, beginSnapshot, confirmPending, __resetSyncPrimitives } = M;
 
 let pass = 0, fail = 0;
 const failures = [];
@@ -1353,6 +1356,360 @@ ok('P13 uid() emits no comma, which is what makes P12 unreachable',
     __resetDeviceEnv();
   }
 }
+
+// ===========================================================================
+// GROUP IDS — one dispatch, two reducer runs, ONE row
+//
+// StoreProvider reduces every action TWICE: once in its dispatch wrapper, to
+// produce the state `pushAction` mirrors, and again inside useReducer for the
+// state the screen renders. So an id minted with `uid()` INSIDE the reducer is
+// minted twice and the two runs disagree - the server is told about one row and
+// the device keeps another.
+//
+// That is the whole of the reported "duplicate Team one" / "?" away team /
+// "This game couldn't be loaded" cluster: the edited team was pushed a second
+// time under the id on screen (two rows on the server), and the team that was
+// never edited existed only under the device's id, so the next snapshot deleted
+// it and the game naming it was left dangling.
+//
+// Every id a reducer case needs must therefore be resolved by stampActionIds,
+// once, from the pre-dispatch state. These assert that property directly: stamp
+// once, reduce twice, and the rows must be identical.
+// ===========================================================================
+const reduceTwice = (state, incoming) => {
+  const action = stampActionIds(state, incoming);
+  return [reducer(state, action), reducer(state, action)];
+};
+
+let sid = d(S0, { t: 'ADD_LEAGUE', id: 'lg1', name: 'BPBL', season: 'S3' });
+
+{
+  const [r1, r2] = reduceTwice(sid, { t: 'ADD_TEAM', leagueId: 'lg1', name: 'Team one' });
+  ok('IDS1 ADD_TEAM without an explicit id still produces one', !!L(r1).teams[0]?.id);
+  eq('IDS2 ADD_TEAM mints the SAME team id in both reducer runs',
+     L(r1).teams.map(t => t.id), L(r2).teams.map(t => t.id));
+}
+
+// An explicit id must still win, or BulkImport/REC_SETUP_GAME callers break.
+{
+  const stamped = stampActionIds(sid, { t: 'ADD_TEAM', leagueId: 'lg1', name: 'Given', id: 'tGiven' });
+  eq('IDS3 an explicit ADD_TEAM id is left alone', stamped.id, 'tGiven');
+}
+
+sid = d(sid, { t: 'ADD_TEAM', leagueId: 'lg1', name: 'Team one', id: 'tH' });
+
+{
+  const [r1, r2] = reduceTwice(sid, { t: 'ADD_PLAYER', leagueId: 'lg1', teamId: 'tH', name: 'Juan A', number: '17' });
+  ok('IDS4 ADD_PLAYER without an explicit id still produces one', !!L(r1).players[0]?.id);
+  eq('IDS5 ADD_PLAYER mints the SAME player id in both reducer runs',
+     L(r1).players.map(p => p.id), L(r2).players.map(p => p.id));
+  eq('IDS6 ...and the team points at that same player in both runs',
+     L(r1).teams.find(t => t.id === 'tH').playerIds,
+     L(r2).teams.find(t => t.id === 'tH').playerIds);
+}
+
+{
+  const stamped = stampActionIds(sid, { t: 'ADD_PLAYER', leagueId: 'lg1', teamId: 'tH', name: 'Named', id: 'pGiven' });
+  eq('IDS7 an explicit ADD_PLAYER id is left alone', stamped.id, 'pGiven');
+}
+
+// DUPLICATE_LEAGUE copies a whole roster with fresh ids — the same hazard, once
+// per team and once per player.
+{
+  let sdup = d(sid, { t: 'ADD_PLAYER', leagueId: 'lg1', teamId: 'tH', name: 'Juan A', id: 'p1' });
+  sdup = d(sdup, { t: 'ADD_PLAYER', leagueId: 'lg1', teamId: 'tH', name: 'Juan B', id: 'p2' });
+  const [r1, r2] = reduceTwice(sdup, {
+    t: 'DUPLICATE_LEAGUE', sourceLeagueId: 'lg1', newLeagueId: 'lg2', name: 'BPBL', season: 'S4',
+  });
+  const c1 = L(r1, 'lg2'), c2 = L(r2, 'lg2');
+  eq('IDS8 DUPLICATE_LEAGUE mints the SAME team ids in both runs',
+     c1.teams.map(t => t.id), c2.teams.map(t => t.id));
+  eq('IDS9 DUPLICATE_LEAGUE mints the SAME player ids in both runs',
+     c1.players.map(p => p.id), c2.players.map(p => p.id));
+  ok('IDS10 the copy still gets FRESH ids, not the source ones',
+     !c1.teams.some(t => t.id === 'tH') && !c1.players.some(p => p.id === 'p1'));
+  eq('IDS11 the copied team still points at the copied players',
+     c1.teams[0].playerIds, c1.players.map(p => p.id));
+}
+
+// The consequence, spelled out end to end at reducer level: a team created
+// without an explicit id, a game created against it, then a server snapshot
+// that carries the SAME rows back. The away team must still resolve - a game
+// whose team id is missing is exactly what renders "?" on the games list
+// (GamesOnDateScreen) and "This game couldn't be loaded" on the live screen.
+{
+  const create = stampActionIds(sid, { t: 'ADD_TEAM', leagueId: 'lg1', name: 'Team two' });
+  let sref = reducer(sid, create);
+  const two = L(sref).teams.find(t => t.name === 'Team two');
+  sref = d(sref, { t: 'CREATE_GAME', id: 'g1', leagueId: 'lg1', homeTeamId: 'tH', awayTeamId: two.id });
+  // The snapshot a pull would deliver: the rows the SERVER holds, which are the
+  // rows `pushAction` mirrored out of the stamped action.
+  const snapshot = { leagues: [{ ...L(sref), _redo: undefined }] };
+  const hydrated = d(sref, { t: 'HYDRATE', state: snapshot });
+  const g = L(hydrated).games.find(x => x.id === 'g1');
+  ok('IDS12 the game survives a hydrate', !!g);
+  ok('IDS13 its home team still resolves', !!L(hydrated).teams.find(t => t.id === g.homeTeamId));
+  ok('IDS14 its away team still resolves - no "?" on the games list',
+     !!L(hydrated).teams.find(t => t.id === g.awayTeamId),
+     `away=${g.awayTeamId} teams=${JSON.stringify(L(hydrated).teams.map(t => t.id))}`);
+}
+
+// ===========================================================================
+// GROUP IDS2 — the same "one dispatch, two reducer runs" property, on the
+// paths the first pass did not reach.
+//
+// The IDS group above proves ADD_TEAM, ADD_PLAYER and DUPLICATE_LEAGUE. Three
+// more actions create teams, players or games, and a fourth is dispatched
+// through a route that SKIPS stampActionIds entirely:
+//
+//   BULK_IMPORT_ROSTER  ids minted by BulkImportScreen inside the Alert's
+//                       onPress handler and carried on the action
+//   REC_SETUP_GAME      ids minted by RecGameScreen, likewise
+//   HYDRATE             dispatched with baseDispatch, so stampActionIds never
+//                       sees it - and it is the ONE case with side effects,
+//                       because reconciling retires pending-ledger entries
+//
+// None of those was covered above, and each is reachable from the same screens
+// as the reported bug. "Deterministic across two runs" is asserted for them
+// here rather than inferred from where the ids happen to be minted.
+// ===========================================================================
+{
+  const twice = (state, incoming) => {
+    const action = stampActionIds(state, incoming);
+    return [reducer(state, action), reducer(state, action)];
+  };
+  let base = d(S0, { t: 'ADD_LEAGUE', id: 'lgi', name: 'BPBL', season: 'S3' });
+  base = d(base, { t: 'ADD_TEAM', leagueId: 'lgi', name: 'Warriors', id: 'iH' });
+  base = d(base, { t: 'ADD_PLAYER', leagueId: 'lgi', teamId: 'iH', name: 'Juan A', id: 'ip1' });
+
+  // -- stamping has to be safe to apply twice -------------------------------
+  //
+  // The wrapper stamps once, but nothing in the type system stops a stamped
+  // action being handed back in - a retry, a replay, a future caller that
+  // pre-resolves an id. A second pass that minted new ids would recreate the
+  // exact divergence this whole group exists to prevent.
+  {
+    const once = stampActionIds(base, { t: 'ADD_TEAM', leagueId: 'lgi', name: 'Again' });
+    eq('IDS15 re-stamping an ADD_TEAM does not mint a second id',
+       stampActionIds(base, once).id, once.id);
+    const p = stampActionIds(base, { t: 'ADD_PLAYER', leagueId: 'lgi', teamId: 'iH', name: 'Again' });
+    eq('IDS16 re-stamping an ADD_PLAYER does not mint a second id',
+       stampActionIds(base, p).id, p.id);
+    const dup = stampActionIds(base, { t: 'DUPLICATE_LEAGUE', sourceLeagueId: 'lgi', newLeagueId: 'lgc', name: 'n', season: 's' });
+    const dup2 = stampActionIds(base, dup);
+    eq('IDS17 re-stamping a DUPLICATE_LEAGUE keeps the same id maps',
+       [dup2.newTeamIds, dup2.newPlayerIds], [dup.newTeamIds, dup.newPlayerIds]);
+  }
+
+  // -- BULK_IMPORT_ROSTER ---------------------------------------------------
+  {
+    const [r1, r2] = twice(base, {
+      t: 'BULK_IMPORT_ROSTER', leagueId: 'lgi',
+      teams: [{ id: 'bt1', name: 'Imported', players: [{ id: 'bp1', name: 'Ana' }, { id: 'bp2', name: 'Ben' }] }],
+    });
+    eq('IDS18 BULK_IMPORT_ROSTER produces the same team ids in both reducer runs',
+       L(r1, 'lgi').teams.map(t => t.id), L(r2, 'lgi').teams.map(t => t.id));
+    eq('IDS19 ...and the same player ids',
+       L(r1, 'lgi').players.map(p => p.id), L(r2, 'lgi').players.map(p => p.id));
+    eq('IDS20 ...and the imported team points at the imported players in both',
+       L(r1, 'lgi').teams.find(t => t.id === 'bt1').playerIds,
+       L(r2, 'lgi').teams.find(t => t.id === 'bt1').playerIds);
+  }
+
+  // -- REC_SETUP_GAME -------------------------------------------------------
+  //
+  // The drop-in bundle: a league, two teams, their players and the game in one
+  // action. A divergence here would strand the game between two teams the
+  // server never heard of - the "?" card this suite already has a name for.
+  {
+    const [r1, r2] = twice(S0, {
+      t: 'REC_SETUP_GAME', leagueId: 'rec', gameId: 'rg1', location: 'Court 2',
+      ensureLeague: { name: 'Community Drop-in Games' },
+      teams: [
+        { id: 'rt1', name: 'Alpha', players: [{ id: 'rp1', name: 'Ana' }] },
+        { id: 'rt2', name: 'Bravo', players: [{ id: 'rp2', name: 'Ben' }] },
+      ],
+    });
+    const a = L(r1, 'rec'), b = L(r2, 'rec');
+    eq('IDS21 REC_SETUP_GAME produces the same team ids in both reducer runs',
+       a.teams.map(t => t.id), b.teams.map(t => t.id));
+    eq('IDS22 ...and the same player ids', a.players.map(p => p.id), b.players.map(p => p.id));
+    eq('IDS23 ...and the game names the same two teams in both',
+       [a.games[0].homeTeamId, a.games[0].awayTeamId],
+       [b.games[0].homeTeamId, b.games[0].awayTeamId]);
+  }
+
+  // -- DUPLICATE_LEAGUE, at its edges ---------------------------------------
+  //
+  // stampActionIds builds its maps from the SOURCE league in the pre-dispatch
+  // state and then short-circuits on "both maps present". Two shapes make that
+  // short-circuit interesting: a source with teams but NO players (an empty
+  // object is truthy, so the second pass must not remint), and a source this
+  // device does not hold at all - where stamping and the reducer have to reach
+  // the same answer about doing nothing.
+  {
+    let teamsOnly = d(S0, { t: 'ADD_LEAGUE', id: 'lgt', name: 'T', season: 'S' });
+    teamsOnly = d(teamsOnly, { t: 'ADD_TEAM', leagueId: 'lgt', name: 'Solo', id: 'tS' });
+    const [r1, r2] = twice(teamsOnly, { t: 'DUPLICATE_LEAGUE', sourceLeagueId: 'lgt', newLeagueId: 'lgt2', name: 'T', season: 'S2' });
+    eq('IDS24 a source league with no players still copies to the same team ids',
+       L(r1, 'lgt2').teams.map(t => t.id), L(r2, 'lgt2').teams.map(t => t.id));
+    ok('IDS25 ...and the copy gets a fresh id, not the source one',
+       L(r1, 'lgt2').teams[0].id !== 'tS');
+
+    const missing = stampActionIds(S0, { t: 'DUPLICATE_LEAGUE', sourceLeagueId: 'nope', newLeagueId: 'lgx', name: 'n', season: 's' });
+    ok('IDS26 duplicating a league this device does not hold mints nothing',
+       missing.newTeamIds === undefined && missing.newPlayerIds === undefined);
+    eq('IDS27 ...and the reducer refuses it too, so both runs agree on doing nothing',
+       reducer(S0, missing).leagues.length, 0);
+  }
+
+  // A source team whose playerIds name a player the league no longer has -
+  // the shape a partial snapshot can leave behind. playerIdMap.get(pid) is
+  // undefined for it and the copy filters it out, identically in both runs.
+  {
+    let holed = d(S0, { t: 'ADD_LEAGUE', id: 'lgh', name: 'H', season: 'S' });
+    holed = d(holed, { t: 'ADD_TEAM', leagueId: 'lgh', name: 'Team', id: 'thh' });
+    holed = d(holed, { t: 'ADD_PLAYER', leagueId: 'lgh', teamId: 'thh', name: 'Gone', id: 'pGone' });
+    holed = d(holed, { t: 'ADD_PLAYER', leagueId: 'lgh', teamId: 'thh', name: 'Here', id: 'pHere' });
+    holed = { ...holed, leagues: holed.leagues.map(l => ({ ...l, players: l.players.filter(p => p.id !== 'pGone') })) };
+    const [r1, r2] = twice(holed, { t: 'DUPLICATE_LEAGUE', sourceLeagueId: 'lgh', newLeagueId: 'lgh2', name: 'H', season: 'S2' });
+    eq('IDS28 a dangling roster entry is dropped identically in both runs',
+       L(r1, 'lgh2').teams[0].playerIds, L(r2, 'lgh2').teams[0].playerIds);
+    eq('IDS29 ...and every id the copied team keeps resolves to a copied player',
+       L(r1, 'lgh2').teams[0].playerIds.filter(pid => !L(r1, 'lgh2').players.some(p => p.id === pid)), []);
+  }
+
+  // -- HYDRATE, the case stampActionIds never sees --------------------------
+  //
+  // HYDRATE and HYDRATE_LEAGUE go straight to baseDispatch, deliberately: a
+  // server snapshot must not be echoed back at the server. That also makes
+  // them the only actions with no stamping pass at all - and HYDRATE is the one
+  // case that MUTATES module state, because reconciling retires pending-ledger
+  // entries. React may run a reducer more than once for one action, so "run it
+  // twice, get the same state" has to hold by construction rather than because
+  // this harness happens to run it once.
+  {
+    __resetSyncPrimitives();
+    let s2 = d(S0, { t: 'ADD_LEAGUE', id: 'lgy', name: 'Y', season: 'S' });
+    s2 = d(s2, { t: 'ADD_TEAM', leagueId: 'lgy', name: 'H', id: 'yH' });
+    s2 = d(s2, { t: 'ADD_TEAM', leagueId: 'lgy', name: 'A', id: 'yA' });
+    s2 = d(s2, { t: 'CREATE_GAME', id: 'yg', leagueId: 'lgy', homeTeamId: 'yH', awayTeamId: 'yA' });
+    const ev = stampActionIds(s2, { t: 'ADD_EVENT', leagueId: 'lgy', gameId: 'yg', teamId: 'yH', playerId: 'yp', type: 'fg3_make', period: 1 });
+    const after = reducer(s2, ev);
+    const tokens = recordPending(ev, s2, after);
+    ok('IDS30 the local basket is in the pending ledger', tokens.length > 0);
+
+    // A snapshot read before the insert landed, which does NOT contain it.
+    const at = beginSnapshot();
+    const stale = { leagues: [{ ...L(after, 'lgy'), events: [] }] };
+    const h1 = reducer(after, { t: 'HYDRATE', state: stale, snapshotAt: at, covered: ['lgy'] });
+    const h2 = reducer(after, { t: 'HYDRATE', state: stale, snapshotAt: at, covered: ['lgy'] });
+    eq('IDS31 HYDRATE run 1 keeps the pending basket', L(h1, 'lgy').events.length, 1);
+    eq('IDS32 HYDRATE run 2 over the same snapshot produces the same events',
+       JSON.stringify(L(h2, 'lgy').events), JSON.stringify(L(h1, 'lgy').events));
+
+    // The retiring half: a snapshot that DOES contain it, confirmed and read
+    // afterwards, retires the entry on the first run. The second run has no
+    // entry left and must reach the same answer from the server rows alone.
+    confirmPending(tokens);
+    const at2 = beginSnapshot();
+    const full = { leagues: [{ ...L(after, 'lgy') }] };
+    const k1 = reducer(after, { t: 'HYDRATE', state: full, snapshotAt: at2, covered: ['lgy'] });
+    const k2 = reducer(after, { t: 'HYDRATE', state: full, snapshotAt: at2, covered: ['lgy'] });
+    eq('IDS33 a retiring HYDRATE is idempotent across two reducer runs',
+       JSON.stringify(L(k2, 'lgy').events), JSON.stringify(L(k1, 'lgy').events));
+    __resetSyncPrimitives();
+  }
+
+  // -- the fallback is still there, and still diverges ----------------------
+  //
+  // The reducer keeps `a.id ?? uid()` so a direct reducer call in a test still
+  // works, and that fallback IS the original bug. Asserting it still behaves
+  // the way the bug did is what makes stampActionIds demonstrably load-bearing
+  // rather than decorative: remove the stamping and IDS2/IDS5 fail; remove the
+  // fallback instead and this fails, so the reason to keep stamping has to be
+  // re-argued rather than quietly lost.
+  {
+    const raw = { t: 'ADD_TEAM', leagueId: 'lgi', name: 'Unstamped' };
+    const r1 = reducer(base, raw), r2 = reducer(base, raw);
+    const id1 = L(r1, 'lgi').teams[L(r1, 'lgi').teams.length - 1].id;
+    const id2 = L(r2, 'lgi').teams[L(r2, 'lgi').teams.length - 1].id;
+    ok('IDS34 an UNSTAMPED ADD_TEAM still mints a different id on each run - the bug itself',
+       id1 !== id2, 'both runs produced ' + id1 + ', so the reducer no longer mints and stamping may now be untested');
+  }
+}
+
+// ===========================================================================
+// GROUP IDG — Tip off is one game, however many times it is pressed.
+//
+// The game row is now created by SelectLineupScreen when Tip off is pressed,
+// not by NewGameScreen on the way in. The id is minted ONCE, on the previous
+// screen, and carried through the route params - so unlike the old flow, where
+// a second press minted a second uid and created a second game, two presses in
+// one frame now arrive with the SAME id. `start()` dispatches and only then
+// calls navigation.replace, and the Button has no busy state, so the second
+// press runs against a render that still believes there is no game.
+//
+// Prepending twice put two Game objects with one id into state: duplicate React
+// keys on every games list, and every per-game aggregate counting the game
+// twice until the next hydrate collapsed them. CREATE_GAME is idempotent on the
+// id now - which is also the right shape for a reducer that may legitimately be
+// run more than once for one action.
+// ===========================================================================
+{
+  let g = d(S0, { t: 'ADD_LEAGUE', id: 'lgg', name: 'BPBL', season: 'S3' });
+  g = d(g, { t: 'ADD_TEAM', leagueId: 'lgg', name: 'Warriors', id: 'gH' });
+  g = d(g, { t: 'ADD_TEAM', leagueId: 'lgg', name: 'Bulls', id: 'gA' });
+  g = d(g, { t: 'ADD_PLAYER', leagueId: 'lgg', teamId: 'gH', name: 'Juan A', id: 'gp1' });
+  g = d(g, { t: 'ADD_PLAYER', leagueId: 'lgg', teamId: 'gA', name: 'Juan C', id: 'gp3' });
+
+  const tipOff = {
+    t: 'CREATE_GAME', id: 'gg1', leagueId: 'lgg',
+    homeTeamId: 'gH', awayTeamId: 'gA', homeOnCourt: ['gp1'], awayOnCourt: ['gp3'],
+  };
+  const once = d(g, tipOff);
+  const twicePressed = d(once, tipOff);
+  eq('IDG1 two taps on Tip off create ONE game',
+     L(twicePressed, 'lgg').games.filter(x => x.id === 'gg1').length, 1);
+  eq('IDG2 ...and the league holds one game row in total',
+     L(twicePressed, 'lgg').games.length, 1);
+
+  // The guard must be about the ID, not about refusing repeats: a genuinely
+  // different game still has to be creatable, or "no duplicates" would be
+  // satisfied by a reducer that had simply stopped creating games.
+  const other = d(twicePressed, { t: 'CREATE_GAME', id: 'gg2', leagueId: 'lgg', homeTeamId: 'gA', awayTeamId: 'gH' });
+  eq('IDG3 a DIFFERENT game id still adds a second game',
+     L(other, 'lgg').games.map(x => x.id).sort(), ['gg1', 'gg2']);
+
+  eq('IDG4 the surviving row keeps the starting fives Tip off sent',
+     [L(twicePressed, 'lgg').games[0].homeOnCourt, L(twicePressed, 'lgg').games[0].awayOnCourt],
+     [['gp1'], ['gp3']]);
+
+  // A repeat carrying DIFFERENT contents is ignored rather than applied. That
+  // is the deliberate reading of "already created": CREATE_GAME is a creation,
+  // and SET_LINEUPS / SET_GAME_STATUS / SUBSTITUTE are the actions that edit a
+  // game that exists.
+  const conflicting = d(twicePressed, { ...tipOff, homeOnCourt: [], awayOnCourt: [], location: 'Elsewhere' });
+  eq('IDG5 a repeated CREATE_GAME does not overwrite the row it already made',
+     [L(conflicting, 'lgg').games[0].homeOnCourt, L(conflicting, 'lgg').games[0].location],
+     [['gp1'], undefined]);
+
+  eq('IDG6 the created game names both teams',
+     [L(twicePressed, 'lgg').games[0].homeTeamId, L(twicePressed, 'lgg').games[0].awayTeamId],
+     ['gH', 'gA']);
+  eq('IDG7 and it opens live', L(twicePressed, 'lgg').games[0].status, 'live');
+
+  // The guard reads the league it is creating into, not the whole store. A game
+  // with the same id in ANOTHER league must not block it - the two-hop path
+  // where a drop-in game and a league game share a client-minted id is remote,
+  // but a guard scoped to the wrong collection is the classic way an
+  // idempotency check turns into a silent write loss.
+  const elsewhere = d(other, { t: 'ADD_LEAGUE', id: 'lgg2', name: 'Other', season: 'S' });
+  const cross = d(elsewhere, { t: 'CREATE_GAME', id: 'gg1', leagueId: 'lgg2', homeTeamId: 'x', awayTeamId: 'y' });
+  eq('IDG8 the guard is scoped to the league, not the whole store',
+     L(cross, 'lgg2').games.map(x => x.id), ['gg1']);
+}
+
 
 // ===========================================================================
 console.log('='.repeat(64));
