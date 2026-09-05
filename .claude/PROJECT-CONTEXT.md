@@ -39,7 +39,6 @@ tests, schema, and `CLAUDE.md` remain authoritative.
 | Regression tests | `tests/reducer.test.js`, `tests/sync.test.js`, `tests/static.test.js` | Custom dependency-light Node harness. |
 | Database tests | `tests/sql/`, `tests/sql/run.js` | Skips without PostgreSQL locally unless `ITALA_REQUIRE_DB=1`. CI requires it. |
 | Device QA | `tests/MANUAL-REGRESSION.md` | Rendering, gestures, native modules, screen readers, and real device lifecycle need manual evidence. |
-| Historical decisions | `docs/CODE_REVIEW.md` | Check remediation status and do not re-raise accepted/resolved findings as new. |
 
 ## Critical invariants
 

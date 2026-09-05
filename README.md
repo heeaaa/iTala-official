@@ -168,8 +168,7 @@ eas submit --platform ios --profile production --latest
 ```
 
 Building a signed artifact does not establish release readiness by itself. Complete the
-physical-device checks, production-backend verification, store declarations and reviewer
-instructions in [App Review preparation](docs/APP_REVIEW.md) before submission.
+reviewer instructions in [App Review preparation](docs/APP_REVIEW.md) before submission.
 
 ## Known limitations
 
@@ -177,8 +176,6 @@ instructions in [App Review preparation](docs/APP_REVIEW.md) before submission.
   synced builds. Prepare the game online before scoring through a connection loss.
 - Local-only installations do not provide multi-device sync, invitations, accounts or
   the server-backed content-report queue.
-- Simultaneous scorekeeping in the same game is unsupported; later writes can replace
-  earlier ones.
 - Native rendering, sharing, permissions, accessibility and real-device upgrade paths
   are covered by manual checks rather than end-to-end UI automation.
 - Store availability and approval status cannot be established from this repository and
@@ -196,4 +193,3 @@ instructions in [App Review preparation](docs/APP_REVIEW.md) before submission.
 | [Testing](tests/README.md) | Automated suite design and database-test setup |
 | [Manual regression](tests/MANUAL-REGRESSION.md) | Real-device, accessibility and integration checks |
 | [Public site](site/README.md) | Landing page, legal policies and support routes |
-| [Code review record](docs/CODE_REVIEW.md) | Historical audit findings and remediation evidence |

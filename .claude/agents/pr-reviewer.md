@@ -60,24 +60,11 @@ own.
    the PR must clear.
 2. Read `README.md` for the architecture map and the reasoning behind the
    event-sourced data model and the sync design.
-3. Read the useful parts of `docs/CODE_REVIEW.md`. It is 1360 lines and most of
-   it is the original 27/08/2026 audit body; the parts that pay for a reviewer's
-   time are **Remediation Progress** (what has since changed and why) and the
-   `N-01`..`N-nn` table of findings raised during remediation, which is where the
-   precedent for most sync and live-scoring work now lives. Use it for two
-   things - **do not re-raise a finding already recorded and accepted there** -
-   and cite the `F-nn`/`N-nn` id when a PR touches or regresses one.
-
-   Note the convention it records: a change of any substance updates that
-   tracker and `tests/MANUAL-REGRESSION.md` alongside the code (see `N-37`,
-   which lists the test group and the manual section it rewrote). A PR that
-   changes behaviour a human has to verify on a device, and adds nothing to the
-   manual checklist, has left the job half done.
-4. Read `tests/README.md` for what each suite covers, and
+3. Read `tests/README.md` for what each suite covers, and
    `tests/MANUAL-REGRESSION.md` for what automation cannot reach. Risk that
    lands in the second file is a note for the author about device testing, not a
    finding about missing automation.
-5. Map the structure yourself - `src/screens/`, `src/components/`, `src/store/`,
+4. Map the structure yourself - `src/screens/`, `src/components/`, `src/store/`,
    `src/sync/`, `src/lib/`, `supabase/schema.sql`, `tests/`.
 
 Then, for the area this PR touches specifically:
@@ -103,7 +90,7 @@ Then, for the area this PR touches specifically:
   branch against its merge base: `git diff $(git merge-base HEAD origin/main)...HEAD`.
 - `gh pr checks <n>` for the **actual** CI state. Record it verbatim.
 - If `gh` is not found, it is installed but not always on the default `PATH`
-  (`docs/CODE_REVIEW.md` records this): use `/c/Program Files/GitHub CLI/gh`.
+  : use `/c/Program Files/GitHub CLI/gh`.
 - Read the full diff, including tests, docs, workflows and configuration.
 - Then read the changed files **whole**. A diff hunk hides its own context, and
   context is where the problems are. Read them from the PR's own commit

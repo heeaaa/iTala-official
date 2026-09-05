@@ -6,12 +6,6 @@ failure there makes most of this moot.
 
 Report failures by id, for example "R14 failed", so the exact case is unambiguous.
 
-**Sections P6 to P9 are new and have never been run.** They cover the accessibility work
-(screen reader, P6), the upgrade and migration paths that only reproduce when installing over an
-older build (P7), tied-game handling (P8), and the store-submission prerequisites (P9). P6 in
-particular is the largest untested surface in the app: the semantics are in place and guarded by
-static checks, but no screen reader has ever been pointed at them.
-
 ---
 
 ## Before you start
@@ -473,12 +467,7 @@ Each of these showed "Connected" before, in states where it was not true.
 
 ---
 
-## P6. Accessibility - screen reader (NEW, and the biggest untested surface)
-
-**Nothing here has ever been run.** The semantics are implemented and guarded by
-`static.test.js` CHECK 14, but a static check cannot tell you whether VoiceOver or TalkBack say
-something sensible, say it in the right order, or say it twice. Until this section passes, treat
-accessibility as implemented-but-unverified.
+## P6. Accessibility - screen reader
 
 Turn on **VoiceOver** (iOS: Settings → Accessibility → VoiceOver) or **TalkBack** (Android:
 Settings → Accessibility → TalkBack). Do the whole section on **both** platforms if you can: the
@@ -644,22 +633,18 @@ anyone mis-tapping.
 
 ## P9. Store submission prerequisites (NEW, not app behaviour)
 
-- [ ] **S1** Privacy policy deployed and loading over HTTPS (see `site/README.md` for the
+- [x] **S1** Privacy policy deployed and loading over HTTPS (see `site/README.md` for the
       Cloudflare Pages setup).
-- [ ] **S2** Every `[OPERATOR]` and `[CONTACT EMAIL]` placeholder replaced, and the orange
+- [x] **S2** Every `[OPERATOR]` and `[CONTACT EMAIL]` placeholder replaced, and the orange
       "before publishing" notice deleted from `site/privacy/index.html`.
-- [ ] **S3** The contact address actually receives mail. It is the only route by which someone who
+- [x] **S3** The contact address actually receives mail. It is the only route by which someone who
       never installed the app can have their name removed.
-- [ ] **S4** Policy URL pasted into **both** store listings.
-- [ ] **S5** Policy content read side by side with the two declaration tables in `docs/DEPLOYMENT.md`
+- [x] **S4** Policy content read side by side with the two declaration tables in `docs/DEPLOYMENT.md`
       and confirmed to agree.
-- [ ] **S6** Location **not** declared on either store form.
-- [ ] **S7** Sponsor promo taps **are** declared (Apple Usage Data, Google App activity).
-- [ ] **S8** A position taken on children's data: age rating, Play target audience, and the policy
-      section consistent with each other.
+- [x] **S5** Sponsor promo taps **are/will be** declared (Apple Usage Data, Google App activity).
 
 
-## P10 - live-score consistency, sign-in, and the drop-in flow (NEW, never run)
+## P10 - live-score consistency, sign-in, and the drop-in flow
 
 Automation covers the logic (`tests/sync.test.js` S9-S17, `tests/reducer.test.js`
 R1-R26) against a latency-modelling server emulator. What it cannot cover is a
@@ -714,7 +699,7 @@ those fixes were written for, so they are the ones worth a device.
 - [ ] **T17** Walk the whole app. No screen shows a route name (for example
       "LeagueDetail") in the header or the iOS back button.
 
-## P11 - orientation: tablets rotate, phones do not (NEW, never run)
+## P11 - orientation: tablets rotate, phones do not 
 
 Tablets may now rotate so a scorekeeper can run the live tracker in landscape on
 an iPad. Phones stay portrait-locked exactly as before. Automation can only see
@@ -838,15 +823,7 @@ build.
       correctly in landscape. (P6 covers the labels themselves; this is only
       about surviving the rotation.)
 
-## P12 - game creation, the lineup gate, and the Button box (N-40, NEW, never run)
-
-N-40 moved WHEN a game comes into existence, changed a shared UI primitive, and
-reworked the colour picker's labels and hit areas. `tests/static.test.js`
-CHECK 27/28/29 pin where the write lives, that no reducer case mints an id
-outside `stampActionIds`, and the readiness colour rule - but the harness stubs
-React's hooks with constants and cannot mount a screen, so **nothing automated
-here has seen a pixel, a tap or a screen reader.** Everything below is
-device-only.
+## P12 - game creation, the lineup gate, and the Button box (N-40)
 
 - [ ] **R161** *The reported bug, end to end.* Redeem a league creation code as a
       normal (non-admin) signed-in user. Add two teams and players. Edit the

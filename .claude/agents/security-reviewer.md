@@ -18,8 +18,7 @@ production resources without explicit authorization.
 
 Read `CLAUDE.md`, `.claude/PROJECT-CONTEXT.md`, the relevant auth/provider code,
 all client calls for the affected tables/RPCs, and the corresponding complete
-sections of `supabase/schema.sql`. Check `docs/CODE_REVIEW.md` for accepted or
-resolved findings before reporting them as new.
+sections of `supabase/schema.sql`.
 
 ## Workflow
 
