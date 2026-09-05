@@ -305,11 +305,16 @@ build, then **Submit for Review**.
 Apple review typically takes 1–3 days.
 
 **Likely reviewer questions for this app:** the reviewer must be able to exercise sign-in and see
-real content. In the Review Notes, explain the three roles (guest / signed-in / admin), note that
-any Google or Apple account can sign in, and provide the backup admin password plus the hidden
-gesture (tap the iTala wordmark 10×) so admin features can be verified. Review Notes are private
-to Apple, so the password is fine there — do not put it anywhere public. Pre-seed a demo league
-so guest browsing isn't empty (use made-up player names, not real ones).
+real content. Create a dedicated Google test account and provide its email and password privately
+in App Store Connect's App Review Information sign-in fields. In Review Notes, direct reviewers
+to **Sign in with Google** using that account, and supply fresh single-use League Creation Codes
+privately so they can create and own a test league, manage rosters, and score games. Verify the
+account works on a clean device without developer intervention, and keep unused backup codes
+available for repeat testing. Explain guest, named-user, scorekeeper, owner and platform-admin
+roles; the test account only needs regular named-user access before creating its league.
+Pre-seed a demo league so guest browsing isn't empty (use made-up player names, not real ones).
+Keep credentials and codes out of the repository; invalidate any previously published unused
+codes before supplying replacements. Follow the access checklist in `docs/APP_REVIEW.md`.
 
 There are no payments, social feed, comments, reactions or direct messages. League owners can,
 however, publish roster information, team logos, photographs and sponsor material that concerns

@@ -1,5 +1,9 @@
 # iTala
 
+[![CI (main)](https://github.com/heeaaa/iTala-official/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/heeaaa/iTala-official/actions/workflows/ci.yml?query=branch%3Amain)
+[![Expo SDK 54](https://img.shields.io/badge/Expo%20SDK-54-000020?logo=expo&logoColor=white)](package.json)
+[![TypeScript 5.9](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](package.json)
+
 **Record. Track. Elevate.**
 
 iTala is a mobile basketball scoring and league-management app for local, amateur,
@@ -7,7 +11,9 @@ recreational and community competitions. It helps scorekeepers record every play
 turn games into complete statistics, and give players and teams a season they can
 follow and share.
 
-![iTala live scoring and box score screens](site/assets/itala-live-scoring.png)
+<p align="center">
+  <img src="site/assets/itala-live-scoring.png" alt="iTala live scoring and box score screens" width="400">
+</p>
 
 ## Why iTala
 
@@ -39,7 +45,8 @@ follow and share.
 - Games grouped by date with finished and live-game states
 - Automatic box scores, shooting totals and quarter line scores
 - Standings, point differential, streaks and player leaderboards
-- Player profiles with averages, career highs and achievement cards
+- Player profiles with averages, career highs and achievement cards; these cover
+  the selected league, not a combined career across leagues
 - Team profiles and end-of-season recaps
 
 ### Sharing and safety
@@ -70,7 +77,7 @@ last-write-wins policy, while separate games can be scored independently. See
 ## Accounts, content and privacy
 
 In a synced build, iTala creates an anonymous session for guest access and offers
-Google and Apple sign-in for named accounts. League permissions distinguish viewers,
+Google sign-in, plus Apple sign-in on iOS, for named accounts. League permissions distinguish viewers,
 scorekeepers, owners and platform administrators.
 
 League and roster information is designed for spectator viewing. Any valid app

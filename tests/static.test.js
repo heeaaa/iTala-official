@@ -1111,6 +1111,7 @@ for (const f of srcFiles) {
     'README.md', 'CLAUDE.md',
     'docs/README.md', 'docs/AUTH_SETUP.md', 'docs/CODE_REVIEW.md',
     'docs/DEPLOYMENT.md', 'docs/TROUBLESHOOTING.md',
+    'docs/APP_REVIEW.md', 'docs/ARCHITECTURE.md',
     'tests/README.md', 'tests/MANUAL-REGRESSION.md',
     'tests/static.test.js', 'tests/reducer.test.js', 'tests/sync.test.js',
     '.github/workflows/ci.yml', 'site/README.md',

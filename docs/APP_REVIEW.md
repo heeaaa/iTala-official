@@ -3,8 +3,9 @@
 Use this checklist to prepare iTala's App Store Connect Review Information. It is
 not evidence that a particular build has passed review.
 
-Do not commit reviewer passwords, recovery codes, private video links or production
-secrets to this file. Replace the placeholders directly in App Store Connect.
+Do not commit reviewer credentials, League Creation Codes, recovery codes, private
+video links or production secrets to this file. Replace the placeholders directly in
+App Store Connect.
 
 ## Reviewer information to prepare
 
@@ -18,18 +19,25 @@ results.
 
 ### Test access
 
-Reviewers may authenticate with their own Apple or Google account. No dedicated
-reviewer account is required. After signing in, provide these single-use League Creation
-Codes in the App Store Connect Review Notes:
+Create a dedicated Google test account for App Review. Supply its email and password
+privately in App Store Connect's App Review Information sign-in fields, and explain in
+Review Notes that these credentials are used through the app's **Sign in with Google**
+flow. Reviewers do not need to use a personal Google or Apple account.
 
-- `GXKBBZ`
-- `HYR96P`
-- `NX9T23`
+Generate fresh single-use League Creation Codes and supply them directly in the private
+Review Notes. Only one code is required to create a league; provide unused backups for
+repeat testing. Keep the account as a regular named user: a creation code grants ownership
+of the new league and the access needed for roster management and scorekeeping.
 
-Only one code is required; the others are backups because each code can be redeemed once.
-Confirm that at least one code remains unused immediately before submission. The code
-lets the reviewer create a league and exercise the authenticated league-management and
-scorekeeping flow without relying on a developer device, invitation or password.
+Before submission, test the supplied Google account on a clean device with the submitted
+build. Confirm sign-in and any Google verification prompts can be completed using the
+provided materials without approval on a developer's phone. Test league creation with a
+separate code so the reviewer codes remain unused. Confirm access remains available for
+the entire review, including repeat sign-in after testing in-app account deletion.
+
+Invalidate any still-unused codes previously published in the repository and generate
+replacements privately. Removing a code from this file does not revoke it or remove it
+from Git history. Never put replacement codes or the test account's credentials here.
 
 ### Backend readiness
 
@@ -52,7 +60,8 @@ Keep the final Review Notes shorter than this operational checklist, but make th
 to every important capability explicit.
 
 1. Launch iTala and allow the initial synchronized data load to finish.
-2. Open the profile control and sign in with either Sign in with Apple or Google.
+2. Open the profile control, choose **Sign in with Google**, and use the dedicated test
+   account supplied privately in App Store Connect.
 3. Browse the sample league to view its games, standings, leaders and roster.
 4. Choose the option to create or join a league using a code and redeem one unused
    League Creation Code from the Review Notes.
@@ -94,7 +103,7 @@ of the supported privacy/content reasons, and returns a reference number. Report
 a private Supabase review queue with `New`, `Reviewing`, `Resolved` and `Rejected`
 states. The Content Policy also provides email-based reporting and correction routes.
 
-Review Notes should say this plainly and point Apple to step 8 above. Do not claim that
+Review Notes should say this plainly and point Apple to step 9 above. Do not claim that
 automated filtering, user blocking or public social moderation exists when it does not.
 
 ### Review risk to assess before submission
@@ -178,8 +187,10 @@ Keep private credentials and unrelated personal notifications out of the recordi
 
 - [ ] Production iOS build installed and tested on a physical device
 - [ ] Google and Apple sign-in verified in the production configuration
+- [ ] Dedicated Google test account verified on a clean device without developer intervention
+- [ ] Test account credentials supplied privately in App Store Connect's sign-in fields
 - [ ] Sample league loads at launch and fictional demonstration data is verified
-- [ ] At least one single-use League Creation Code remains available
+- [ ] Previously published unused codes invalidated; fresh unused codes supplied privately in Review Notes
 - [ ] Production Supabase schema and authorization verified
 - [ ] Content report submitted and reviewed end-to-end
 - [ ] Account deletion completed with a disposable account
@@ -197,13 +208,19 @@ Copy this into App Store Connect only after replacing every bracketed value:
 
 > iTala is a basketball scorekeeping and statistics application. A sample league with
 > pre-populated teams, players, games and statistics is available when the app opens.
-> To test authenticated features, sign in with Sign in with Apple or Google, then create
-> a league with one of these single-use League Creation Codes: GXKBBZ, HYR96P or NX9T23.
+> To test authenticated features, open the profile control and choose Sign in with Google.
+> Use the dedicated Google test account supplied in the App Review Information sign-in
+> fields; no personal account is needed. Then create a league with one of these single-use
+> League Creation Codes: [LEAGUE_CREATION_CODE], [BACKUP_CODE_1], or [BACKUP_CODE_2].
 > Only one code is required; the others are backups. Add or edit teams and players,
 > create a scheduled or live game, select a starting lineup, record statistics, and
 > finalize the game to view the box score, player statistics, standings and shareable
 > stat cards. The app supports offline-first scorekeeping; changes are saved locally and
 > synchronized when connectivity is available.
+>
+> To report content, open a player, team, league or box-score screen and scroll to
+> Report this information. Select a reason and submit; explanation and contact email are
+> optional. A successful submission displays a reference number for the private review queue.
 >
 > Account deletion is under Settings → Danger Zone → Delete Account. Deleting an account
 > removes the authentication identity and iTala profile. Shared league, roster, game and
