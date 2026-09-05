@@ -145,6 +145,16 @@ try {
 } catch { failed++; }
 
 console.log('\n• static structural checks');
+try { run('node', [path.join('tests', 'guestSession.test.js')], { env }); }
+catch { failed++; }
+try { run('node', [path.join('tests', 'contentReports.test.js')], { env }); }
+catch { failed++; }
+try { run('node', [path.join('tests', 'contentReports.integration.test.js')], { env }); }
+catch { failed++; }
+if (process.env.ITALA_PGLITE_MODULE) {
+  try { run('node', [path.join('tests', 'contentReports.database.test.js')], { env }); }
+  catch { failed++; }
+}
 try { run('node', [path.join('tests', 'static.test.js')], { env }); }
 catch { failed++; }
 

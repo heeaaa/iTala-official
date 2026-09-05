@@ -1211,6 +1211,12 @@ create policy "content_reports_admin_update" on public.content_reports
 revoke all on table public.content_reports from public, anon, authenticated;
 grant select, update on table public.content_reports to authenticated;
 
+-- Optional request IDs keep legacy clients working and deduplicate retries.
+alter table public.content_reports add column if not exists request_id text;
+create unique index if not exists content_reports_request_idx
+  on public.content_reports (reporter_user_id, request_id);
+-- Remove the old overload to avoid ambiguous PostgREST resolution.
+drop function if exists public.submit_content_report(text,text,text,text,text,text,text);
 create or replace function public.submit_content_report(
   p_record_type text,
   p_record_id text,
@@ -1218,7 +1224,8 @@ create or replace function public.submit_content_report(
   p_team_id text,
   p_reason text,
   p_explanation text default null,
-  p_contact_email text default null
+  p_contact_email text default null,
+  p_request_id text default null
 ) returns jsonb
 language plpgsql
 security definer
@@ -1229,8 +1236,28 @@ declare
   ref text;
   submitted timestamptz := now();
   actual_league text;
+  previous_report public.content_reports%rowtype;
 begin
   if uid is null then raise exception 'An app session is required.'; end if;
+  if p_request_id is not null then
+    if length(p_request_id) not between 1 and 128 then raise exception 'Invalid request ID.'; end if;
+    -- A timed-out request can still commit. Serialize concurrent retries.
+    perform pg_advisory_xact_lock(hashtextextended(uid::text || ':' || p_request_id, 0));
+    select * into previous_report
+      from public.content_reports where reporter_user_id = uid and request_id = p_request_id;
+    if found then
+      if previous_report.record_type is distinct from p_record_type
+         or previous_report.record_id is distinct from p_record_id
+         or previous_report.league_id is distinct from p_league_id
+         or previous_report.team_id is distinct from p_team_id
+         or previous_report.reason is distinct from p_reason
+         or previous_report.explanation is distinct from nullif(btrim(coalesce(p_explanation, '')), '')
+         or previous_report.contact_email is distinct from nullif(lower(btrim(coalesce(p_contact_email, ''))), '')
+      then raise exception 'The report request ID was already used for different content.'; end if;
+      return jsonb_build_object('reference', previous_report.reference, 'submitted_at', previous_report.submitted_at);
+    end if;
+    submitted := now();
+  end if;
   if p_record_type not in ('player','team','game','league') then raise exception 'Unsupported record type.'; end if;
   if p_reason not in (
     'Incorrect information', 'Remove personal information',
@@ -1268,18 +1295,18 @@ begin
 
   insert into public.content_reports (
     reference, record_type, record_id, league_id, team_id, reporter_user_id,
-    reason, explanation, contact_email, submitted_at
+    reason, explanation, contact_email, submitted_at, request_id
   ) values (
     ref, p_record_type, p_record_id, actual_league, p_team_id, uid,
     p_reason, nullif(btrim(coalesce(p_explanation, '')), ''),
-    nullif(lower(btrim(coalesce(p_contact_email, ''))), ''), submitted
+    nullif(lower(btrim(coalesce(p_contact_email, ''))), ''), submitted, p_request_id
   );
 
   return jsonb_build_object('reference', ref, 'submitted_at', submitted);
 end;
 $$;
-revoke all on function public.submit_content_report(text,text,text,text,text,text,text) from public;
-grant execute on function public.submit_content_report(text,text,text,text,text,text,text) to anon, authenticated;
+revoke all on function public.submit_content_report(text,text,text,text,text,text,text,text) from public;
+grant execute on function public.submit_content_report(text,text,text,text,text,text,text,text) to anon, authenticated;
 
 -- =============================================================================
 -- 6) REALTIME — publish event changes so live games stream to spectators

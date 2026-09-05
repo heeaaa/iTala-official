@@ -1,12 +1,15 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Pressable, TextInput, View } from 'react-native';
 import { Button, Card, Field, Screen, Txt } from '../components/ui';
-import { REPORT_REASONS, ReportReason, submitContentReport } from '../lib/contentReports';
+import { REPORT_REASONS, ReportReason, submitContentReport, describeContentReportError } from '../lib/contentReports';
 import { ScreenProps } from '../navigation';
+import { uid } from '../lib/format';
 import { colors, radius, space } from '../theme';
 
 export default function ReportContentScreen({ route, navigation }: ScreenProps<'ReportContent'>) {
   const { recordType, recordId, leagueId, teamId, label } = route.params;
+  const pendingReport = useRef<{ payload: string; id: string } | null>(null);
+  const submitting = useRef(false);
   const [reason, setReason] = useState<ReportReason | null>(null);
   const [explanation, setExplanation] = useState('');
   const [contactEmail, setContactEmail] = useState('');
@@ -15,17 +18,22 @@ export default function ReportContentScreen({ route, navigation }: ScreenProps<'
   const [reference, setReference] = useState('');
 
   const submit = async () => {
-    if (!reason || busy) return;
+    if (!reason || submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     setError('');
     try {
-      const receipt = await submitContentReport({
-        recordType, recordId, leagueId, teamId, reason, explanation, contactEmail,
-      });
+      const input = { recordType, recordId, leagueId, teamId, reason, explanation, contactEmail };
+      const payload = JSON.stringify(input);
+      if (pendingReport.current?.payload !== payload) {
+        pendingReport.current = { payload, id: uid() + uid() };
+      }
+      const receipt = await submitContentReport(input, pendingReport.current.id);
       setReference(receipt.reference);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'The report could not be submitted.');
+      setError(describeContentReportError(e));
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   };
