@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
 const ts = require('typescript');
 const { PostgrestClient } = require('@supabase/postgrest-js');
-const React = require('./harness/pkg/react-live');
+const ReactHarness = require('./harness/pkg/react-live');
 const ROOT = path.join(__dirname, '..');
 const baseline = process.argv.includes('--baseline');
 const revision = 'f0a96c1'; // Merge of PR #34, before the report fix.
@@ -69,14 +69,14 @@ function setup(outcomes, session = {}, guestOutcomes = []) {
   }, clock);
   let ids = 0;
   const screen = load('src/screens/ReportContentScreen.tsx', {
-    react: React,
+    react: ReactHarness,
     'react-native': { Pressable: 'Pressable', TextInput: 'TextInput', View: 'View' },
     '../components/ui': Object.fromEntries(['Button', 'Card', 'Field', 'Screen', 'Txt'].map(k => [k, k])),
     '../lib/contentReports': lib,
     '../lib/format': { uid: () => `request-${++ids}` },
     '../theme': { colors: {}, radius: {}, space: n => n },
   }, clock).default;
-  const root = React.render(screen, {
+  const root = ReactHarness.render(screen, {
     route: { params: { recordType: 'league', recordId: 'l1', leagueId: 'l1', label: 'Test League' } },
     navigation: { goBack() {} },
   });
