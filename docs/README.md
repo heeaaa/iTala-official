@@ -5,8 +5,10 @@ that matches the job.
 
 | Doc | Read it when |
 | --- | --- |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Understanding local persistence, derived statistics, synchronization, authorization and testing boundaries. |
 | [AUTH_SETUP.md](AUTH_SETUP.md) | Wiring up Supabase Auth: Google, Sign in with Apple, anonymous sessions, the admin allowlist, and the backup password. **Also the first place to look when sign-in "doesn't work" in Expo Go** - the redirect allowlist is the usual cause. |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Shipping: EAS Build and Submit, App Store and Play Store listings, the privacy-policy site, and the store data-safety declarations. |
+| [APP_REVIEW.md](APP_REVIEW.md) | Preparing App Store reviewer access, the test walkthrough, public URLs and Review Notes without committing credentials. |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Something is broken while developing: Expo Go won't connect, sign-in fails, the score behaves oddly. |
 | [CODE_REVIEW.md](CODE_REVIEW.md) | The audit and remediation tracker. Every finding, its severity, whether it is fixed, and the evidence. Long; use the tables. |
 
@@ -16,7 +18,7 @@ Docs that describe one directory live **in** that directory, so they are found b
 someone already looking at the code rather than by someone who thought to check
 a docs folder:
 
-- [`../README.md`](../README.md) - what the app is, quickstart, architecture map.
+- [`../README.md`](../README.md) - what the app is, its product capabilities and quickstart.
   Stays at the repo root, where GitHub renders it.
 - [`../CLAUDE.md`](../CLAUDE.md) - the engineering standard this repo is held to.
   Stays at the root because that is where Claude Code loads it from.

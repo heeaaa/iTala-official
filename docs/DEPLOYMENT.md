@@ -311,10 +311,13 @@ gesture (tap the iTala wordmark 10×) so admin features can be verified. Review 
 to Apple, so the password is fine there — do not put it anywhere public. Pre-seed a demo league
 so guest browsing isn't empty (use made-up player names, not real ones).
 
-There are no payments. Content is not public: rosters and stats are visible to signed-in
-sessions, and there is no feed, no comments, no messaging and no way for one user to publish to
-another. Say that plainly — it is why the app doesn't need UGC moderation tooling today. If you
-add the social/highlight feed, that changes, and Apple will require reporting and blocking.
+There are no payments, social feed, comments, reactions or direct messages. League owners can,
+however, publish roster information, team logos, photographs and sponsor material that concerns
+or belongs to other people. The app therefore provides **Report this information** on player,
+team, league and box-score screens. Reports go to the private `content_reports` review queue and
+return a reference number; the Content Policy also provides email reporting and correction
+routes. Point the reviewer to this flow explicitly. Do not claim automated filtering or user
+blocking exists when it does not. See `docs/APP_REVIEW.md` for the complete reviewer walkthrough.
 
 ---
 
