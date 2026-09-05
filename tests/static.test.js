@@ -1109,7 +1109,7 @@ for (const f of srcFiles) {
   // a "*.md" string is far more likely to be an example than a link.
   const docish = [
     'README.md', 'CLAUDE.md',
-    'docs/README.md', 'docs/AUTH_SETUP.md', 'docs/CODE_REVIEW.md',
+    'docs/README.md', 'docs/AUTH_SETUP.md',
     'docs/DEPLOYMENT.md', 'docs/TROUBLESHOOTING.md',
     'docs/APP_REVIEW.md', 'docs/ARCHITECTURE.md',
     'tests/README.md', 'tests/MANUAL-REGRESSION.md',
@@ -1150,7 +1150,7 @@ for (const f of srcFiles) {
 
   // The four guides must be in docs/, not back at the root. A file re-created at
   // the old path would leave two copies and no signal about which is current.
-  for (const name of ['AUTH_SETUP', 'CODE_REVIEW', 'DEPLOYMENT', 'TROUBLESHOOTING']) {
+  for (const name of ['AUTH_SETUP', 'DEPLOYMENT', 'TROUBLESHOOTING']) {
     ok(`${name}.md lives in docs/`, exists(`docs/${name}.md`) && !exists(`${name}.md`),
        'the guides moved to docs/; only README.md and CLAUDE.md belong at the root');
   }

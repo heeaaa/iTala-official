@@ -1,4 +1,4 @@
-// ESLint flat config (CODE_REVIEW.md F-09).
+// ESLint flat config
 //
 // Before this file the project had no lint tooling at all: `tests/static.test.js`
 // enforced a set of bespoke structural invariants, but nothing checked unused
