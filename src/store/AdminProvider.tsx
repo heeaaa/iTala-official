@@ -4,6 +4,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
+import { ensureGuestSession } from './guestSession';
 import { devLog, warn } from '../lib/log';
 import {
   AuthErrors, AuthScope, clearScopedError, describeAuthFailure, diagnoseAuthFailure,
@@ -859,14 +860,14 @@ async function ensureSession(sb: ReturnType<typeof getSupabase>): Promise<{ uid:
     // by supabase-js inside __loadSession (it checks _isValidSession and calls
     // _removeSession) BEFORE getSession can answer "no session", so by the time
     // we are on this line there is nothing left to purge.
-    const signin = await raceTimeout(sb.auth.signInAnonymously(), 6000, 'signInAnonymously');
+    const signin = await raceTimeout(ensureGuestSession(sb), 6000, 'signInAnonymously');
     if (!signin.ok) return null;
     if (signin.value?.error) {
       warn('[auth] anonymous sign-in failed:', signin.value.error.message, '— is Anonymous sign-in enabled in Supabase → Authentication → Providers?');
       return null;
     }
-    const uid = signin.value?.data?.user?.id ?? signin.value?.data?.session?.user?.id ?? null;
-    return uid ? { uid, user: null } : null;
+    const signedInUser = signin.value?.data?.user ?? signin.value?.data?.session?.user;
+    return signedInUser?.id ? { uid: signedInUser.id, user: toAuthUser(signedInUser) } : null;
   } catch (e) {
     warn('[auth] ensureSession threw:', (e as Error).message);
     return null;

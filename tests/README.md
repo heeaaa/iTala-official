@@ -358,3 +358,36 @@ a live project.
 
 Rendering, navigation, gestures, native modules (share-card capture, haptics,
 image picker) and real Supabase/RLS behaviour. Those need a device or a build.
+
+### Content report regression proof
+
+`node tests/contentReports.integration.test.js --baseline` executes the report
+library and screen from PR #34's merge (`f0a96c1`) with the installed PostgREST
+client and a controlled failing transport. It proves that the first tap exposes
+`TypeError: Network request failed` and that the second tap succeeds. This command
+needs that commit in the local Git history.
+
+`node tests/contentReports.integration.test.js` runs the current screen and client
+against the same failure: one tap reaches the receipt. It also checks guest-session
+waiting, persistent offline errors, double taps, manual retries, changed form data,
+server error sanitization, validation and a transport that ignores abort. These
+checks run in `npm test`. The lightweight hook runtime executes the screen's
+handlers and state; it does not render native controls or reproduce a device's TLS stack.
+
+`tests/contentReports.database.test.js` uses an optional PostgreSQL/WASM runtime
+(`@electric-sql/pglite`, verified with 0.3.14). Set `ITALA_PGLITE_MODULE` to its
+installed module path, then run `node tests/contentReports.database.test.js` or
+`npm test`. It loads the report section from the old and current
+`supabase/schema.sql`, verifies upgrades preserve existing reports, and checks
+retry deduplication, guest reporting, reporter isolation, old client compatibility
+and private grants. It needs the PR #34 commit locally. PGlite serializes queries;
+this test does not simulate separate concurrent PostgreSQL connections.
+
+No extra SQL deployment file is needed. Re-run the existing `supabase/schema.sql`
+before releasing the updated app so the RPC accepts the optional request ID.
+
+Guest recovery is covered by `tests/guestSession.test.js` and the report integration
+suite. Startup and report recovery share one pending guest sign-in per client.
+Tests verify that a failed startup can recover on report submission, concurrent
+callers share the operation, existing accounts are preserved, and failed or stalled
+session reads never authorize creation of a replacement guest.
