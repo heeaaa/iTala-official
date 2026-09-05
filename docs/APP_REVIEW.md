@@ -184,26 +184,6 @@ Prepare a short recording from a physical iPhone using the submitted configurati
 
 Keep private credentials and unrelated personal notifications out of the recording.
 
-## Final submission checklist
-
-- [ ] Production iOS build installed and tested on a physical device
-- [ ] Google and Apple sign-in verified in the production configuration
-- [ ] Dedicated Google test account verified on a clean device without developer intervention
-- [ ] Test account credentials supplied privately in App Store Connect's sign-in fields
-- [ ] Sample league loads at launch and fictional demonstration data is verified
-- [ ] Previously published unused codes invalidated; fresh unused codes supplied privately in Review Notes
-- [ ] Production Supabase schema and authorization verified
-- [ ] Content report submitted and reviewed end-to-end
-- [ ] Account deletion completed with a disposable account
-- [ ] League, roster and drop-in game setup completed and synchronized online
-- [ ] Connection lost during an active game: scoring continues, survives app restart, and synchronizes after reconnecting
-- [ ] Privacy declarations reconciled with the code and policy
-- [ ] Support, Privacy, Terms and Content Policy HTTPS URLs verified
-- [ ] App metadata and screenshots match the submitted build
-- [ ] Physical-device recording prepared
-- [ ] Regional availability statement confirmed
-- [ ] Review Notes contain no placeholders
-
 ## Concise Review Notes template
 
 Copy this into App Store Connect only after replacing every bracketed value:
