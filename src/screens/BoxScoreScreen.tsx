@@ -3,7 +3,7 @@ import { View, ScrollView, Pressable, Share, ActivityIndicator } from 'react-nat
 import { captureRef } from 'react-native-view-shot';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Sharing from 'expo-sharing';
-import { Screen, Txt, Card, Segmented, Button, Pill, TeamBadge, LivePip, MiniWordmark, SignInModal, SponsorMark } from '../components/ui';
+import { Screen, Txt, Card, Segmented, Button, Pill, TeamBadge, LivePip, MiniWordmark, SignInModal, SponsorMark, ReportAction } from '../components/ui';
 import { useStore, useLeague } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
 import { colors, space, font, wordmarkGradient } from '../theme';
@@ -298,9 +298,7 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
             ))
           }
         </Card>
-        <Button
-          title="Report this information"
-          kind="ghost"
+        <ReportAction
           style={{ marginTop: space(5) }}
           onPress={() => navigation.navigate('ReportContent', {
             recordType: 'game', recordId: gameId, leagueId,
