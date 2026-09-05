@@ -140,7 +140,7 @@ export function describeSync(i: SyncInputs): SyncSummary {
       'Sending changes to the server.', 'ok');
   }
   if (i.writeState === 'saved') {
-    return of('saved', 'Saved', 'Saved', 'Everything on this device is saved to the server.', 'ok');
+    return of('saved', 'Saved', 'Saved', 'The latest sync completed. No game or stat changes are queued.', 'ok');
   }
   return of('synced', 'Connected', 'Synced', 'Connected — changes sync across devices in real time.', 'ok');
 }

@@ -289,12 +289,22 @@ Highest probability of defects. Each of these was a real bug at some point.
 
 Needs two devices, or one device plus airplane mode.
 
+**Setup prerequisite:** sign in, create the league, teams and players, and start the
+game while online. Confirm setup has synchronized and the scoring device has loaded
+the game and rosters before disconnecting. Drop-in/recreational game creation also
+requires connectivity. These checks exercise connection loss during scoring, not
+support for offline league or roster setup.
+
+**Known setup failure to track separately:** validating a creation code online and
+then disconnecting before submitting New League can show an unsaved local league
+without owner access; a later refresh can remove it.
+
 - [ ] **R113** Settings → Sync card, online with nothing queued, reads
       "Connected" with a green dot. It is now DERIVED from observed
       reachability and the outbox depth, not from a build-time constant, so it
       must also change: see R150-R153.
 - [ ] **R114** Score on device A. *Expect:* device B updates within a second or two.
-- [ ] **R115** Create a team on A. *Expect:* appears on B.
+- [ ] **R115** While online, create a team on A. *Expect:* appears on B.
 - [ ] **R116** Spectator on B watches A's live game: score, play-by-play, fan
       dashboard all update.
 - [ ] **R117** Airplane mode: log stats offline. *Expect:* works locally.

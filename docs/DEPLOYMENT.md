@@ -253,10 +253,13 @@ eas build --platform android --profile preview
 eas build --platform ios --profile preview
 ```
 
-Walk the full "definition of done": create a league, add two teams + players, start a game,
-log a quarter of stats with the two-tap pad, finish, check standings/leaderboard, and tap
-**Share box-score card**. Confirm it all works in airplane mode (offline-first), then kill and
-reopen the app to confirm the **resume-live-game** banner appears.
+While online, create a league, add two teams and players, and start a game. Confirm setup
+has synchronized before enabling airplane mode. Log a quarter of stats with the two-tap
+pad, then close and reopen the app while the game is still live. Confirm the
+**resume-live-game** banner appears and the unsynced stats remain. Reconnect and verify
+the sync status confirms saving and another device sees the same stats. Finish the game,
+check standings/leaderboards, and tap **Share box-score card**. Separately verify drop-in
+game creation while online. Offline setup is not part of the supported synced workflow.
 
 ---
 
@@ -305,16 +308,24 @@ build, then **Submit for Review**.
 Apple review typically takes 1–3 days.
 
 **Likely reviewer questions for this app:** the reviewer must be able to exercise sign-in and see
-real content. In the Review Notes, explain the three roles (guest / signed-in / admin), note that
-any Google or Apple account can sign in, and provide the backup admin password plus the hidden
-gesture (tap the iTala wordmark 10×) so admin features can be verified. Review Notes are private
-to Apple, so the password is fine there — do not put it anywhere public. Pre-seed a demo league
-so guest browsing isn't empty (use made-up player names, not real ones).
+real content. Create a dedicated Google test account and provide its email and password privately
+in App Store Connect's App Review Information sign-in fields. In Review Notes, direct reviewers
+to **Sign in with Google** using that account, and supply fresh single-use League Creation Codes
+privately so they can create and own a test league, manage rosters, and score games. Verify the
+account works on a clean device without developer intervention, and keep unused backup codes
+available for repeat testing. Explain guest, named-user, scorekeeper, owner and platform-admin
+roles; the test account only needs regular named-user access before creating its league.
+Pre-seed a demo league so guest browsing isn't empty (use made-up player names, not real ones).
+Keep credentials and codes out of the repository; invalidate any previously published unused
+codes before supplying replacements. Follow the access checklist in `docs/APP_REVIEW.md`.
 
-There are no payments. Content is not public: rosters and stats are visible to signed-in
-sessions, and there is no feed, no comments, no messaging and no way for one user to publish to
-another. Say that plainly — it is why the app doesn't need UGC moderation tooling today. If you
-add the social/highlight feed, that changes, and Apple will require reporting and blocking.
+There are no payments, social feed, comments, reactions or direct messages. League owners can,
+however, publish roster information, team logos, photographs and sponsor material that concerns
+or belongs to other people. The app therefore provides **Report this information** on player,
+team, league and box-score screens. Reports go to the private `content_reports` review queue and
+return a reference number; the Content Policy also provides email reporting and correction
+routes. Point the reviewer to this flow explicitly. Do not claim automated filtering or user
+blocking exists when it does not. See `docs/APP_REVIEW.md` for the complete reviewer walkthrough.
 
 ---
 
@@ -378,7 +389,7 @@ You can also combine build + submit in one step with `eas build --platform all -
 - [ ] Real bundle identifiers set in `app.json` (not `com.yourcompany.*`)
 - [ ] App icon (1024²) and splash present in `assets/` — included; swap for your own branding if desired
 - [ ] Tested on a physical iPhone **and** Android phone via a `preview` build
-- [ ] Verified offline use + resume-live-game
+- [ ] Verified online setup, connection loss during live scoring, resume-live-game, and synchronization after reconnecting
 - [ ] Screenshots captured for both stores
 - [ ] Apple privacy labels + Google Data safety form filled in from the two tables in prerequisite gotcha #2: email, name, photos, **roster content (player names/numbers/stats)**, team/league names, **venue text** and user ID: all App Functionality, linked to user; plus **sponsor promo tap counts** as Usage Data → Advertising Data / App activity → App interactions, *not* linked. No tracking. Not "Data Not Collected": the app has accounts and server-side rosters
 - [ ] **Location NOT declared** on either form: the venue is user-typed text, not device location, and the app has no location permission or dependency

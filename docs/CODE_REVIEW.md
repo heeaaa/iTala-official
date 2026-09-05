@@ -1,5 +1,12 @@
 # Code Review
 
+> **Current product scope (2026-09-05):** The audit below retains historical wording,
+> including broad “offline-first” descriptions. The supported synced workflow now
+> documented in the README is online league/roster/game setup, with offline scoring
+> during an already-started game and retry after reconnecting. Local-only is a separate
+> development configuration. Historical audit descriptions are not a promise of offline
+> setup; the administrative replay gap noted under N-40 remains a known limitation.
+
 **Audit date:** 27/08/2026
 **Scope:** Full read-only audit of the iTala codebase (Expo/React Native, TypeScript, optional Supabase backend). No application source code was modified as part of this audit.
 

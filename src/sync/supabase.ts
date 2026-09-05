@@ -7,7 +7,9 @@
 // EXPO_PUBLIC_* vars are inlined into the JS bundle by Metro, so they're
 // available at runtime. If both vars are present, the app runs in SYNCED mode
 // (offline-cached locally, mirrored to/from Supabase). If either is missing,
-// the app runs in LOCAL-ONLY mode — fully functional, just no cross-device sync.
+// the app runs in a separate LOCAL-ONLY development configuration. Local admin
+// setup/unlock is still required for league administration. This is not an
+// automatic fallback on connection loss, and its data has no later server replay.
 //
 // The anon key is safe to ship in the client; row-level security on the
 // database is what actually protects writes. See supabase/schema.sql.
