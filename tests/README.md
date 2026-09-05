@@ -71,10 +71,9 @@ Two rules are set deliberately, both explained inline in the config:
 - `react/no-unescaped-entities` is **off**. It stops a bare apostrophe breaking
   HTML parsing; RN's `<Text>` renders string children literally, so escaping
   would render a literal `&apos;` to the user.
-- `react-hooks/exhaustive-deps` is a **warning**, not an error. Its only two hits
-  are docs/CODE_REVIEW.md F-14, and changing a dependency array changes when a memo
-  recomputes - a behaviour change that needs its own tests. It stays visible on
-  every run until F-14 lands.
+- `react-hooks/exhaustive-deps` is a **warning**, not an error. Changing a dependency
+  array changes when a memo recomputes - a behaviour change that needs its own tests.
+  It stays visible on every run until F-14 lands.
 
 Everything else that fired on the first run was fixed rather than suppressed, so
 the gate starts from zero errors. **Prettier is configured but not applied**: it
