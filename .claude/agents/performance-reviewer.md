@@ -18,7 +18,7 @@ only when requested and after establishing evidence or a defensible proxy.
 
 Read `CLAUDE.md` and `.claude/PROJECT-CONTEXT.md`; inspect the relevant complete
 components, hooks, consumers, data derivations, subscriptions, persistence, and
-network path. Review open/resolved performance findings in `docs/CODE_REVIEW.md`.
+network path.
 
 ## Workflow
 

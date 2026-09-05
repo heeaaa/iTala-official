@@ -193,4 +193,3 @@ reviewer instructions in [App Review preparation](docs/APP_REVIEW.md) before sub
 | [Testing](tests/README.md) | Automated suite design and database-test setup |
 | [Manual regression](tests/MANUAL-REGRESSION.md) | Real-device, accessibility and integration checks |
 | [Public site](site/README.md) | Landing page, legal policies and support routes |
-| [Code review record](docs/CODE_REVIEW.md) | Historical audit findings and remediation evidence |
