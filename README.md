@@ -57,18 +57,27 @@ follow and share.
 - Optional explanation and contact email with a reference number after submission
 - In-app account deletion for named accounts
 
-## Offline-first and synchronization
+## Connectivity and synchronization
 
-iTala supports two operating modes:
+**Set up online.** An internet connection is required for sign-in, creation-code
+validation, league creation, team and player management, and drop-in/recreational game
+creation. Complete setup and start the game while connected. Entering a valid creation
+code does not make the subsequent league-creation form work offline: the server must
+create the league and grant its owner permissions.
 
-**Local-only mode** works without a backend. Leagues, rosters, games and settings
-remain on that device. Core game scoring persists locally and can be resumed after
-the app is closed.
+**Keep scoring through a connection loss.** Once the game and rosters are loaded and
+the game is underway, live stat tracking can continue if the connection drops. Game
+and event changes are saved on the device, queued for retry, and synchronized when a
+connection to Supabase is restored and the server accepts the writes. Check the sync
+status to confirm saving has completed; other devices cannot see unsynced changes.
 
-**Synced mode** connects the app to Supabase. The device still writes locally first,
-then synchronizes supported changes when connectivity is available. Synced mode adds
-account-backed roles, invitations, multi-device updates, spectator access and content
-reporting.
+League and roster setup changes do not have the same offline recovery guarantees as
+live scoring. A newly created league appearing on-screen is not proof that the server
+saved it. Keep setup online and confirm it has synchronized before relying on it.
+
+The repository also has a separate local-only development configuration without
+Supabase. It does not activate when a connected build loses Wi-Fi and does not provide
+later synchronization. See [Architecture](docs/ARCHITECTURE.md) for its limitations.
 
 Two scorekeepers should not edit the same game simultaneously. Concurrent edits use a
 last-write-wins policy, while separate games can be scored independently. See
@@ -164,6 +173,8 @@ instructions in [App Review preparation](docs/APP_REVIEW.md) before submission.
 
 ## Known limitations
 
+- Offline league, team, player and drop-in game setup is not a supported workflow in
+  synced builds. Prepare the game online before scoring through a connection loss.
 - Local-only installations do not provide multi-device sync, invitations, accounts or
   the server-backed content-report queue.
 - Simultaneous scorekeeping in the same game is unsupported; later writes can replace

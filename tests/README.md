@@ -1,5 +1,11 @@
 # iTala regression tests
 
+The supported synced workflow is online league/roster/game setup followed by live
+scoring that can continue through a connection loss. Tests for offline game-row writes
+exercise recovery primitives; they do not promise offline league, team, player or
+drop-in setup. Provider characterization tests also document that administrative
+mutations are not included in the game/event retry outbox.
+
 ```bash
 node tests/run.js        # or: npm test
 ```

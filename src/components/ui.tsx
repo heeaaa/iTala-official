@@ -608,10 +608,10 @@ export function OnboardingSheet({ visible, onClose, onNeverShow }:
                 <Text style={{ fontFamily: font.body, fontSize: 20, color: colors.muted }}>✕</Text>
               </Pressable>
             </View>
-            <Row icon="👀" title="Anyone can watch" body="Browse leagues, standings, and live games as a guest — no account needed." />
-            <Row icon="🏀" title="Sign in to run games" body="Sign in with Google or Apple to track stats, manage rosters, and share player cards." />
-            <Row icon="🎟" title="Leagues start with a code" body="Creating a league needs a one-time code from a Super Admin. Owners then invite co-owners and scorekeepers with their own share codes." />
-            <Row icon="⚡" title="Everything syncs live" body="Scores update in real time across every device watching the game." />
+            <Row icon="👀" title="Anyone can watch" body="Browse leagues, standings, and live games — no account needed." />
+            <Row icon="🏀" title="Sign in to run games" body="Sign in with Google or Apple to setup leagues and share box scores or player cards." />
+            <Row icon="🎟" title="Leagues start with a code" body="Creating a league needs a one-time code from an Admin. Owners then invite co-owners and scorekeepers with their own share codes." />
+            <Row icon="⚡" title="Offline stat sync" body="Keep the game moving even when the connection drops." />
             <Pressable onPress={onNeverShow} hitSlop={8} style={{ alignSelf: 'center', paddingVertical: 6 }}>
               <Text style={{ fontFamily: font.body, fontSize: 13, color: colors.muted, textDecorationLine: 'underline' }}>
                 Don't show this again

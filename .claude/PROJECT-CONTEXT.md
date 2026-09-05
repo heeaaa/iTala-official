@@ -14,6 +14,11 @@ tests, schema, and `CLAUDE.md` remain authoritative.
 - The app records basketball events; box scores, standings, leaders, and career
   totals are derived from the event log rather than persisted as totals.
 - `site/` is a separate static marketing/privacy site, not the mobile runtime.
+- Supported synced workflow: sign-in, league creation, roster management and drop-in
+  setup require connectivity. Prepare and start games online; live scoring can then
+  continue through a connection loss using the game/event retry outbox. Do not describe
+  the entire app as supporting offline setup. Local-only is a separate development
+  configuration, not an automatic network-loss fallback.
 
 ## Architecture map
 

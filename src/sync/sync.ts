@@ -1,10 +1,12 @@
 // Sync layer between the local reducer state and Supabase.
 //
 // Strategy: the local reducer remains the source of truth for UI state and is
-// always written to AsyncStorage (offline-first). When sync is enabled we ALSO
-// mirror mutations to Supabase tables and subscribe to changes from other
-// devices via Realtime. If a network call fails, the local state stays correct
-// and the next successful operation reconverges things.
+// persisted to AsyncStorage. When sync is enabled we also mirror eligible
+// mutations to Supabase and subscribe to changes via Realtime. Game/event
+// writes have a durable retry outbox; league/team/player setup does not.
+// Setup must complete online before relying on scoring through connection loss.
+// A local setup row is not proof of a successful server write and may be replaced
+// by a later snapshot when its push fails.
 //
 // Conflict policy: LAST WRITE WINS. Two scorekeepers should not be on the same
 // game; if they are, the most recent write replaces the earlier one. Events

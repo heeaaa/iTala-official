@@ -59,7 +59,8 @@ use real material has been documented.
 Keep the final Review Notes shorter than this operational checklist, but make the route
 to every important capability explicit.
 
-1. Launch iTala and allow the initial synchronized data load to finish.
+1. Connect to the internet, launch iTala, and allow the initial synchronized data load
+   to finish. Remain online through league, roster and game setup.
 2. Open the profile control, choose **Sign in with Google**, and use the dedicated test
    account supplied privately in App Store Connect.
 3. Browse the sample league to view its games, standings, leaders and roster.
@@ -194,7 +195,8 @@ Keep private credentials and unrelated personal notifications out of the recordi
 - [ ] Production Supabase schema and authorization verified
 - [ ] Content report submitted and reviewed end-to-end
 - [ ] Account deletion completed with a disposable account
-- [ ] Offline scoring and app-restart recovery verified
+- [ ] League, roster and drop-in game setup completed and synchronized online
+- [ ] Connection lost during an active game: scoring continues, survives app restart, and synchronizes after reconnecting
 - [ ] Privacy declarations reconciled with the code and policy
 - [ ] Support, Privacy, Terms and Content Policy HTTPS URLs verified
 - [ ] App metadata and screenshots match the submitted build
@@ -215,8 +217,11 @@ Copy this into App Store Connect only after replacing every bracketed value:
 > Only one code is required; the others are backups. Add or edit teams and players,
 > create a scheduled or live game, select a starting lineup, record statistics, and
 > finalize the game to view the box score, player statistics, standings and shareable
-> stat cards. The app supports offline-first scorekeeping; changes are saved locally and
-> synchronized when connectivity is available.
+> stat cards. Sign-in, league and roster setup, and drop-in/recreational game creation
+> require an internet connection. Complete setup and start the game online. If the
+> connection drops during live scoring, game and stat changes remain on the device and
+> retry synchronization when connectivity returns. Check the sync status for confirmation
+> that the server has saved them.
 >
 > To report content, open a player, team, league or box-score screen and scroll to
 > Report this information. Select a reason and submit; explanation and contact email are

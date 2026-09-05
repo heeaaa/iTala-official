@@ -38,14 +38,21 @@ same reducer action is evaluated more than once.
 
 ## Local-only mode
 
-When the two `EXPO_PUBLIC_SUPABASE_*` values are absent, `SYNC_ENABLED` is false. The
+When either required `EXPO_PUBLIC_SUPABASE_*` value is absent, `SYNC_ENABLED` is false. The
 application loads and saves its state locally and does not initialize Supabase-backed
 accounts or synchronization.
 
-This mode supports the core scoring workflow on one device. It does not provide shared
-leagues, invitations, remote spectators or the server-backed content-report queue.
+This is a separate development configuration, not a fallback entered when a synced
+build loses connectivity. Data remains on one device with no later server replay.
+Local league-administration controls require the local admin password configuration
+and unlock. This mode does not provide shared leagues, invitations, remote spectators
+or the server-backed content-report queue.
 
 ## Synced mode
+
+The supported user workflow requires connectivity for sign-in, league creation and
+creation-code validation, roster administration, and drop-in/recreational game setup.
+Prepare and start the game online; live scoring can then tolerate a connection loss.
 
 When Supabase configuration is present, the local reducer remains the immediate UI
 state. Sync-eligible actions update locally first and are then mirrored to Supabase;
@@ -78,6 +85,15 @@ above. Administrative mutations such as roster and league changes do not all hav
 equivalent durable offline replay path. The manual regression plan must therefore cover
 offline roster and league administration separately; the product's strongest offline
 guarantee is for active-game scoring.
+
+In particular, `CreateLeagueScreen` dispatches `ADD_LEAGUE` and navigates before the
+`create_league` RPC confirms success. That RPC validates and consumes the code, creates
+the league, and grants owner membership. Validating a code earlier does not complete
+those operations. A failed creation can therefore leave a local league visible without
+server ownership, blocking roster administration; a later server snapshot can remove
+the unsaved league. This is an existing failure-handling limitation, not an offline
+setup capability. The interface should eventually wait for server confirmation or
+clearly report and recover from failure.
 
 ## Authentication and authorization
 

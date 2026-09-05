@@ -253,10 +253,13 @@ eas build --platform android --profile preview
 eas build --platform ios --profile preview
 ```
 
-Walk the full "definition of done": create a league, add two teams + players, start a game,
-log a quarter of stats with the two-tap pad, finish, check standings/leaderboard, and tap
-**Share box-score card**. Confirm it all works in airplane mode (offline-first), then kill and
-reopen the app to confirm the **resume-live-game** banner appears.
+While online, create a league, add two teams and players, and start a game. Confirm setup
+has synchronized before enabling airplane mode. Log a quarter of stats with the two-tap
+pad, then close and reopen the app while the game is still live. Confirm the
+**resume-live-game** banner appears and the unsynced stats remain. Reconnect and verify
+the sync status confirms saving and another device sees the same stats. Finish the game,
+check standings/leaderboards, and tap **Share box-score card**. Separately verify drop-in
+game creation while online. Offline setup is not part of the supported synced workflow.
 
 ---
 
@@ -386,7 +389,7 @@ You can also combine build + submit in one step with `eas build --platform all -
 - [ ] Real bundle identifiers set in `app.json` (not `com.yourcompany.*`)
 - [ ] App icon (1024²) and splash present in `assets/` — included; swap for your own branding if desired
 - [ ] Tested on a physical iPhone **and** Android phone via a `preview` build
-- [ ] Verified offline use + resume-live-game
+- [ ] Verified online setup, connection loss during live scoring, resume-live-game, and synchronization after reconnecting
 - [ ] Screenshots captured for both stores
 - [ ] Apple privacy labels + Google Data safety form filled in from the two tables in prerequisite gotcha #2: email, name, photos, **roster content (player names/numbers/stats)**, team/league names, **venue text** and user ID: all App Functionality, linked to user; plus **sponsor promo tap counts** as Usage Data → Advertising Data / App activity → App interactions, *not* linked. No tracking. Not "Data Not Collected": the app has accounts and server-side rosters
 - [ ] **Location NOT declared** on either form: the venue is user-typed text, not device location, and the app has no location permission or dependency
