@@ -297,7 +297,7 @@ support for offline league or roster setup.
 
 **Known setup failure to track separately:** validating a creation code online and
 then disconnecting before submitting New League can show an unsaved local league
-without owner access; a later refresh can remove it. 
+without owner access; a later refresh can remove it.
 
 - [ ] **R113** Settings → Sync card, online with nothing queued, reads
       "Connected" with a green dot. It is now DERIVED from observed
