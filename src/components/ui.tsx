@@ -222,6 +222,33 @@ export function Button({ title, onPress, kind = 'primary', style, disabled }:
   );
 }
 
+// Quiet secondary action for reporting content. It reads as a text link while
+// retaining a full touch target and explicit button semantics for accessibility.
+export function ReportAction({ onPress, style }: { onPress: () => void; style?: ViewStyle }) {
+  const title = 'Report this information';
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      accessibilityHint="Opens the content report form"
+      hitSlop={4}
+      style={({ pressed }) => [{
+        minHeight: 44,
+        paddingVertical: 12,
+        paddingHorizontal: 8,
+        alignSelf: 'center',
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: pressed ? 0.65 : 1,
+      }, style]}>
+      <Text style={{ fontFamily: font.bodyBold, fontSize: 14, color: colors.red, textAlign: 'center' }}>
+        {title}
+      </Text>
+    </Pressable>
+  );
+}
+
 export function Card({ children, style, onPress, accessibilityLabel, accessibilityHint, accessibilityActions, onAccessibilityAction }:
   {
     children: React.ReactNode; style?: ViewStyle; onPress?: () => void;

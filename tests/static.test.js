@@ -1582,6 +1582,7 @@ for (const f of srcFiles) {
   const navigation = read('src/navigation.ts');
   const app = read('App.tsx');
   const form = read('src/screens/ReportContentScreen.tsx');
+  const ui = read('src/components/ui.tsx');
   const schema = read('supabase/schema.sql');
   const surfaces = [
     'src/screens/PlayerProfileScreen.tsx',
@@ -1596,9 +1597,18 @@ for (const f of srcFiles) {
   for (const path of surfaces) {
     const source = read(path);
     ok(`${path} exposes Report this information`,
-       source.includes('Report this information') && source.includes("navigate('ReportContent'"),
+       source.includes('<ReportAction') && source.includes("navigate('ReportContent'"),
        'players, teams, games and leagues all need an in-app reporting route');
   }
+  const reportActionStart = ui.indexOf('export function ReportAction');
+  const reportActionEnd = ui.indexOf('export function Card', reportActionStart);
+  const reportAction = reportActionStart >= 0 && reportActionEnd > reportActionStart
+    ? ui.slice(reportActionStart, reportActionEnd)
+    : '';
+  ok('shared report action keeps its visible label and button semantics',
+     reportAction.includes("const title = 'Report this information'")
+       && /accessibilityRole="button"/.test(reportAction),
+     'the lightweight report action must remain identifiable and accessible');
   ok('report form offers every required concern without requiring contact details',
      /REPORT_REASONS\.map/.test(form) && /Contact email \(optional\)/.test(form)
        && /Explanation \(optional\)/.test(form),

@@ -3,7 +3,7 @@ import { View, ScrollView, Share } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Sharing from 'expo-sharing';
-import { Screen, Txt, Card, Pill, Empty, Button, TeamBadge, MiniWordmark, SignInModal, SponsorMark } from '../components/ui';
+import { Screen, Txt, Card, Pill, Empty, Button, TeamBadge, MiniWordmark, SignInModal, SponsorMark, ReportAction } from '../components/ui';
 import { useLeague } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
 import { colors, space, font, wordmarkGradient } from '../theme';
@@ -216,9 +216,7 @@ export default function PlayerProfileScreen({ route, navigation }: ScreenProps<'
         </>
       )}
 
-      <Button
-        title="Report this information"
-        kind="ghost"
+      <ReportAction
         style={{ marginTop: space(5) }}
         onPress={() => navigation.navigate('ReportContent', {
           recordType: 'player', recordId: playerId, leagueId, teamId: team?.id, label: player.name,

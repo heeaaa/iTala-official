@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, ScrollView, Pressable, TextInput, Alert, Share, ActivityIndicator } from 'react-native';
-import { Screen, Txt, Card, Button, Pill, Segmented, Empty, TeamBadge, LivePip, Toggle } from '../components/ui';
+import { Screen, Txt, Card, Button, Pill, Segmented, Empty, TeamBadge, LivePip, Toggle, ReportAction } from '../components/ui';
 import { useStore, useLeague } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
 import { colors, space, font, radius } from '../theme';
@@ -653,9 +653,7 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
           </>
         )}
         {!showSettings && (
-          <Button
-            title="Report this information"
-            kind="ghost"
+          <ReportAction
             style={{ marginTop: space(5), marginBottom: scorer && !isRec && !seasonOver ? space(16) : 0 }}
             onPress={() => navigation.navigate('ReportContent', {
               recordType: 'league', recordId: leagueId, leagueId, label: league.name,
