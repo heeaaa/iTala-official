@@ -556,7 +556,7 @@ Share this with the organizer. It can create exactly one league, then expires.`)
       )}
 
       <OnboardingSheet
-        visible={prefsReady && !prefs.seenOnboarding && !onboardingClosed}
+        visible={!authBusy && prefsReady && !prefs.seenOnboarding && !onboardingClosed}
         onNeverShow={() => { setOnboardingClosed(true); dismissOnboarding(); }}
         isSignedIn={!!user}
         onClose={() => setOnboardingClosed(true)}

@@ -9,6 +9,7 @@ insert into auth_state values ('11111111-1111-1111-1111-111111111111', false);
 -- between via auth_state - an FK violation here would otherwise look like a
 -- failure in the code under test rather than missing scaffolding.
 create table if not exists auth.users (id uuid primary key);
+alter table auth.users add column if not exists is_anonymous boolean not null default false;
 insert into auth.users (id) values
   ('11111111-1111-1111-1111-111111111111'),
   ('22222222-2222-2222-2222-222222222222'),

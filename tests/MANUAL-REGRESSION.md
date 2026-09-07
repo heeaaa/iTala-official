@@ -40,7 +40,7 @@ build preserves what it should - neither of which a static check can tell you.
 
 ---
 
-## P1. Recently changed or previously broken (test these first)
+## P1. Recently changed or previously broken
 
 Highest probability of defects. Each of these was a real bug at some point.
 
@@ -172,7 +172,32 @@ Highest probability of defects. Each of these was a real bug at some point.
 - [ ] **R51** The original "Share stat card" on the player profile still works
       (backward compatibility).
 
-### Auth (session purge fixed this session)
+### Auth
+
+Legal acknowledgement (automated handler checks are not
+evidence of native presentation):
+
+- [ ] Fresh install: onboarding completes/deferred prompts respect `authBusy`;
+      legal review does not compete with another native modal.
+- [ ] Tap Google and Apple separately: no provider browser/sheet opens before
+      checking the agreement and tapping Agree and continue. Cancel/back/Not now
+      at pre-auth returns to guest browsing without creating an account.
+- [ ] iOS: legal modal fully dismisses before Apple's sheet appears. Rapid double
+      taps launch only one flow. Cancel the provider sheet and retry normally.
+- [ ] Terms, Privacy and Content links each open the correct external document;
+      returning to the app preserves the current review. Link failure is readable.
+- [ ] VoiceOver/TalkBack announces checkbox label/state and disabled Continue;
+      large text, landscape and smallest supported phone permit scrolling to
+      both actions without clipping. Focus stays in the modal while visible.
+- [ ] Interrupt connectivity after OAuth succeeds but before the receipt saves:
+      user remains guest, retry stays visible, and retry after reconnection
+      grants account access once with a server dated receipt.
+- [ ] Existing account without receipt: cold start asks for review. Decline
+      returns to guest. Current accepted account restores without a new prompt.
+- [ ] Current confirmed account restores offline; first acceptance cannot happen
+      offline. After the server announces a newer version, kill/restart offline:
+      the obsolete cached receipt must not grant account access.
+- [ ] Account deletion removes its receipts; another account cannot see them.
 
 - [ ] **R52** Cold start the app. *Expect:* no "Invalid Refresh Token" error,
       and boot is not stalled for ~10 seconds.

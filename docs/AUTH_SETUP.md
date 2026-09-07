@@ -227,6 +227,9 @@ update public.profiles set is_admin = false where id = '<their auth uid>';
 
 ## Troubleshooting
 
+For the pre-sign-in checkbox, receipt schema deployment, offline behavior and future
+document-version changes, see [Legal acknowledgement](LEGAL_ACKNOWLEDGEMENT.md).
+
 - **"Safari cannot open the page because the address is invalid"**, or the
   browser opens and after choosing the account nothing comes back → the redirect
   URL isn't allowlisted, so Supabase fell back to the Site URL. Check the Metro

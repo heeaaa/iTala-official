@@ -40,6 +40,10 @@ function slice(from, to) {
 }
 
 const SECTIONS = {
+  legal: () => slice(
+    '-- LEGAL ACKNOWLEDGEMENT: versioned receipts, checked only at account entry',
+    '-- END LEGAL ACKNOWLEDGEMENT',
+  ),
   // Admin password storage + the elevate/lock RPCs.
   admin: () => slice(
     '-- pgcrypto supplies crypt()',
