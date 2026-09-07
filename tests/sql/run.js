@@ -166,6 +166,85 @@ const SECTIONS = {
     'create or replace function public.add_player(',
     'grant execute on function public.add_player(text,text,text,text,text) to authenticated;',
   ),
+
+  // A project as it stood BEFORE two admins were retired: all four addresses
+  // allowlisted, and profiles already flagged is_admin for them (which is what
+  // the trigger and sync_admin_role would have done at their first sign-in).
+  // Load before `admin_allowlist` to reproduce a live project. A literal on
+  // purpose - it must keep reproducing the old state, not track today's seed.
+  legacy_admin_allowlist: () => `
+    create table if not exists public.admin_emails (
+      email    text primary key,
+      added_at timestamptz not null default now()
+    );
+    insert into public.admin_emails (email) values
+      ('abejoharold@gmail.com'), ('abejohanna@gmail.com'),
+      ('aeronjosephsantos@gmail.com'), ('santos.ajhea@gmail.com')
+    on conflict (email) do nothing;
+
+    alter table public.profiles add column if not exists email text;
+    -- harness.sql's auth.users stub carries only id + is_anonymous, because
+    -- nothing needed more. Real Supabase auth.users has email, and the demote
+    -- reads it as the authoritative copy, so the stub needs it here.
+    alter table auth.users add column if not exists email text;
+    insert into auth.users (id, email) values
+      ('eeeeeeee-0000-0000-0000-000000000001', 'abejohanna@gmail.com'),
+      ('eeeeeeee-0000-0000-0000-000000000002', 'aeronjosephsantos@gmail.com'),
+      ('eeeeeeee-0000-0000-0000-000000000003', 'santos.ajhea@gmail.com')
+    on conflict (id) do update set email = excluded.email;
+    insert into public.profiles (id, is_admin, email) values
+      ('eeeeeeee-0000-0000-0000-000000000001', true, 'abejohanna@gmail.com'),
+      ('eeeeeeee-0000-0000-0000-000000000002', true, 'aeronjosephsantos@gmail.com'),
+      -- No cached profiles.email: this profile predates the column, so the
+      -- demote has to resolve the address through auth.users instead.
+      ('eeeeeeee-0000-0000-0000-000000000003', true, null)
+    on conflict (id) do update set is_admin = excluded.is_admin, email = excluded.email;
+  `,
+
+  // The allowlist seed plus the retire-an-admin block that follows it. Sliced
+  // rather than copied: what it does NOT do (revoke by omission) is the whole
+  // subject of admin_allowlist_retirement.test.sql.
+  admin_allowlist: () => slice(
+    'insert into public.admin_emails (email) values',
+    '-- ---- END RETIRED ADMINS ---------------------------------------------------',
+  ),
+
+  // legal_versions as it looks on a project set up BEFORE the itala.fyi domain
+  // was bought: the same version row, still pointing at the retired
+  // *.workers.dev host, and already current. Load this before `legal` to
+  // reproduce a real deployed project. Kept as a literal on purpose - it must
+  // not track whatever schema.sql says today, or it would stop reproducing
+  // anything.
+  legacy_legal_urls: () => `
+    create table if not exists public.legal_versions (
+      version text primary key,
+      terms_url text not null,
+      privacy_url text not null,
+      content_policy_url text not null,
+      is_current boolean not null default false
+    );
+    insert into public.legal_versions
+      (version, terms_url, privacy_url, content_policy_url, is_current)
+    values ('2026-09-07', 'https://itala.abejohanna.workers.dev/terms/',
+      'https://itala.abejohanna.workers.dev/privacy/',
+      'https://itala.abejohanna.workers.dev/content-policy/', true)
+    on conflict (version) do nothing;
+  `,
+
+  // The private report queue: the table, its RLS, its grants, the request_id
+  // deduplication migration and submit_content_report itself.
+  content_reports: () => slice(
+    'create table if not exists public.content_reports (',
+    'grant execute on function public.submit_content_report(text,text,text,text,text,text,text,text) to anon, authenticated;',
+  ),
+
+  // delete_own_account. Sliced rather than stubbed because what it does NOT
+  // delete is the subject of content_report_retention.test.sql - a copy of this
+  // function in a test would be free to disagree with the shipped one.
+  account_deletion: () => slice(
+    'create or replace function public.delete_own_account()',
+    'grant execute on function public.delete_own_account() to authenticated;',
+  ),
 };
 
 function havePsql() {

@@ -30,13 +30,31 @@ create unique index if not exists legal_one_current_version
   on public.legal_versions (is_current) where is_current;
 alter table public.legal_versions enable row level security;
 revoke all on public.legal_versions from anon, authenticated;
--- Re-running the schema never rolls back an operator's newer required version.
+-- Re-running the schema never rolls back an operator's newer required version:
+-- `is_current` is set only when no version is current yet, and the conflict
+-- clause below deliberately leaves it alone.
+--
+-- The URLs, though, must self-heal. They moved host when the itala.fyi domain
+-- was bought, and `on conflict do nothing` would have left an existing project
+-- pinned to the old `itala.abejohanna.workers.dev` addresses forever - a stale
+-- record that no amount of re-running the schema would correct. The three
+-- documents are the same documents at a new address, so this is an update, NOT
+-- a new version: bumping `version` here would force every existing user to
+-- re-accept unchanged terms.
+--
+-- Keep these three in step with LEGAL_LINKS in src/lib/legal.ts - the app opens
+-- the client's copy, so a disagreement means the receipt on file cites a
+-- different address from the page the person actually read. tests/static.test.js
+-- checks the two agree.
 insert into public.legal_versions (version, terms_url, privacy_url, content_policy_url, is_current)
-values ('2026-09-04', 'https://itala.abejohanna.workers.dev/terms/',
-  'https://itala.abejohanna.workers.dev/privacy/',
-  'https://itala.abejohanna.workers.dev/content-policy/',
+values ('2026-09-07', 'https://www.itala.fyi/terms/',
+  'https://www.itala.fyi/privacy/',
+  'https://www.itala.fyi/content-policy/',
   not exists (select 1 from public.legal_versions where is_current))
-on conflict (version) do nothing;
+on conflict (version) do update set
+  terms_url = excluded.terms_url,
+  privacy_url = excluded.privacy_url,
+  content_policy_url = excluded.content_policy_url;
 
 create table if not exists public.legal_acceptances (
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -105,10 +123,41 @@ alter table public.admin_emails enable row level security;
 
 insert into public.admin_emails (email) values
   ('abejoharold@gmail.com'),
-  ('abejohanna@gmail.com'),
-  ('aeronjosephsantos@gmail.com'),
-  ('santos.ajhea@gmail.com')
+  ('abejohanna@gmail.com')
 on conflict (email) do nothing;
+
+-- ---- RETIRED ADMINS -------------------------------------------------------
+-- Deleting a line from the seed above revokes NOTHING, and it is worth being
+-- exact about why, because "the list no longer mentions them" reads like a
+-- removal:
+--
+--   1. the insert is `on conflict (email) do nothing`, so on a project that is
+--      already set up the row simply stays;
+--   2. even with the row gone, `sync_admin_role` below only ever sets
+--      `is_admin = true` - it deliberately never demotes, because that would
+--      silently undo the password-elevation backup - so `profiles.is_admin`
+--      stays true forever and RLS keeps letting the writes through.
+--
+-- So retiring an admin takes an explicit delete AND an explicit demote. Both
+-- are idempotent and both name the addresses, so nobody else can be caught by
+-- them - including a password-elevated admin, whose email is not on this list.
+--
+-- To un-retire somebody, take them OUT of this list as well as putting them
+-- back in the seed. Otherwise the next schema run removes them again.
+do $$
+declare retired text[] := array['aeronjosephsantos@gmail.com', 'santos.ajhea@gmail.com'];
+begin
+  delete from public.admin_emails where lower(email) = any (retired);
+
+  -- Match on auth.users.email, which is the authoritative copy;
+  -- profiles.email is a denormalised cache and may predate the column.
+  update public.profiles p
+     set is_admin = false
+   where p.is_admin
+     and lower(coalesce((select u.email from auth.users u where u.id = p.id), p.email))
+           = any (retired);
+end $$;
+-- ---- END RETIRED ADMINS ---------------------------------------------------
 
 -- Auto-create a profile row whenever a new auth user is created.
 -- Google sign-ins whose email is on the admin_emails allowlist (above) are
@@ -190,6 +239,35 @@ grant execute on function public.sync_admin_role() to anon, authenticated;
 -- Deleting the auth.users row cascades to public.profiles (FK above). League
 -- and game data is keyed by league entities, not auth users, so recorded
 -- stats, teams, and standings are untouched.
+--
+-- WHAT THIS FUNCTION IS NOT
+--
+-- It is not the whole deletion story for an account linked to Sign in with
+-- Apple. Removing the auth.users row tells Apple nothing, so the app would stay
+-- listed under Settings -> Apple ID -> Sign in with Apple with a live
+-- authorization - which App Review 5.1.1(v) does not allow. Revocation needs an
+-- ES256 client secret signed with the team's private key, so it cannot happen
+-- here (no HTTP, no ES256) or in the client bundle (the key would ship with it).
+-- The `delete-account` Edge Function revokes at Apple FIRST and then calls this
+-- function as the caller. See supabase/functions/README.md.
+--
+-- Be precise about what that guarantees. This function is still granted to
+-- `authenticated`, so the ordering is enforced by the APP, not by the database:
+-- anything holding a user access token - including an older installed build
+-- during a staged rollout - can call it directly and delete an Apple-linked
+-- account with no revocation. Closing that would mean either handing the Edge
+-- Function a service-role key (it deliberately has none, so that a forged
+-- request cannot delete somebody else's account) or gating this function behind
+-- a second RPC that older clients would fail on. Neither trade is worth it, so
+-- the accurate claim is "the app revokes before deleting", not "deletion cannot
+-- happen without revocation".
+--
+-- WHAT IT DELIBERATELY DOES NOT REMOVE
+--
+-- content_reports.reporter_user_id. See the note on that column in section 5b:
+-- the id is retained on purpose so a report stays attributable while it is
+-- being resolved, and that retention is disclosed to the person deleting the
+-- account (SettingsScreen's confirmation) and in the privacy policy, section 10.
 create or replace function public.delete_own_account()
 returns void
 language plpgsql
@@ -1255,6 +1333,26 @@ create table if not exists public.content_reports (
   record_id        text not null,
   league_id        text not null,
   team_id          text,
+  -- DELIBERATELY NOT a foreign key to auth.users, and deliberately without any
+  -- on-delete behaviour.
+  --
+  -- A report is a record of a concern somebody raised, and it has to stay
+  -- usable after that person deletes their account: which session raised it is
+  -- how a duplicate is recognised, how the person who asked can be matched to
+  -- what they asked about, and how abuse of the queue is spotted. A cascade
+  -- would destroy open reports the moment a reporter left, and `set null` would
+  -- leave a queue of anonymous complaints nobody can resolve.
+  --
+  -- The consequence is that `delete_own_account` removes auth.users and
+  -- profiles while this column keeps the former app-session id. That is a
+  -- retention decision, so it is DISCLOSED rather than left implicit: in the
+  -- in-app deletion confirmation (src/screens/SettingsScreen.tsx), in the
+  -- privacy policy section 10, and in the App Review notes. The retained value
+  -- is an identifier only - after deletion it is not connected to any active
+  -- iTala account, and section 9's retention procedure still applies to the
+  -- report itself. tests/sql/content_report_retention.test.sql pins this
+  -- behaviour so a later `references auth.users(id) on delete cascade` cannot
+  -- be added without the test and the disclosure being reconsidered together.
   reporter_user_id uuid not null,
   reason           text not null check (reason in (
     'Incorrect information',

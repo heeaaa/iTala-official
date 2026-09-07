@@ -35,3 +35,7 @@ GoogleService-Info.plist
 # not iTala tooling.
 .agents/
 skills-lock.json
+# Supabase CLI scratch. Any invocation of the CLI creates it to cache the
+# latest-version check. Not project configuration - supabase/schema.sql and
+# supabase/functions/ are the tracked parts.
+supabase/.temp/

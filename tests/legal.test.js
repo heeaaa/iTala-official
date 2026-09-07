@@ -68,6 +68,15 @@ function setup(options = {}) {
       } },
     '../sync/supabase': { SYNC_ENABLED: true, getSupabase: () => sb },
     './guestSession': load('src/store/guestSession.ts', {}), '../lib/log': { devLog() {}, warn() {} },
+    // Account deletion now routes Apple-linked accounts through a revoking Edge
+    // Function. This suite is about the legal receipt, so the real module is
+    // loaded (rather than stubbed) and its behaviour is asserted next door, in
+    // tests/appleRevocation.test.js.
+    '../lib/appleAccountDeletion': load('src/lib/appleAccountDeletion.ts', {
+      'react-native': RN,
+      'expo-apple-authentication': { signInAsync: async () => ({ authorizationCode: 'legal-suite-code' }) },
+      '../store/authErrors': load('src/store/authErrors.ts', {}),
+    }),
     '../components/LegalAcknowledgement': component, '../lib/legal': legal,
     './authErrors': load('src/store/authErrors.ts', {}),
   });
@@ -210,7 +219,7 @@ test('post-auth status rejection holds account access even with a cached receipt
   p.dialog.onCancel(); await p.settle(); assert.equal(await result, null); p.root.unmount();
 });
 test('stale, malformed and unconfirmed local receipts are never accepted', async () => {
-  for (const cache of [{ version: 'old', accepted_at: '2026-09-07' }, { version: '2026-09-04', accepted_at: null }, { version: '2026-09-04', accepted_at: 'bad-date' }]) {
+  for (const cache of [{ version: 'old', accepted_at: '2026-09-07' }, { version: '2026-09-07', accepted_at: null }, { version: '2026-09-07', accepted_at: 'bad-date' }]) {
     const p = setup({ restored: true, cache, status: new Error('offline') }); await p.settle();
     assert.equal(p.ctx.role, 'guest'); assert.ok(p.dialog.prompt); p.root.unmount();
   }

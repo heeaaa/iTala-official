@@ -45,10 +45,31 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
   }
 
   // App Store 5.1.1(v) / Play policy: accounts must be deletable in-app.
+  //
+  // The wording has to be accurate about what deletion does NOT remove, and two
+  // things survive it:
+  //
+  //   * league, roster and game records, which belong to the league
+  //   * a content report and the app-session id attached to it, kept so the
+  //     concern it raised can still be documented and resolved. Disclosed here
+  //     as well as in the privacy policy (section 10), because this dialog is
+  //     where somebody actually decides.
+  //
+  // An Apple-linked account is also told that Apple will ask it to confirm:
+  // deletion revokes iTala's Apple authorization, and that needs a fresh
+  // confirmation. See src/lib/appleAccountDeletion.ts.
+  const appleLinked = !!user?.providers.includes('apple');
   const confirmDelete = () => {
     Alert.alert(
       'Delete account?',
-      'This permanently deletes your sign-in and account data. It cannot be undone.\n\nLeague records and game stats are kept — they belong to the league, not your account.',
+      'This permanently deletes your sign-in and account data. It cannot be undone.\n\n'
+      + 'League records and game stats are kept — they belong to the league, not your account.\n\n'
+      + 'If you previously submitted a content report, the report and its app-session identifier '
+      + 'may remain where needed to document and resolve the concern. The identifier will no longer '
+      + 'be connected to an active iTala account.'
+      + (appleLinked
+        ? '\n\nApple will ask you to confirm, so that iTala can stop using your Apple ID.'
+        : ''),
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Delete account', style: 'destructive', onPress: () => { void doDelete(); } },
@@ -59,7 +80,8 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
     setBusy(true);
     const ok = await deleteAccount();
     setBusy(false);
-    if (ok) {
+    if (ok === 'cancelled') return;
+    if (ok === true) {
       Alert.alert('Account deleted', 'Your account has been removed. You can keep using iTala as a guest.', [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
@@ -83,7 +105,13 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
               <View style={{ flex: 1, marginRight: 8 }}>
                 <Txt k="body" style={{ fontSize: 15 }}>{user.name}</Txt>
-                <Txt k="body" color={colors.muted} style={{ fontSize: 12, marginTop: 2 }}>Signed in with Google · {user.email}</Txt>
+                {/* Was hard-coded to "Signed in with Google", which is simply
+                    untrue for an account that used the Apple sheet - on the one
+                    screen where somebody checks which identity they are about
+                    to delete. */}
+                <Txt k="body" color={colors.muted} style={{ fontSize: 12, marginTop: 2 }}>
+                  {appleLinked ? 'Signed in with Apple · ' : user.providers.includes('google') ? 'Signed in with Google · ' : ''}{user.email}
+                </Txt>
               </View>
               {isAdmin ? <Pill label="ADMIN" color={colors.accentDim} textColor={colors.brandTeal} /> : <Pill label="MEMBER" color={colors.surfaceHi} textColor={colors.muted} />}
             </View>

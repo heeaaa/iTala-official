@@ -104,6 +104,18 @@ Synced mode uses Supabase Auth:
 - League membership assigns owner and scorekeeper permissions.
 - A platform administrator has additional application-wide privileges.
 
+Account deletion has two paths, and the difference is a store requirement rather
+than an implementation preference. A Google account is deleted by the
+`delete_own_account` RPC. An Apple-linked account must additionally have its
+Apple authorization revoked (App Review 5.1.1(v)), which needs a client secret
+signed with the team's private key - impossible in a shipped bundle and
+impossible in Postgres. So the client re-confirms with Apple to obtain a fresh
+single-use authorization code and hands it to the `delete-account` Supabase Edge
+Function, which revokes at Apple **first** and only then calls the same RPC as
+the caller. A failed revocation deletes nothing. See
+[`supabase/functions/README.md`](../supabase/functions/README.md) and
+`src/lib/appleAccountDeletion.ts`.
+
 The client hides or shows controls based on the role exposed by
 `src/store/AdminProvider.tsx`, but Supabase row-level security and RPC validation remain
 the enforcement boundary for synchronized data. Client checks are interface guidance,

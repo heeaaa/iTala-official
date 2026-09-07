@@ -52,7 +52,12 @@ module.exports = [
     files: ['tests/**/*.js'],
     languageOptions: {
       sourceType: 'commonjs',
-      globals: { __dirname: 'readonly', __filename: 'readonly', module: 'writable', require: 'readonly', process: 'readonly', console: 'readonly' },
+      // `Buffer` joined this list with tests/appleRevocation.test.js, which
+      // base64url-decodes JWT parts and DER-encodes a generated P-256 key. It is
+      // a Node global like the rest of them, and the suites are plain Node
+      // scripts - the alternative would have been a file-level eslint-disable
+      // that also masks anything real landing in the same file later.
+      globals: { __dirname: 'readonly', __filename: 'readonly', module: 'writable', require: 'readonly', process: 'readonly', console: 'readonly', Buffer: 'readonly' },
     },
   },
 

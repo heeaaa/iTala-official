@@ -20,7 +20,7 @@ stays in guest mode; signing in to the unaccepted account asks again.
 
 ## Storage and scope
 
-`legal_versions` describes each document bundle. The initial bundle is `2026-09-04`,
+`legal_versions` describes each document bundle. The initial bundle is `2026-09-07`,
 matching the documents' effective date. `legal_acceptances` stores `user_id`, bundle
 `version`, and server-generated `accepted_at`. Repeating acceptance of a version is
 idempotent and does not change the original date. Earlier version receipts remain.

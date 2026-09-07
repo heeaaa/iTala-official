@@ -213,6 +213,65 @@ evidence of native presentation):
       and boot is not stalled for ~10 seconds.
 - [ ] **R53** Sign out, then sign back in with Google.
 - [ ] **R54** Sign in with Apple (device build only).
+- [ ] **R57** **Sign in with Apple: deletion revokes the authorization.**
+      Device build only (Expo Go signs tokens for `host.exp.Exponent`, which
+      these secrets cannot revoke), real Apple ID, and the `delete-account`
+      Edge Function deployed with its four Apple secrets - see
+      `supabase/functions/README.md`.
+      1. Sign in with Apple and agree to the legal review. Submit one content
+         report from any player screen so the retained-identifier disclosure
+         applies to this account.
+      2. iOS *Settings → your name → Sign-In & Security → Sign in with Apple*.
+         *Expect:* **iTala is listed.**
+      3. iTala *Settings → Delete account*. *Expect:* the confirmation mentions
+         both the Apple confirmation step and the retained report identifier.
+      4. Confirm; Apple's sheet appears; confirm it.
+         *Expect:* "Account deleted", and the app returns to guest browsing.
+      5. Re-check the list from step 2. *Expect:* **iTala must be gone.** This
+         is the only real evidence of revocation - `tests/appleRevocation.test.js`
+         talks to a fake Apple and cannot prove this.
+      6. Supabase dashboard → *Edge Functions → delete-account → Logs* shows one
+         `"outcome":"revoked_and_deleted"` line, with no user id and no token in
+         it. (There is no `supabase functions logs` CLI command.)
+      7. In Supabase, the `auth.users` row is gone and the `content_reports` row
+         from step 1 is still there with its original `reporter_user_id`.
+- [ ] **R58** **Revocation failure must not delete the account.** Unset
+      `APPLE_KEY_ID` on the function, redeploy, and repeat R57 steps 3 and 4.
+      *Expect:* a readable refusal, the account still signed in and usable, and
+      iTala still listed on the Apple ID. Restore the secret and redeploy after.
+- [ ] **R59** Cancel Apple's confirmation sheet during deletion.
+      *Expect:* nothing is deleted, no error message appears, and the account
+      still works. Cancelling is an answer, not a fault.
+- [ ] **R61** **Different Apple ID on the device.** Sign in to iTala with Apple
+      ID **A**, then sign the *device* out of iCloud and in as Apple ID **B**
+      (the handed-down-phone / restored-backup case; the iTala session survives
+      in app storage, so this is not exotic). Try to delete.
+      *Expect:* a refusal saying the account was created with a different Apple
+      ID, offering an email route, and **the account must still exist**.
+      Signing the device back in as A and retrying must then succeed.
+      *Also expect, and do not report as a failure:* **B may now appear in its
+      own Sign in with Apple list.** Getting a code requires the Apple sheet,
+      the sheet authorises whichever Apple ID is on the device, and Apple mints
+      a grant for B the moment B confirms. iTala then refuses on the subject
+      mismatch **without revoking**, on purpose - that grant may belong to B's
+      own iTala account, and revoking it would cut off somebody who asked for
+      nothing. What must NOT happen is A's authorisation being revoked, or the
+      account being deleted. B can remove the grant from its own Apple ID
+      settings.
+- [ ] **R62** **Device signed out of iCloud.** With no Apple ID on the device,
+      try to delete an Apple-linked account. *Expect:* a message that names
+      iCloud and gives an email address, not a bare "please try again". Nothing
+      deleted.
+- [ ] **R63** **Interrupt the request after confirming.** Confirm Apple's sheet,
+      then kill connectivity while the request is in flight (or use a very slow
+      link so the 20s timeout fires). *Expect:* the app checks and then either
+      completes the deletion (if the server finished) or says the connection
+      failed with the account intact. It must never end up signed in to an
+      account that no longer exists, and the retry after reconnecting must not
+      show sign-in wording inside a deletion error.
+- [ ] **R60** Delete a **Google** account (no Apple identity).
+      *Expect:* no Apple sheet at any point, deletion succeeds, and the Account
+      card said "Signed in with Google" beforehand - not the reverse.
 - [ ] **R55** Browse as guest without signing in.
       *Expect:* can view public content, prompted to sign in where required.
 - [ ] **R56** Guest taps Recreational / Drop-In Game.

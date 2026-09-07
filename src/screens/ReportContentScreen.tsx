@@ -49,7 +49,7 @@ export default function ReportContentScreen({ route, navigation }: ScreenProps<'
           <Txt k="label" style={{ marginTop: space(5) }}>Reference number</Txt>
           <Txt k="h2" color={colors.accent} style={{ marginTop: 4 }}>{reference}</Txt>
           <Txt k="body" color={colors.muted} style={{ marginTop: space(3) }}>
-            Keep this number if you contact abejohanna@gmail.com or abejoharold@gmail.com about the report.
+            Keep this number if you contact hanna@itala.fyi or harold@itala.fyi about the report.
           </Txt>
         </Card>
         <Button title="Done" onPress={() => navigation.goBack()} style={{ marginTop: space(4) }} />
