@@ -2,6 +2,14 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    // Deno resolves module specifiers by URL, so the Edge Functions under
+    // supabase/functions/ MUST import each other with an explicit `.ts`
+    // extension or they will not run. Allowing it here keeps those files inside
+    // the repo-wide `tsc --noEmit` that `npm test` runs, instead of excluding
+    // them and shipping server code nothing type-checks. Safe because the base
+    // config sets noEmit: true - nothing here is compiled, so no emitted import
+    // path can be wrong.
+    "allowImportingTsExtensions": true
   }
 }

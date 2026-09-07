@@ -159,15 +159,17 @@ offer gambling, financial, medical or other regulated services.
 
 ## Public URLs
 
-Replace these placeholders with the deployed HTTPS pages in App Store Connect:
+Paste these into App Store Connect and the Play Console listing:
 
-- Support URL: `[HTTPS_SUPPORT_URL]`
-- Privacy Policy URL: `[HTTPS_PRIVACY_URL]`
-- Terms of Use: `[HTTPS_TERMS_URL]`
-- Content Policy: `[HTTPS_CONTENT_POLICY_URL]`
+- Support URL: `https://www.itala.fyi/support/`
+- Privacy Policy URL: `https://www.itala.fyi/privacy/`
+- Terms of Use: `https://www.itala.fyi/terms/`
+- Content Policy: `https://www.itala.fyi/content-policy/`
 
 Verify each URL in a signed-out browser. Do not submit repository paths or localhost
-addresses.
+addresses. These replaced the pre-domain `*.workers.dev` address; if any store listing
+still points there, update it - that address keeps answering, so a stale link fails
+silently rather than 404ing.
 
 ## Physical-device recording
 
@@ -208,9 +210,18 @@ Copy this into App Store Connect only after replacing every bracketed value:
 > optional. A successful submission displays a reference number for the private review queue.
 >
 > Account deletion is under Settings → Danger Zone → Delete Account. Deleting an account
-> removes the authentication identity and iTala profile. Shared league, roster, game and
-> statistical records are retained because other league members may rely on them.
-> Privacy requests: https://itala.abejohanna.workers.dev/privacy/
+> removes the authentication identity and iTala profile. For an account created with
+> Sign in with Apple, deletion also revokes iTala's Apple authorization: the app asks the
+> user to confirm with Apple, exchanges that confirmation server-side for a token and calls
+> Apple's REST revoke endpoint, and only deletes the account once Apple confirms the
+> revocation. If the revocation cannot be completed, nothing is deleted and the user can
+> retry. iTala stores no Apple refresh or access token at any point. Shared league, roster,
+> game and statistical records are retained because other league members may rely on them.
+> If the user previously submitted a content report, the report and its app-session
+> identifier may remain where needed to document and resolve the concern; that identifier
+> is no longer connected to an active iTala account. Both retentions are disclosed in the
+> in-app deletion confirmation and in section 10 of the privacy policy.
+> Privacy requests: https://www.itala.fyi/privacy/
 >
 > iTala has no subscription or in-app purchase, third-party advertising network or
 > cross-app tracking. Sponsor cards record only an aggregate tap count. Notifications

@@ -5,12 +5,16 @@ import * as Linking from 'expo-linking';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
 import { ensureGuestSession } from './guestSession';
+import {
+  DELETE_ACCOUNT_FUNCTION, DELETE_ACCOUNT_TIMEOUT_MS, deleteAppleAccount,
+  hasAppleIdentity, requestAppleAuthorizationCode,
+} from '../lib/appleAccountDeletion';
 import { devLog, warn } from '../lib/log';
 import { LegalAcknowledgement, LegalPrompt } from '../components/LegalAcknowledgement';
 import { LEGAL_VERSION, LegalVersionError, cacheLegalReceipt, cachedLegalReceipt, forgetLegalReceipt, readLegalStatus, recordLegalAcceptance } from '../lib/legal';
 import {
-  AuthErrors, AuthScope, clearScopedError, describeAuthFailure, diagnoseAuthFailure,
-  errorForScope, isNetworkFailure, sessionRecoveryPlan, setScopedError,
+  AuthErrors, AuthScope, accountNoLongerExists, clearScopedError, describeAuthFailure,
+  diagnoseAuthFailure, errorForScope, isNetworkFailure, sessionRecoveryPlan, setScopedError,
 } from './authErrors';
 
 export type { AuthScope } from './authErrors';
@@ -72,11 +76,13 @@ function slowEquals(a: string, b: string): boolean {
 // Keep this in sync with the `admin_emails` table in supabase/schema.sql
 // (the table is what RLS actually enforces; this list drives the UI).
 // ---------------------------------------------------------------------------
+// These are SIGN-IN identities - the email on the Google or Apple account
+// somebody authenticates with - not the contact addresses iTala publishes. The
+// published ones moved to the itala.fyi domain; these did not, because an
+// address only belongs here once it can actually be signed in with.
 export const ADMIN_EMAILS: readonly string[] = [
   'abejoharold@gmail.com',
   'abejohanna@gmail.com',
-  'aeronjosephsantos@gmail.com',
-  'santos.ajhea@gmail.com',
 ].map(e => e.toLowerCase());
 
 export type Role = 'guest' | 'user' | 'admin';
@@ -84,10 +90,20 @@ export type Role = 'guest' | 'user' | 'admin';
 export interface AuthUser {
   id: string;
   email: string;
-  /** Display name from the Google account (falls back to the email). */
+  /** Display name from the provider account (falls back to the email). */
   name: string;
-  /** Google profile photo URL, if any. */
+  /** Google profile photo URL, if any. Apple supplies none. */
   avatarUrl: string | null;
+  /**
+   * Which sign-in providers this account is linked to ('google', 'apple').
+   *
+   * Carried so the UI can say which one was used, and so the deletion
+   * confirmation can warn an Apple account that it will be asked to confirm
+   * with Apple. NOT the basis for the revocation decision itself - that is
+   * re-checked server-side inside the `delete-account` Edge Function, because a
+   * client-side list can be stale and skipping revocation must not be possible.
+   */
+  providers: readonly string[];
 }
 
 function isAdminEmail(email: string | null | undefined): boolean {
@@ -604,6 +620,40 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   };
 
   // ---- Account deletion (store-policy requirement) --------------------------
+  //
+  // Two paths, and the difference is not cosmetic.
+  //
+  // An account linked to Sign in with Apple must have its Apple authorization
+  // REVOKED as part of deletion (App Review 5.1.1(v)). Deleting auth.users and
+  // signing out locally is invisible to Apple: the app stays listed under
+  // Settings -> Apple ID -> Sign in with Apple with a live grant. Revocation
+  // needs an ES256 client secret signed with the team's private key, which
+  // cannot exist in a shipped bundle, so it happens in the `delete-account`
+  // Edge Function - which revokes first and only then deletes. See
+  // src/lib/appleAccountDeletion.ts and supabase/functions/README.md.
+  //
+  // A Google-only account has nothing to revoke and keeps the RPC path it has
+  // always used, unchanged.
+
+  /** The local half of deletion, shared by both paths. The server-side user is
+   *  gone by the time this runs. */
+  const finishAccountDeletion = async (
+    sb: NonNullable<ReturnType<typeof getSupabase>>,
+  ): Promise<void> => {
+    if (userId) {
+      try { await forgetLegalReceipt(userId); }
+      catch { warn('[auth] Could not remove the deleted account legal receipt cache.'); }
+    }
+    // scope 'local' avoids a doomed round-trip to the logout endpoint for a
+    // user that no longer exists.
+    await withTimeout(sb.auth.signOut({ scope: 'local' }), 6000, { error: null } as any, 'signOut(local)');
+    setUser(null);
+    setServerAdmin(false);
+    setMemberships({});
+    const restored = await ensureSession(sb);
+    setUserId(restored?.uid ?? null);
+  };
+
   const deleteAccount = async (): Promise<boolean> => {
     if (authFlow.current) return false;
     setError('account', null);
@@ -614,6 +664,87 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     authFlow.current = true;
     setAuthBusy(true);
     try {
+      // Ask the server which providers this account is linked to rather than
+      // trusting `user`, which carries no provider and could be stale. A
+      // non-answer must NOT fall through to the plain RPC: that is precisely
+      // how an Apple account would get deleted without being revoked.
+      const identity = await withTimeout(
+        sb.auth.getUser(),
+        6000,
+        { data: { user: null }, error: { message: 'timeout' } } as any,
+        'getUser(delete)'
+      );
+      const account = identity?.data?.user;
+      if (!account) {
+        // Already deleted (another device, or an earlier attempt whose answer
+        // was lost): there is nothing left to revoke or delete, so finish the
+        // local half rather than reporting a failure for work already done.
+        if (accountNoLongerExists(identity)) {
+          devLog('[auth] the account no longer exists server-side; clearing the local session.');
+          await finishAccountDeletion(sb);
+          return true;
+        }
+        const reason = identity?.error?.message ?? 'timeout';
+        warn('[auth] account deletion could not read the account -', diagnoseAuthFailure(reason));
+        // describeAuthFailure's generic branch says "Sign-in didn't complete",
+        // which is wrong inside a "Could not delete account" alert. Its
+        // connection wording is right, so keep that one and word the rest here.
+        setError('account', isNetworkFailure(reason) || reason === 'timeout'
+          ? describeAuthFailure(reason)
+          : 'iTala could not check this account, so nothing was deleted. Please try again.');
+        return false;
+      }
+
+      if (hasAppleIdentity(account)) {
+        const outcome = await deleteAppleAccount({
+          requestAuthorizationCode: requestAppleAuthorizationCode,
+          invoke: body => withTimeout(
+            sb.functions.invoke(DELETE_ACCOUNT_FUNCTION, { body }),
+            DELETE_ACCOUNT_TIMEOUT_MS,
+            { data: null, error: { message: 'timeout' } } as any,
+            DELETE_ACCOUNT_FUNCTION
+          ),
+        });
+        // Closing the Apple sheet changed nothing, so it must not leave an
+        // error on screen - the same rule the sign-in path follows.
+        if (outcome.status === 'cancelled') return false;
+        if (outcome.status === 'failed') {
+          warn('[auth] Apple account deletion refused -', outcome.diagnosis);
+          setError('account', outcome.message);
+          return false;
+        }
+        if (outcome.status === 'deleted') {
+          await finishAccountDeletion(sb);
+          return true;
+        }
+        if (outcome.status === 'unconfirmed') {
+          // The request never came back, but the function revokes AND deletes in
+          // one call, so it may well have finished. Ask before reporting: a
+          // timeout treated as failure leaves the device signed in to an account
+          // that no longer exists, and every retry from there fails with
+          // sign-in wording inside a "Could not delete account" alert.
+          warn('[auth] Apple account deletion did not answer -', outcome.diagnosis);
+          const recheck = await withTimeout(
+            sb.auth.getUser(),
+            6000,
+            { data: { user: null }, error: { message: 'timeout' } } as any,
+            'getUser(delete recheck)'
+          );
+          // Only an explicit "no such user" counts. A second non-answer proves
+          // nothing and must not be read as success - see accountNoLongerExists.
+          if (accountNoLongerExists(recheck)) {
+            devLog('[auth] the account is gone server-side; completing deletion locally.');
+            await finishAccountDeletion(sb);
+            return true;
+          }
+          setError('account', outcome.message);
+          return false;
+        }
+        // 'not-apple': the server sees no Apple identity, so there is nothing
+        // to revoke and the RPC below is the correct path after all.
+        devLog('[auth] the server reports no Apple identity; deleting through the RPC.');
+      }
+
       const res = await withTimeout(
         sb.rpc('delete_own_account'),
         8000,
@@ -626,19 +757,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
 
-      // The server-side user is gone; clear the (now-orphaned) local session
-      // and return to a fresh guest session. scope 'local' avoids a doomed
-      // round-trip to the logout endpoint for a user that no longer exists.
-      if (userId) {
-        try { await forgetLegalReceipt(userId); }
-        catch { warn('[auth] Could not remove the deleted account legal receipt cache.'); }
-      }
-      await withTimeout(sb.auth.signOut({ scope: 'local' }), 6000, { error: null } as any, 'signOut(local)');
-      setUser(null);
-      setServerAdmin(false);
-      setMemberships({});
-      const restored = await ensureSession(sb);
-      setUserId(restored?.uid ?? null);
+      await finishAccountDeletion(sb);
       return true;
     } finally {
       authFlow.current = false;
@@ -875,7 +994,14 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function toAuthUser(u: { id: string; email?: string | null; is_anonymous?: boolean; user_metadata?: Record<string, any> }): AuthUser | null {
+function toAuthUser(u: {
+  id: string;
+  email?: string | null;
+  is_anonymous?: boolean;
+  user_metadata?: Record<string, any>;
+  identities?: readonly ({ provider?: string | null } | null)[] | null;
+  app_metadata?: { provider?: string | null; providers?: readonly string[] | null } | null;
+}): AuthUser | null {
   if (!u || u.is_anonymous || !u.email) return null;
   const md = u.user_metadata ?? {};
   return {
@@ -883,7 +1009,29 @@ function toAuthUser(u: { id: string; email?: string | null; is_anonymous?: boole
     email: u.email,
     name: md.full_name || md.name || u.email,
     avatarUrl: md.avatar_url || md.picture || null,
+    providers: readProviders(u),
   };
+}
+
+/**
+ * The providers linked to a GoTrue user, from whichever field carries them.
+ *
+ * `identities` is the authoritative list but is not always expanded on every
+ * endpoint, and `app_metadata` holds the same information in two shapes
+ * depending on project age. Reading all three and de-duplicating means the UI
+ * does not depend on which one this particular response happened to include.
+ */
+function readProviders(u: {
+  identities?: readonly ({ provider?: string | null } | null)[] | null;
+  app_metadata?: { provider?: string | null; providers?: readonly string[] | null } | null;
+}): readonly string[] {
+  const meta = u.app_metadata ?? {};
+  const found = [
+    ...(u.identities ?? []).map(identity => identity?.provider),
+    meta.provider,
+    ...(meta.providers ?? []),
+  ];
+  return Array.from(new Set(found.filter((p): p is string => typeof p === 'string' && p.length > 0)));
 }
 
 /** Turns the OAuth redirect URL back into a Supabase session.

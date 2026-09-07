@@ -149,6 +149,11 @@ try { run('node', [path.join('tests', 'legal.test.js')], { env }); }
 catch { failed++; }
 try { run('node', [path.join('tests', 'guestSession.test.js')], { env }); }
 catch { failed++; }
+// Apple Sign-In revocation: the client secret, both Apple requests, the
+// revoke-before-delete ordering, and which deletion path AdminProvider takes.
+// Loads the Edge Function's own modules, so the server half is covered here too.
+try { run('node', [path.join('tests', 'appleRevocation.test.js')], { env }); }
+catch { failed++; }
 try { run('node', [path.join('tests', 'contentReports.test.js')], { env }); }
 catch { failed++; }
 try { run('node', [path.join('tests', 'contentReports.integration.test.js')], { env }); }

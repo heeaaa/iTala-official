@@ -68,6 +68,15 @@ function setup(options = {}) {
       } },
     '../sync/supabase': { SYNC_ENABLED: true, getSupabase: () => sb },
     './guestSession': load('src/store/guestSession.ts', {}), '../lib/log': { devLog() {}, warn() {} },
+    // Account deletion now routes Apple-linked accounts through a revoking Edge
+    // Function. This suite is about the legal receipt, so the real module is
+    // loaded (rather than stubbed) and its behaviour is asserted next door, in
+    // tests/appleRevocation.test.js.
+    '../lib/appleAccountDeletion': load('src/lib/appleAccountDeletion.ts', {
+      'react-native': RN,
+      'expo-apple-authentication': { signInAsync: async () => ({ authorizationCode: 'legal-suite-code' }) },
+      '../store/authErrors': load('src/store/authErrors.ts', {}),
+    }),
     '../components/LegalAcknowledgement': component, '../lib/legal': legal,
     './authErrors': load('src/store/authErrors.ts', {}),
   });

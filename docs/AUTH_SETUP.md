@@ -12,11 +12,22 @@ credentials cost nothing (no billing account needed).
 | **User** | Any Google account | Everything Guest can + share box-score and player stat cards |
 | **Admin** | Google email on the allowlist | Everything + live stat entry, league/roster/team/game editing, Settings |
 
-Initial admin emails (edit in **two places** to change later — see "Managing admins"):
+Admin emails (edit in **two places** to change later — see "Managing admins"):
 - abejoharold@gmail.com
 - abejohanna@gmail.com
-- aeronjosephsantos@gmail.com
-- santos.ajhea@gmail.com
+
+These are **sign-in identities**, meaning the email on the Google or Apple
+account used to authenticate — not the contact addresses published on the
+website. Those moved to `@itala.fyi`; these stay until the same addresses can
+actually be signed in with (which needs Google Workspace, or an Apple ID, on
+the domain).
+
+`aeronjosephsantos@gmail.com` and `santos.ajhea@gmail.com` were retired. Note
+that deleting an address from the list revokes nothing on a project that is
+already running: the seed is `on conflict do nothing` and `sync_admin_role`
+never demotes, so `schema.sql` carries an explicit delete-and-demote block for
+retired addresses. Re-running the schema is what applies it. To un-retire
+somebody, remove them from that block as well as adding them back to the seed.
 
 The old password lock still exists as an **emergency backup**: tap the iTala
 wordmark on the home screen **10 times quickly** to reveal the lock icon
@@ -122,10 +133,21 @@ Sign in with Apple. The code ships it already — native Apple sheet on iOS via
      set Client IDs to: `com.bpbl.itala,host.exp.Exponent`. **Remove the
      `host.exp.Exponent` entry before shipping** (it's on the DEPLOYMENT.md
      pre-flight checklist).
-2. Nothing else — the `expo-apple-authentication` plugin and the
-   `usesAppleSignIn` entitlement are already configured in `app.json`, so EAS
-   builds pick up the capability automatically (requires your Apple Developer
-   account at build time, like any iOS build).
+2. The `expo-apple-authentication` plugin and the `usesAppleSignIn` entitlement
+   are already configured in `app.json`, so EAS builds pick up the capability
+   automatically (requires your Apple Developer account at build time, like any
+   iOS build).
+3. **Deploy the `delete-account` Edge Function and set its four Apple secrets.**
+   This step is not optional for the App Store. Sign-in itself works without
+   it, so it is easy to miss - but Guideline 5.1.1(v) requires an app offering
+   Sign in with Apple **and** account deletion to revoke the Apple
+   authorization when the account is deleted, and that needs a client secret
+   signed with a Sign in with Apple private key. Unlike the sign-in flow above,
+   this one **does** need a key from Certificates, Identifiers & Profiles.
+   Commands, the exact secret names, and the device verification steps are in
+   [`supabase/functions/README.md`](../supabase/functions/README.md). Without
+   it, Apple-linked deletion is refused with a readable error rather than
+   deleting anything - correct behaviour, but still a broken flow.
 
 Notes:
 - **Admins signing in with Apple must choose "Share My Email"** on the Apple

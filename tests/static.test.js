@@ -196,6 +196,105 @@ ok('app.json declares no RECORD_AUDIO permission',
 }
 ok('docs/DEPLOYMENT.md keeps the zip-apply commands', read('docs/DEPLOYMENT.md').includes('Expand-Archive'));
 
+// The three legal URLs are written down twice - LEGAL_LINKS in src/lib/legal.ts,
+// which is what the app actually opens, and the legal_versions seed row in
+// schema.sql, which is what the acceptance receipt cites. Nothing read them
+// together until the domain moved off itala.abejohanna.workers.dev and it became
+// possible to update one and not the other, leaving receipts on file pointing at
+// a different address from the page the person read.
+{
+  const legalLib = read('src/lib/legal.ts');
+  const schemaSql = read('supabase/schema.sql');
+  const clientUrls = [...legalLib.matchAll(/url:\s*'([^']+)'/g)].map(m => m[1]);
+  ok('src/lib/legal.ts declares three legal document URLs', clientUrls.length === 3,
+     `found ${clientUrls.length}`);
+  const seed = schemaSql.slice(
+    schemaSql.indexOf('insert into public.legal_versions'),
+    schemaSql.indexOf('create table if not exists public.legal_acceptances'));
+  for (const url of clientUrls) {
+    ok(`schema.sql seeds the same legal URL as the app opens: ${url}`, seed.includes(`'${url}'`),
+       'the receipt would cite a different address from the document that was shown');
+  }
+  ok('the legal URLs are https and carry a trailing slash',
+     clientUrls.every(u => /^https:\/\/[^/]+\/[a-z-]+\/$/.test(u)),
+     `the site serves directories, and a 404-page Worker will not redirect: ${clientUrls.join(', ')}`);
+  // An existing project already holds this row, so `do nothing` would pin it to
+  // whatever host it was first seeded with.
+  ok('the legal_versions seed refreshes its URLs on a schema re-run',
+     /on conflict \(version\) do update set[\s\S]{0,200}?content_policy_url = excluded\.content_policy_url/.test(seed),
+     'otherwise a domain move never reaches a project that has already been set up');
+  ok('the legal_versions seed still does not touch is_current',
+     !/do update set[\s\S]{0,200}?is_current/.test(seed),
+     "re-running the schema must not roll back an operator's newer required version");
+}
+
+// The admin allowlist is written down twice - ADMIN_EMAILS in AdminProvider.tsx
+// (which gates the UI) and the admin_emails seed in schema.sql (which is what
+// RLS actually enforces). schema.sql's own comment says to edit both, and
+// nothing checked that anybody did. A client that says yes where the server
+// says no shows admin controls whose every write is refused; the reverse hides
+// controls from a real admin.
+{
+  const provider = read('src/store/AdminProvider.tsx');
+  const schemaSql = read('supabase/schema.sql');
+  // Start from the `= [` rather than the declaration: the type annotation
+  // `readonly string[]` carries a `]` of its own, and slicing to the first one
+  // found an empty list and compared nothing.
+  const declAt = provider.indexOf('export const ADMIN_EMAILS');
+  const arrayAt = provider.indexOf('[', provider.indexOf('=', declAt));
+  const clientEmails = [...provider.slice(arrayAt, provider.indexOf(']', arrayAt))
+    .matchAll(/'([^']+@[^']+)'/g)].map(m => m[1].toLowerCase()).sort();
+  const seedStart = schemaSql.indexOf('insert into public.admin_emails (email) values');
+  const seed = schemaSql.slice(seedStart, schemaSql.indexOf(';', seedStart));
+  const serverEmails = [...seed.matchAll(/'([^']+@[^']+)'/g)].map(m => m[1].toLowerCase()).sort();
+
+  ok('the admin allowlist is not empty', clientEmails.length > 0, 'parsing produced nothing to compare');
+  ok('ADMIN_EMAILS matches the admin_emails seed in schema.sql',
+     JSON.stringify(clientEmails) === JSON.stringify(serverEmails),
+     `client: ${clientEmails.join(', ')} | schema: ${serverEmails.join(', ')}`);
+
+  // Removing an address from the seed revokes nothing on a project that already
+  // exists: the insert is `on conflict do nothing` and sync_admin_role never
+  // demotes. So a retired address must also be actively deleted and demoted.
+  const retiredBlock = schemaSql.slice(schemaSql.indexOf('---- RETIRED ADMINS'),
+                                       schemaSql.indexOf('---- END RETIRED ADMINS'));
+  ok('retiring an admin deletes the row and clears is_admin',
+     /delete from public\.admin_emails/.test(retiredBlock)
+       && /update public\.profiles[\s\S]*?set is_admin = false/.test(retiredBlock),
+     'omitting an address from the seed leaves both the row and the granted flag in place');
+  const retiredEmails = [...retiredBlock.matchAll(/'([^']+@[^']+)'/g)].map(m => m[1].toLowerCase());
+  ok('no address is both allowlisted and retired',
+     retiredEmails.every(e => !clientEmails.includes(e)),
+     `contradictory: ${retiredEmails.filter(e => clientEmails.includes(e)).join(', ')}`);
+  ok('the demote is scoped to the retired addresses, not a blanket reset',
+     /= any \(retired\)/.test(retiredBlock) && !/set is_admin = false;\s*$/m.test(retiredBlock),
+     'a bare `set is_admin = false` would also strip the password-elevation backup');
+}
+
+// No contact surface may still point at the retired host or the pre-domain
+// mailboxes. The privacy policy's address is the only route by which somebody
+// who never installed the app can have their name removed, so a dead one is a
+// compliance failure rather than a typo.
+{
+  const retired = ['itala.abejohanna.workers.dev', 'abejohanna@gmail.com', 'abejoharold@gmail.com'];
+  const surfaces = [
+    'site/index.html', 'site/privacy/index.html', 'site/terms/index.html',
+    'site/content-policy/index.html', 'site/support/index.html', 'site/README.md',
+    'src/lib/legal.ts', 'src/lib/appleAccountDeletion.ts', 'src/screens/ReportContentScreen.tsx',
+    'docs/APP_REVIEW.md',
+  ];
+  for (const file of surfaces) {
+    // docs/AUTH_SETUP.md, AdminProvider's ADMIN_EMAILS and schema.sql's
+    // admin_emails are deliberately NOT in this list: those match the
+    // Google/Apple account email somebody signs in with, which is a different
+    // thing from a mailbox iTala publishes.
+    const body = read(file);
+    const found = retired.filter(needle => body.includes(needle));
+    ok(`${file} points at the current domain and mailboxes`, found.length === 0,
+       `still references: ${found.join(', ')}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // CHECK 9 — the sync primitives stay wired into dispatch.
 // ---------------------------------------------------------------------------
@@ -1710,6 +1809,223 @@ for (const f of srcFiles) {
      'all legal documents must be mutually discoverable');
   ok('landing page shows a support email address', /href="mailto:[^"]+"/.test(landing),
      'the public home page must expose a contact method without another click');
+}
+
+// ---------------------------------------------------------------------------
+// APPLE SIGN-IN REVOCATION + REPORT-IDENTIFIER DISCLOSURE
+//
+// Two review findings, and both have a failure mode that reads as working code.
+//
+// 1. Deleting auth.users and signing out locally is invisible to Apple, so the
+//    app stayed listed on the person's Apple ID with a live authorization.
+//    App Review 5.1.1(v) requires the REST revoke call. The behaviour is
+//    covered by tests/appleRevocation.test.js; what is structural - and what
+//    would silently regress it - is whether the server-side flow still exists,
+//    still revokes BEFORE deleting, and is still what the client calls.
+//
+// 2. content_reports.reporter_user_id survives account deletion on purpose. The
+//    retention is fine; an undisclosed retention is not. So the disclosure has
+//    to stay on all three surfaces at once: the in-app confirmation, the
+//    published privacy policy, and the App Review notes.
+//
+// These are presence and ordering checks on structure. The proof that
+// revocation works against the real Apple is R57 in tests/MANUAL-REGRESSION.md.
+// ---------------------------------------------------------------------------
+{
+  const handlerPath = 'supabase/functions/_shared/deleteAccountHandler.ts';
+  const applePath = 'supabase/functions/_shared/appleAuthorization.ts';
+  const entryPath = 'supabase/functions/delete-account/index.ts';
+  const clientPath = 'src/lib/appleAccountDeletion.ts';
+
+  for (const p of [handlerPath, applePath, entryPath, clientPath, 'supabase/functions/README.md']) {
+    ok(`${p} exists`, exists(p), 'Apple-linked account deletion cannot revoke without it');
+  }
+
+  if (exists(handlerPath) && exists(applePath) && exists(entryPath) && exists(clientPath)) {
+    const handler = read(handlerPath);
+    const appleAuth = read(applePath);
+    const entry = read(entryPath);
+    const client = read(clientPath);
+    const provider = read('src/store/AdminProvider.tsx');
+    const settings = read('src/screens/SettingsScreen.tsx');
+    const schema = read('supabase/schema.sql');
+
+    // THE ordering invariant. Once auth.users is gone nothing can be proved to
+    // Apple, so a handler that deleted first would leave the dangling
+    // authorization the whole change exists to remove.
+    const revokeAt = handler.indexOf('revokeAppleAuthorization(');
+    const deleteAt = handler.indexOf('rpc/delete_own_account');
+    ok('the Edge Function revokes at Apple before it deletes the account',
+       revokeAt > 0 && deleteAt > revokeAt,
+       'delete-then-revoke leaves an authorization nobody can ever revoke');
+    ok('a failed revocation returns before the deletion is attempted',
+       /if \(!revocation\.ok\) \{[\s\S]{0,600}?return fail\(/.test(handler)
+         && handler.indexOf('if (!revocation.ok)') < deleteAt,
+       'revocation must fail closed - the account survives so it can be retried');
+
+    // Revoking only the access token returns 200 from Apple and leaves the
+    // grant in place: identical from the outside, and useless.
+    ok('the refresh token is what gets revoked, with no access-token fallback',
+       /token_type_hint: 'refresh_token'/.test(appleAuth)
+         && /token: refreshToken/.test(appleAuth)
+         && !/token_type_hint: 'access_token'/.test(appleAuth)
+         && /no refresh token to revoke/.test(appleAuth),
+       'Apple answers 200 for an access-token revocation and leaves the grant in place, so a '
+       + 'fallback would report success for a revocation that did not happen');
+    ok('the revocation is bound to the account\'s own Apple subject',
+       /expectedAppleSubject/.test(appleAuth) && /claims\.sub !== expectedAppleSubject/.test(appleAuth)
+         && /appleSubject\(user\)/.test(handler),
+       'signInAsync authenticates the DEVICE\'s Apple ID, which need not be the account\'s - '
+       + 'without this the wrong grant is revoked and the account is deleted anyway');
+    ok('an Apple account with no readable subject is refused, not sent to the RPC',
+       /apple_identity_unreadable/.test(handler)
+         && handler.indexOf('apple_identity_unreadable') < handler.indexOf('revokeAppleAuthorization('),
+       'answering no_apple_identity there would route an Apple account to an un-revoked deletion');
+    ok('the client secret is an ES256 JWT with the required Apple claims',
+       /alg: 'ES256'/.test(appleAuth) && /aud: APPLE_AUDIENCE/.test(appleAuth)
+         && /iss: config\.teamId/.test(appleAuth) && /sub: config\.clientId/.test(appleAuth),
+       'Apple accepts nothing else in place of a client secret');
+    ok('both Apple endpoints are the documented ones',
+       appleAuth.includes("'https://appleid.apple.com/auth/token'")
+         && appleAuth.includes("'https://appleid.apple.com/auth/revoke'"));
+
+    // Least privilege: the function borrows the caller's token instead of
+    // holding a service-role key that could delete anybody.
+    ok('the Edge Function holds no service-role privilege',
+       !/SERVICE_ROLE/i.test(handler) && !/SERVICE_ROLE/i.test(entry),
+       'delete_own_account must run as the caller so auth.uid() still authorises it');
+    // Nothing in this repository can run Deno, so the two ways Deno-specific
+    // module syntax breaks have to be caught structurally. Both fail at REQUEST
+    // time in production while type-checking cleanly here:
+    //
+    //   * a relative import without `.ts` - Deno resolves by URL and will not
+    //     guess an extension, but `moduleResolution: bundler` accepts it
+    //   * an interface pulled in through a value import - types are stripped
+    //     file by file, so the binding can survive into the emitted JS and then
+    //     fail with "does not provide an export named ..."
+    // The other side of allowImportingTsExtensions. It is on for the whole repo
+    // so supabase/functions/ can be type-checked, which means a `.ts` extension
+    // in src/ now type-checks cleanly too - and breaks the Metro bundle at
+    // runtime, where Deno's rule does not apply.
+    const withTsExtension = srcFiles.filter(f =>
+      /from\s+'[^']+\.ts'/.test(read(f)) || /require\('[^']+\.ts'\)/.test(read(f)));
+    ok('no file under src/ imports with a .ts extension', withTsExtension.length === 0,
+       `${withTsExtension.join(', ')} - Metro does not resolve these; drop the extension`);
+
+    // Every name the shared Apple module exports as a type and not a value.
+    const exportedTypes = [...appleAuth.matchAll(/^export (?:interface|type) (\w+)/gm)].map(m => m[1]);
+    ok('the shared Apple module exports types worth guarding', exportedTypes.length > 0,
+       'the import-type check below has nothing to check without them');
+
+    for (const fnFile of [entryPath, handlerPath, applePath]) {
+      const body = read(fnFile);
+      const relative = [...body.matchAll(/from\s+'(\.\.?\/[^']+)'/g)].map(m => m[1]);
+      ok(`${fnFile} imports carry the .ts extension Deno requires`,
+         relative.every(spec => spec.endsWith('.ts')),
+         `extensionless: ${relative.filter(s => !s.endsWith('.ts')).join(', ')}`);
+
+      // Names brought in by a plain `import { ... }`, i.e. as runtime values.
+      const asValues = [...body.matchAll(/^import \{([^}]*)\} from/gm)]
+        .flatMap(m => m[1].split(',').map(s => s.trim()))
+        .filter(Boolean);
+      const leaked = asValues.filter(name => exportedTypes.includes(name));
+      ok(`${fnFile} imports types with \`import type\``, leaked.length === 0,
+         `value-imported type(s): ${leaked.join(', ')}`);
+    }
+
+    ok('the function entry point stays a thin Deno wrapper',
+       /Deno\.serve\(/.test(entry) && /handleDeleteAccount/.test(entry)
+         && entry.split('\n').filter(l => l.trim() && !l.trim().startsWith('//')).length < 20,
+       'decisions belong in the shared module, which the test suite can load');
+
+    // Client side: the identity is re-read from the server, and the invoke is
+    // timeout-guarded like every other Supabase call in this provider.
+    ok('deleteAccount asks the server which providers the account has',
+       /getUser\(delete\)/.test(provider) && /hasAppleIdentity\(account\)/.test(provider),
+       'a stale client-side provider list must not be able to skip revocation');
+    // The `!account` branch must END in a return, whatever it does on the way:
+    // reaching the RPC below it would delete an Apple account un-revoked
+    // precisely when the network is bad.
+    const unreadable = provider.slice(provider.indexOf('if (!account) {'));
+    ok('an unreadable identity refuses deletion instead of falling through',
+       unreadable.indexOf('return false;') > 0
+         && unreadable.indexOf('return false;') < unreadable.indexOf("sb.rpc('delete_own_account')"),
+       'falling through to the bare RPC would delete an Apple account un-revoked');
+    ok('an unanswered deletion is resolved before anything is reported',
+       /outcome\.status === 'unconfirmed'/.test(provider)
+         && /accountNoLongerExists\(recheck\)/.test(provider),
+       'the function revokes and deletes in one call, so a timeout sits either side of success');
+    ok('the Edge Function call is timeout-guarded',
+       /withTimeout\(\s*sb\.functions\.invoke\(DELETE_ACCOUNT_FUNCTION/.test(provider),
+       'no Supabase call in this provider may be awaited without a timeout');
+    for (const src of srcFiles) {
+      const body = read(src);
+      if (!/\.functions\.invoke\(/.test(body)) continue;
+      ok(`${src} never awaits functions.invoke without a timeout`,
+         !/(?<!withTimeout\(\s{0,8})await\s+\w+\.functions\.invoke\(/.test(body),
+         'an Edge Function call can hang exactly like any other Supabase call');
+    }
+    ok('a cancelled Apple confirmation is not reported as a failure',
+       /outcome\.status === 'cancelled'/.test(provider),
+       'closing the sheet changed nothing and must not accuse anybody of anything');
+
+    // No Apple credential may ever enter the repository or the bundle.
+    const pemBlock = '-----BEGIN PRIVATE KEY-----';
+    const bundled = srcFiles.filter(f => read(f).includes(pemBlock));
+    ok('no Apple private key is anywhere in the shipped source', bundled.length === 0,
+       `found a PEM private key block in: ${bundled.join(', ')}`);
+    ok('the Apple secrets are read from the environment, never inlined',
+       /env\('APPLE_PRIVATE_KEY'\)/.test(appleAuth)
+         && !/EXPO_PUBLIC_APPLE/.test(read('src/store/AdminProvider.tsx') + client),
+       'every EXPO_PUBLIC_* value is inlined into the shipped JavaScript');
+    ok('no Apple token or authorization code is logged',
+       !/console\.(log|warn|error)[^\n]*(refresh_token|access_token|authorizationCode)/.test(
+         handler + appleAuth + client),
+       'an authorization code is a credential for somebody\'s Apple ID');
+
+    // --- finding 2: the disclosure, on all three surfaces -------------------
+    ok('the in-app deletion confirmation discloses the retained report identifier',
+       /app-session identifier/.test(settings) && /content report/.test(settings),
+       'this dialog is where somebody actually decides to delete');
+    ok('the in-app deletion confirmation warns an Apple account about the Apple step',
+       /appleLinked/.test(settings) && /stop using your Apple ID/.test(settings),
+       'a second native sheet must not arrive unannounced');
+    ok('schema.sql documents why reporter_user_id has no foreign key',
+       /DELIBERATELY NOT a foreign key to auth\.users/.test(schema),
+       'the next reader will otherwise "fix" it with a cascade and destroy open reports');
+    ok('reporter_user_id still has no foreign key',
+       !/reporter_user_id\s+uuid[^\n]*references/.test(schema),
+       'adding one changes what deletion removes, so the disclosure would become wrong');
+
+    // These documents are hand-wrapped prose, and both the HTML policy and the
+    // Markdown review notes break lines mid-sentence. Matching a literal phrase
+    // would therefore pass or fail on where the line happened to wrap, which is
+    // not the thing being checked - so whitespace is treated as whitespace.
+    const prose = phrase => new RegExp(phrase.trim().replace(/\s+/g, '[\\s>]+'), 'i');
+
+    const policy = exists('site/privacy/index.html') ? read('site/privacy/index.html') : '';
+    ok('the privacy policy carries the report-identifier disclosure',
+       prose('the report and its app-session identifier may remain after account deletion').test(policy)
+         && prose('no longer be connected to an active iTala account').test(policy),
+       'the retention is acceptable; an undisclosed retention is not');
+    ok('the privacy policy discloses Apple authorisation revocation',
+       prose('revokes the authorisation you gave iTala to use your Apple ID').test(policy),
+       'what deletion does to the Apple link has to be written down');
+
+    const review = read('docs/APP_REVIEW.md');
+    ok('the App Review notes state that Apple deletion revokes the authorization',
+       /revok/i.test(review) && /Sign in with Apple/.test(review),
+       'the reviewer asked for this explicitly; the notes are where they read it');
+    ok('the App Review notes disclose the retained report identifier',
+       prose('app-session identifier').test(review),
+       'the notes must not claim deletion removes everything');
+
+    const manual = read('tests/MANUAL-REGRESSION.md');
+    ok('the manual checklist has an end-to-end Apple revocation case',
+       /R57/.test(manual) && /Sign in with Apple/.test(manual)
+         && /Apps using Apple ID|iTala must be gone|no longer listed/i.test(manual),
+       'no automated test in this repo can prove Apple accepted a revocation');
+  }
 }
 
 console.log('='.repeat(64));

@@ -22,6 +22,29 @@ The pages are published by the Cloudflare **Worker** named `itala`, connected to
 this repository, on every push. There is no build step - the Worker serves
 `site/` as static assets.
 
+They are served from **`https://www.itala.fyi/`**, which is what the app, the
+legal receipts and both store listings point at:
+
+| Page | URL |
+| --- | --- |
+| Landing | `https://www.itala.fyi/` |
+| Terms of Use | `https://www.itala.fyi/terms/` |
+| Privacy Policy | `https://www.itala.fyi/privacy/` |
+| Content Policy | `https://www.itala.fyi/content-policy/` |
+| Support | `https://www.itala.fyi/support/` |
+
+The custom domain is attached in the Cloudflare dashboard (Worker `itala` →
+Settings → Domains & Routes), not in `wrangler.jsonc`, so it does not appear in
+a diff. Two things to know about that:
+
+- The Worker's own `*.workers.dev` address keeps answering after the domain is
+  attached. An old link therefore keeps working instead of 404ing, which is why
+  a stale store listing or legal receipt fails silently. `tests/static.test.js`
+  fails the build if any published surface still names the retired host.
+- Add **both** `itala.fyi` and `www.itala.fyi`, or pick one and redirect the
+  other. The URLs above use `www`, so a visitor typing the apex must land
+  somewhere rather than nowhere.
+
 The configuration is [`../wrangler.jsonc`](../wrangler.jsonc), in the repo rather
 than only in the dashboard. It has to be: Cloudflare's deploy command
 (`npx wrangler versions upload`) cannot know what to upload without it, and every
@@ -50,7 +73,7 @@ that it would be served at `/README.md`.
 ## Operator and contact details
 
 Filled in 29/08/2026. The policy names **Hanna Abejo Santos and Harold Abejo** as the joint agency
-responsible, and gives **abejohanna@gmail.com** and **abejoharold@gmail.com** as the contact
+responsible, and gives **hanna@itala.fyi** and **harold@itala.fyi** as the contact
 addresses. The pre-publication notice has been removed.
 
 Those addresses are load-bearing, not decorative: the app stores names and statistics of people who

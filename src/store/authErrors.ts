@@ -69,6 +69,38 @@ export function isNetworkFailure(raw: string | null | undefined): boolean {
   return /network request failed|failed to fetch|fetch failed|network error/i.test(raw ?? '');
 }
 
+/**
+ * Does this `getUser()` outcome mean the account is GONE from the server?
+ *
+ * Needed because "the account was deleted" and "the server could not be
+ * reached" both surface as a null user, and the account-deletion path has to
+ * tell them apart. It runs after a deletion request that never answered: the
+ * `delete-account` Edge Function revokes and deletes in one call, so a timeout
+ * may sit either side of a completed deletion. Guessing wrong is bad in both
+ * directions - call a timeout "deleted" and the person is signed out of an
+ * account that still exists; call a completed deletion "failed" and the device
+ * keeps an orphaned session whose every retry fails with sign-in wording.
+ *
+ * Deliberately CONSERVATIVE: only an explicit "no such user" from the server
+ * counts. A bare 401/403 is not enough - an expired or remotely revoked session
+ * produces one for an account that is still there, and treating that as a
+ * deletion would sign somebody out and tell them their account was removed.
+ * GoTrue answers a deleted user with `user_not_found` ("User from sub claim in
+ * JWT does not exist"), which is unambiguous.
+ */
+export function accountNoLongerExists(
+  outcome: { data?: { user?: unknown } | null; error?: { code?: string; message?: string } | null } | null | undefined,
+): boolean {
+  if (!outcome) return false;
+  const error = outcome.error;
+  // Answered, no error, no user: nothing to interpret.
+  if (!error) return !outcome.data?.user;
+  const message = error.message ?? '';
+  if (message === 'timeout' || isNetworkFailure(message)) return false;
+  if (error.code === 'user_not_found') return true;
+  return /user[^a-z]*(?:not[^a-z]*found|from sub claim.*does not exist)/i.test(message);
+}
+
 // ---------------------------------------------------------------------------
 // TWO AUDIENCES, TWO FUNCTIONS.
 //
