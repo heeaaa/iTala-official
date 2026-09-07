@@ -93,29 +93,21 @@ function isAppleIdentity(user: GoTrueUser): boolean {
   return Array.isArray(meta.providers) && meta.providers.includes('apple');
 }
 
-/**
- * The Apple `sub` this ACCOUNT is linked to, as GoTrue records it.
- *
- * This is what the authorization code gets checked against, and it is the only
- * thing that makes the revocation attributable: the device's Apple ID is
- * whatever iCloud says today, whereas this is what the account was created
- * with. `UserIdentity.id` is the provider's subject for an OAuth identity, and
- * `identity_data.sub` carries the same value - reading both means the check
- * does not depend on which fields this particular response filled in.
- *
- * Returns '' when it cannot be determined, which is a refusal upstream rather
- * than a licence to revoke whatever the device offers.
+/** Collect subjects from every Apple identity verified by GoTrue for this user.
+ * Multiple Apple identities can be linked to one account; their order must not
+ * decide whether a fresh confirmation is accepted.
  */
-function appleSubject(user: GoTrueUser): string {
+function appleSubjects(user: GoTrueUser): string[] {
   const identities = Array.isArray(user.identities) ? user.identities : [];
+  const subjects = new Set<string>();
   for (const raw of identities) {
     const identity = raw as { provider?: unknown; id?: unknown; identity_data?: { sub?: unknown } } | null;
     if (identity?.provider !== 'apple') continue;
-    if (typeof identity.id === 'string' && identity.id) return identity.id;
     const sub = identity.identity_data?.sub;
-    if (typeof sub === 'string' && sub) return sub;
+    const subject = typeof sub === 'string' && sub.trim() ? sub : identity.id;
+    if (typeof subject === 'string' && subject.trim()) subjects.add(subject);
   }
-  return '';
+  return [...subjects];
 }
 
 export async function handleDeleteAccount(req: Request, deps: DeleteAccountDeps): Promise<Response> {
@@ -180,8 +172,8 @@ export async function handleDeleteAccount(req: Request, deps: DeleteAccountDeps)
 
   // Which Apple ID this account belongs to. Without it the revocation cannot be
   // tied to the account, so there is nothing safe to do but refuse.
-  const expectedAppleSubject = appleSubject(user);
-  if (!expectedAppleSubject) {
+  const expectedAppleSubjects = appleSubjects(user);
+  if (!expectedAppleSubjects.length) {
     log('apple_identity_unreadable');
     return fail(502, 'apple_identity_unreadable');
   }
@@ -206,7 +198,7 @@ export async function handleDeleteAccount(req: Request, deps: DeleteAccountDeps)
   // --- 1. revoke at Apple ---------------------------------------------------
   const revocation = await revokeAppleAuthorization({
     authorizationCode,
-    expectedAppleSubject,
+    expectedAppleSubjects,
     config: config.config,
     deps,
   });

@@ -72,7 +72,7 @@ export type AppleRevocationFailure =
   /**
    * The code belongs to a DIFFERENT Apple ID than the account being deleted.
    * Nothing is revoked and nothing may be deleted - see the note on
-   * `expectedAppleSubject` below.
+   * `expectedAppleSubjects` below.
    */
   | 'subject_mismatch'
   /** Apple refused the revocation itself. */
@@ -192,7 +192,7 @@ export async function createClientSecret(
  *
  * What this IS used for is binding: proving the code came from the same Apple
  * ID the account is linked to. That check is not optional - see
- * `expectedAppleSubject`.
+ * `expectedAppleSubjects`.
  */
 function readIdTokenClaims(idToken: string): { sub: string; aud: string } | null {
   const parts = idToken.split('.');
@@ -241,8 +241,8 @@ function form(fields: Record<string, string>): string {
 export async function revokeAppleAuthorization(args: {
   authorizationCode: string;
   /**
-   * The Apple subject (`sub`) the account being deleted is actually linked to,
-   * taken from the GoTrue identity - NOT from the device.
+   * The Apple subjects (`sub`) the account being deleted is actually linked to,
+   * taken from all GoTrue Apple identities - NOT from the device.
    *
    * This is the difference between "an Apple authorization was revoked" and
    * "this account's Apple authorization was revoked", and the two come apart
@@ -254,15 +254,15 @@ export async function revokeAppleAuthorization(args: {
    * if they had none), delete the account, and leave the account's own
    * authorization live - the exact failure the revocation exists to remove.
    */
-  expectedAppleSubject: string;
+  expectedAppleSubjects: readonly string[];
   config: AppleClientConfig;
   deps: AppleRevocationDeps;
 }): Promise<AppleRevocationResult> {
-  const { authorizationCode, expectedAppleSubject, config, deps } = args;
+  const { authorizationCode, expectedAppleSubjects, config, deps } = args;
   if (!authorizationCode.trim()) {
     return { ok: false, reason: 'authorization_rejected', detail: 'empty authorization code' };
   }
-  if (!expectedAppleSubject.trim()) {
+  if (!expectedAppleSubjects.some(subject => subject.trim())) {
     // Refusing rather than revoking whatever turns up. A revocation that cannot
     // be attributed to the account is not evidence of anything.
     return { ok: false, reason: 'subject_mismatch', detail: 'no Apple subject on the account identity' };
@@ -313,7 +313,7 @@ export async function revokeAppleAuthorization(args: {
   if (claims.aud && claims.aud !== config.clientId) {
     return { ok: false, reason: 'subject_mismatch', detail: 'id_token audience is not this client' };
   }
-  if (claims.sub !== expectedAppleSubject) {
+  if (!expectedAppleSubjects.includes(claims.sub)) {
     // Do NOT revoke. The grant this code identifies belongs to a different
     // Apple ID, which may well be another live iTala account on this device -
     // revoking it would break somebody who did not ask for anything.

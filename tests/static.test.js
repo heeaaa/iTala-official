@@ -1873,8 +1873,8 @@ for (const f of srcFiles) {
        'Apple answers 200 for an access-token revocation and leaves the grant in place, so a '
        + 'fallback would report success for a revocation that did not happen');
     ok('the revocation is bound to the account\'s own Apple subject',
-       /expectedAppleSubject/.test(appleAuth) && /claims\.sub !== expectedAppleSubject/.test(appleAuth)
-         && /appleSubject\(user\)/.test(handler),
+       /expectedAppleSubject/.test(appleAuth) && /expectedAppleSubjects\.includes\(claims\.sub\)/.test(appleAuth)
+         && /appleSubjects\(user\)/.test(handler),
        'signInAsync authenticates the DEVICE\'s Apple ID, which need not be the account\'s - '
        + 'without this the wrong grant is revoked and the account is deleted anyway');
     ok('an Apple account with no readable subject is refused, not sent to the RPC',
