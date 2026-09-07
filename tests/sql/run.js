@@ -225,7 +225,7 @@ const SECTIONS = {
     );
     insert into public.legal_versions
       (version, terms_url, privacy_url, content_policy_url, is_current)
-    values ('2026-09-04', 'https://itala.abejohanna.workers.dev/terms/',
+    values ('2026-09-07', 'https://itala.abejohanna.workers.dev/terms/',
       'https://itala.abejohanna.workers.dev/privacy/',
       'https://itala.abejohanna.workers.dev/content-policy/', true)
     on conflict (version) do nothing;

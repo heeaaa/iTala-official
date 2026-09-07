@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 // One release identifies the exact set of three documents, not the app version.
-export const LEGAL_VERSION = '2026-09-04';
+export const LEGAL_VERSION = '2026-09-07';
 export const LEGAL_LINKS = [
   { label: 'Terms of Use', url: 'https://www.itala.fyi/terms/' },
   { label: 'Privacy Policy', url: 'https://www.itala.fyi/privacy/' },

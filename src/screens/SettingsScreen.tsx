@@ -80,7 +80,8 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
     setBusy(true);
     const ok = await deleteAccount();
     setBusy(false);
-    if (ok) {
+    if (ok === 'cancelled') return;
+    if (ok === true) {
       Alert.alert('Account deleted', 'Your account has been removed. You can keep using iTala as a guest.', [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);

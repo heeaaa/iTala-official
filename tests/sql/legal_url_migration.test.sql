@@ -29,15 +29,15 @@ end $$;
 -- 1. The URLs healed.
 -- ---------------------------------------------------------------------------
 select url_assert(
-  (select terms_url from public.legal_versions where version = '2026-09-04')
+  (select terms_url from public.legal_versions where version = '2026-09-07')
     = 'https://www.itala.fyi/terms/',
   'terms_url is rewritten to the current domain');
 select url_assert(
-  (select privacy_url from public.legal_versions where version = '2026-09-04')
+  (select privacy_url from public.legal_versions where version = '2026-09-07')
     = 'https://www.itala.fyi/privacy/',
   'privacy_url is rewritten to the current domain');
 select url_assert(
-  (select content_policy_url from public.legal_versions where version = '2026-09-04')
+  (select content_policy_url from public.legal_versions where version = '2026-09-07')
     = 'https://www.itala.fyi/content-policy/',
   'content_policy_url is rewritten to the current domain');
 select url_assert(not exists (
@@ -55,14 +55,14 @@ select url_assert(not exists (
 -- orphan the receipts already on file.
 select url_assert((select count(*) from public.legal_versions) = 1,
   'the move updates the existing version rather than adding one');
-select url_assert(exists (select 1 from public.legal_versions where version = '2026-09-04'),
+select url_assert(exists (select 1 from public.legal_versions where version = '2026-09-07'),
   'the version string is untouched, so existing receipts stay valid');
 
 -- is_current is deliberately excluded from the conflict clause: re-running the
 -- schema must never roll back an operator who has moved everyone to a newer
 -- required version.
 select url_assert(
-  (select is_current from public.legal_versions where version = '2026-09-04') is true,
+  (select is_current from public.legal_versions where version = '2026-09-07') is true,
   'is_current survives the URL update');
 
 -- A receipt taken before the move still resolves, and still reports the version
@@ -70,7 +70,7 @@ select url_assert(
 insert into auth.users (id) values ('dddddddd-0000-0000-0000-000000000004')
 on conflict (id) do nothing;
 insert into public.legal_acceptances (user_id, version)
-values ('dddddddd-0000-0000-0000-000000000004', '2026-09-04');
+values ('dddddddd-0000-0000-0000-000000000004', '2026-09-07');
 select url_assert(
   (select count(*) from public.legal_acceptances a
      join public.legal_versions v on v.version = a.version
@@ -82,7 +82,7 @@ select url_assert(
 -- 3. Idempotent. An operator re-runs schema.sql more than once.
 -- ---------------------------------------------------------------------------
 insert into public.legal_versions (version, terms_url, privacy_url, content_policy_url, is_current)
-values ('2026-09-04', 'https://www.itala.fyi/terms/',
+values ('2026-09-07', 'https://www.itala.fyi/terms/',
   'https://www.itala.fyi/privacy/',
   'https://www.itala.fyi/content-policy/',
   not exists (select 1 from public.legal_versions where is_current))
@@ -91,7 +91,7 @@ on conflict (version) do update set
   privacy_url = excluded.privacy_url,
   content_policy_url = excluded.content_policy_url;
 select url_assert((select count(*) from public.legal_versions) = 1
-  and (select is_current from public.legal_versions where version = '2026-09-04') is true,
+  and (select is_current from public.legal_versions where version = '2026-09-07') is true,
   'a second re-run changes nothing');
 
 -- report

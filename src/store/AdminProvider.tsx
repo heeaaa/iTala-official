@@ -221,8 +221,9 @@ interface AdminCtx {
   signInWithApple: () => Promise<Role | null>;
   /** Permanently deletes the signed-in account server-side (App Store
    *  5.1.1(v) / Play policy requirement), then returns the device to a guest
-   *  session. League/game data is untouched. Resolves true on success. */
-  deleteAccount: () => Promise<boolean>;
+   *  session. League/game data is untouched. Resolves true on success, false
+   *  on failure, or 'cancelled' when the Apple confirmation is dismissed. */
+  deleteAccount: () => Promise<boolean | 'cancelled'>;
   /** Signs out of Google and returns the device to a guest (anonymous) session. */
   signOut: () => Promise<void>;
   /** This user's per-league roles (league id → role). Supers bypass this. */
@@ -654,7 +655,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     setUserId(restored?.uid ?? null);
   };
 
-  const deleteAccount = async (): Promise<boolean> => {
+  const deleteAccount = async (): Promise<boolean | 'cancelled'> => {
     if (authFlow.current) return false;
     setError('account', null);
     if (!SYNC_ENABLED) { setError('account', 'There is no account to delete in local-only mode.'); return false; }
@@ -707,7 +708,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         });
         // Closing the Apple sheet changed nothing, so it must not leave an
         // error on screen - the same rule the sign-in path follows.
-        if (outcome.status === 'cancelled') return false;
+        if (outcome.status === 'cancelled') return 'cancelled';
         if (outcome.status === 'failed') {
           warn('[auth] Apple account deletion refused -', outcome.diagnosis);
           setError('account', outcome.message);

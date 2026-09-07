@@ -155,7 +155,7 @@ export type AppleDeletionOutcome =
    */
   | { status: 'not-apple' }
   /**
-   * The request never got an answer (timeout, or the transport failed), so
+   * The client or Edge Function never got a definitive deletion answer, so
    * whether the server finished is UNKNOWN. The caller must find out before
    * telling anybody anything - signing the person out here would claim a
    * deletion that may not have happened, and reporting a failure would be
@@ -299,13 +299,15 @@ export async function deleteAppleAccount(deps: {
     // The server's own identity check disagrees with ours. Its answer wins, and
     // the caller falls back to the RPC rather than refusing to delete.
     if (slug === 'no_apple_identity') return { status: 'not-apple' };
-    if (slug === 'transport') {
+    if (slug === 'transport' || slug === 'deletion_unconfirmed') {
       // NOT 'failed'. The function revokes and deletes in one request, so a
-      // request that never came back may have completed on the server. The
+      // request whose response was lost on either network hop may have completed. The
       // caller has to check before reporting anything.
       return {
         status: 'unconfirmed',
-        message: "Couldn't reach iTala. Check your internet connection and try again.",
+        message: slug === 'deletion_unconfirmed'
+          ? "iTala has stopped using your Apple ID, but couldn't confirm account deletion. Check your connection and try again."
+          : "Couldn't reach iTala. Check your internet connection and try again.",
         diagnosis: `${DELETE_ACCOUNT_FUNCTION} did not answer: ${detail}`,
       };
     }

@@ -47,7 +47,7 @@ revoke all on public.legal_versions from anon, authenticated;
 -- different address from the page the person actually read. tests/static.test.js
 -- checks the two agree.
 insert into public.legal_versions (version, terms_url, privacy_url, content_policy_url, is_current)
-values ('2026-09-04', 'https://www.itala.fyi/terms/',
+values ('2026-09-07', 'https://www.itala.fyi/terms/',
   'https://www.itala.fyi/privacy/',
   'https://www.itala.fyi/content-policy/',
   not exists (select 1 from public.legal_versions where is_current))

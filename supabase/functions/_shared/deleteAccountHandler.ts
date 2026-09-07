@@ -57,7 +57,8 @@ type Failure =
   | 'malformed_request'
   | 'configuration'
   | 'revocation_failed'
-  | 'deletion_failed';
+  | 'deletion_failed'
+  | 'deletion_unconfirmed';
 
 function fail(status: number, error: Failure, detail?: string): Response {
   // `detail` is Apple's or PostgREST's short slug, never a token and never a
@@ -241,9 +242,16 @@ export async function handleDeleteAccount(req: Request, deps: DeleteAccountDeps)
     });
   } catch (e) {
     log('deletion_unreachable_after_revocation');
-    return fail(502, 'deletion_failed', `revoked, but the account delete could not be sent: ${(e as Error).message}`);
+    // The database may have committed before its response was lost. Let the
+    // client reconcile the account instead of claiming deletion failed.
+    return fail(502, 'deletion_unconfirmed', `revoked, but the account delete response was lost: ${(e as Error).message}`);
   }
   if (!deletion.ok) {
+    if (deletion.status >= 500) {
+      // An intermediary can return a 5xx after the database committed.
+      log('deletion_unconfirmed_after_revocation', `http ${deletion.status}`);
+      return fail(502, 'deletion_unconfirmed', `revoked, but the account delete returned http ${deletion.status}`);
+    }
     log('deletion_failed_after_revocation', `http ${deletion.status}`);
     return fail(502, 'deletion_failed', `revoked, but the account delete failed with http ${deletion.status}`);
   }

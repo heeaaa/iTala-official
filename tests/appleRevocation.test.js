@@ -657,7 +657,7 @@ test('a missing authorization code is refused before Apple is contacted', async 
 });
 
 test('deletion failing after a successful revocation is reported honestly', async () => {
-  for (const options of [{ deleteStatus: 403 }, { deleteThrows: 'Network request failed' }]) {
+  for (const options of [{ deleteStatus: 403 }]) {
     const backend = fakeBackend(options);
     const { status, body } = await callHandler(backend);
     assert.equal(status, 502);
@@ -1106,7 +1106,7 @@ test('a refused revocation leaves the account alone and says so', async () => {
 
 test('cancelling the Apple confirmation deletes nothing and blames nobody', async () => {
   const p = providerHarness({ cancelSheet: true }); await p.settle();
-  assert.equal(await p.ctx.deleteAccount(), false);
+  assert.equal(await p.ctx.deleteAccount(), 'cancelled');
   await p.settle();
   assert.equal(p.count('invoke'), 0);
   assert.equal(p.count('delete_own_account'), 0);
@@ -1164,6 +1164,73 @@ test('the server overruling the client falls back to the RPC instead of refusing
 const APPLE_IDENTITY = { identities: [{ provider: 'apple', id: APPLE_SUB, identity_data: { sub: APPLE_SUB } }] };
 const GONE = { data: { user: null }, error: { code: 'user_not_found', message: 'User from sub claim in JWT does not exist' } };
 const SIGNED_IN = { data: { user: { id: 'account-a', email: 'a@example.invalid', is_anonymous: false, ...APPLE_IDENTITY } }, error: null };
+
+test('a lost database response is reconciled through the handler, client and provider', async () => {
+  for (const recheck of [GONE, SIGNED_IN, { data: { user: null }, error: { message: 'timeout' } }]) {
+    for (const options of [{ deleteThrows: 'connection reset after request' }, { deleteStatus: 504 }]) {
+      const backend = fakeBackend(options);
+      const answer = await callHandler(backend);
+      assert.equal(answer.body.error, 'deletion_unconfirmed');
+      const p = providerHarness({
+        functionAnswer: { data: null, error: { context: json(answer.body, answer.status) } },
+        getUserOutcomes: [SIGNED_IN, recheck],
+      });
+      await p.settle();
+      assert.equal(await p.ctx.deleteAccount(), recheck === GONE);
+      await p.settle();
+      assert.equal(p.count('getUser'), 2, 'the database transport error requires reconciliation');
+      assert.equal(p.count('delete_own_account'), 0, 'do not repeat deletion through the bare RPC');
+      assert.equal(p.ctx.userId, recheck === GONE ? 'guest' : 'account-a');
+      assert.equal(p.disk.size, recheck === GONE ? 0 : 1);
+      if (recheck !== GONE) assert.match(p.ctx.errorFor('account'), /couldn't confirm account deletion/);
+      p.root.unmount();
+    }
+  }
+});
+
+test('Settings stays silent when Apple confirmation is cancelled and still reports other outcomes', async () => {
+  for (const scenario of [
+    { options: { cancelSheet: true }, title: null },
+    { options: {}, title: 'Account deleted' },
+    { options: { getUserError: { message: 'Network request failed' } }, title: 'Could not delete account' },
+  ]) {
+    const p = providerHarness(scenario.options);
+    await p.settle();
+    const alerts = [];
+    const screen = load('src/screens/SettingsScreen.tsx', {
+      react: HookRuntime,
+      'react-native': { View: 'View', Alert: { alert: (...args) => alerts.push(args) } },
+      '../components/ui': Object.fromEntries(['Screen', 'Txt', 'Card', 'Pill', 'Toggle', 'GoogleButton', 'AppleButton', 'Button'].map(name => [name, name])),
+      '../store/StoreProvider': { useStore: () => ({ synced: false, prefs: {} }) },
+      '../store/AdminProvider': { useAdmin: () => p.ctx },
+      '../components/LegalAcknowledgement': { LegalLinks: 'LegalLinks' },
+      '../theme': { colors: {}, space: n => n },
+    });
+    const root = HookRuntime.render(screen.default, { navigation: { goBack() {} } });
+    function findDelete(node) {
+      if (!node || typeof node !== 'object') return null;
+      if (node.props?.title === 'Delete account') return node;
+      for (const child of [node.props?.children].flat(Infinity)) {
+        const found = findDelete(child);
+        if (found) return found;
+      }
+      return null;
+    }
+    findDelete(root.element).props.onPress();
+    const confirmation = alerts.shift();
+    assert.equal(confirmation[0], 'Delete account?');
+    confirmation[2].find(button => button.text === 'Delete account').onPress();
+    await p.settle();
+    root.flush();
+    assert.deepEqual(alerts.map(alert => alert[0]), scenario.title ? [scenario.title] : []);
+    if (!scenario.title) {
+      assert.equal(p.count('invoke'), 0);
+      assert.equal(findDelete(root.element).props.disabled, false, 'cancellation releases the busy state');
+    }
+    root.unmount();
+    p.root.unmount();
+  }
+});
 
 test('a timeout after the server finished completes the deletion instead of stranding it', async () => {
   const p = providerHarness({

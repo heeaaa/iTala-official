@@ -122,7 +122,7 @@ line with literal `\n` avoids every quoting question, and
 in it is for. Run this from Git Bash, with the real project ref:
 
 ```bash
-REF=dsoogiyfgsagbetlumnc                          # your project ref
+REF=YOUR_SUPABASE_PROJECT                         # your project ref like dsoogiyf...
 P8="$HOME/Downloads/AuthKey_ABCDE12345.p8"        # where you saved the key
 SECRETS="$HOME/itala-apple-secrets.env"           # OUTSIDE the repo, deleted below
 
@@ -152,13 +152,13 @@ letter...`, because a path is not a legal name - and if the path is unquoted,
 the space in this checkout's directory name splits it into two arguments first.
 
 ```bash
-cd "/c/Users/aeron.santos/Downloads/HEAS files/iTala"
+cd "/c/Users/.../iTala"
 
 npx supabase@latest login          # once; opens a browser
 npx supabase@latest functions deploy delete-account \
-  --project-ref dsoogiyfgsagbetlumnc --use-api
+  --project-ref YOUR_SUPABASE_PROJECT --use-api
 
-npx supabase@latest functions list --project-ref dsoogiyfgsagbetlumnc
+npx supabase@latest functions list --project-ref YOUR_SUPABASE_PROJECT
 ```
 
 From anywhere else, point the CLI at the project with the global `--workdir`
@@ -166,7 +166,7 @@ flag instead of `cd`:
 
 ```bash
 npx supabase@latest functions deploy delete-account \
-  --project-ref dsoogiyfgsagbetlumnc --use-api \
+  --project-ref YOUR_SUPABASE_PROJECT --use-api \
   --workdir "/c/Users/aeron.santos/Downloads/HEAS files/iTala"
 ```
 
@@ -184,7 +184,7 @@ refuses the request without one.
 ### Smoke test, no device needed
 
 ```bash
-REF=dsoogiyfgsagbetlumnc
+REF=YOUR_SUPABASE_PROJECT
 ANON=$(grep -o 'EXPO_PUBLIC_SUPABASE_ANON_KEY=.*' ../../.env | cut -d= -f2-)
 
 # 1. No credentials at all -> 401 from the gateway. Proves it is deployed.
