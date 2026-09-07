@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { useKeepAwake } from 'expo-keep-awake';
-import { View, Pressable, ScrollView, FlatList, Alert, Modal, TextInput, ActivityIndicator, AccessibilityInfo } from 'react-native';
+import { View, Pressable, ScrollView, FlatList, Alert, Modal, TextInput, ActivityIndicator, AccessibilityInfo, KeyboardAvoidingView, Platform } from 'react-native';
 import { Screen, Txt, Button, Segmented, TeamBadge, LivePip, PromoStrip, SyncChip, syncToneColor } from '../components/ui';
 import { useStore, useLeague } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
@@ -848,22 +848,27 @@ function TimeoutModal({ teamName, period, onCancel, onSubmit }:
   };
   return (
     <Modal transparent animationType="fade" onRequestClose={onCancel} supportedOrientations={['portrait', 'landscape']}>
-      <Pressable onPress={onCancel} style={{ flex: 1, backgroundColor: '#000B', alignItems: 'center', justifyContent: 'center', padding: space(6) }}>
-        <Pressable onPress={() => {}} style={{ width: '100%', maxWidth: 360, backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, padding: space(5) }}>
-          <Txt k="h2">Timeout — {teamName}</Txt>
-          <Txt k="body" color={colors.muted} style={{ marginTop: 4, marginBottom: space(3) }}>Period {period}. Enter the time remaining on the clock (e.g. 4:28).</Txt>
-          <TextInput
-            value={time} onChangeText={setTime} placeholder="m:ss   (e.g. 4:28)" placeholderTextColor={colors.muted}
-            keyboardType="numbers-and-punctuation" autoFocus
-            onSubmitEditing={() => onSubmit(pretty(time))}
-            style={{ backgroundColor: colors.bg, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, color: colors.text, paddingHorizontal: 14, paddingVertical: 12, fontFamily: font.body, fontSize: 18, textAlign: 'center' }}
-          />
-          <View style={{ flexDirection: 'row', gap: 10, marginTop: space(4) }}>
-            <Button title="Cancel" kind="ghost" onPress={onCancel} style={{ flex: 1 }} />
-            <Button title="Log timeout" onPress={() => onSubmit(pretty(time))} style={{ flex: 1 }} />
-          </View>
+      {/* Avoid the keyboard inside the Modal's own window, including on landscape iPads. */}
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, backgroundColor: '#000B' }}>
+        <Pressable onPress={onCancel} style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: space(6) }}>
+          <Pressable onPress={() => {}} style={{ width: '100%', maxWidth: 360, maxHeight: '100%', backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, overflow: 'hidden' }}>
+            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: space(5) }}>
+              <Txt k="h2">Timeout — {teamName}</Txt>
+              <Txt k="body" color={colors.muted} style={{ marginTop: 4, marginBottom: space(3) }}>Period {period}. Enter the time remaining on the clock (e.g. 4:28).</Txt>
+              <TextInput
+                value={time} onChangeText={setTime} placeholder="m:ss   (e.g. 4:28)" placeholderTextColor={colors.muted}
+                keyboardType="numbers-and-punctuation" autoFocus
+                onSubmitEditing={() => onSubmit(pretty(time))}
+                style={{ backgroundColor: colors.bg, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, color: colors.text, paddingHorizontal: 14, paddingVertical: 12, fontFamily: font.body, fontSize: 18, textAlign: 'center' }}
+              />
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: space(4) }}>
+                <Button title="Cancel" kind="ghost" onPress={onCancel} style={{ flex: 1 }} />
+                <Button title="Log timeout" onPress={() => onSubmit(pretty(time))} style={{ flex: 1 }} />
+              </View>
+            </ScrollView>
+          </Pressable>
         </Pressable>
-      </Pressable>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
