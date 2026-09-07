@@ -3,6 +3,7 @@ import { View, Alert } from 'react-native';
 import { Screen, Txt, Card, Pill, Toggle, GoogleButton, AppleButton, Button, syncToneColor } from '../components/ui';
 import { useStore } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
+import { LegalLinks } from '../components/LegalAcknowledgement';
 import { colors, space } from '../theme';
 import { ScreenProps } from '../navigation';
 
@@ -94,6 +95,12 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
             {isAdmin ? 'Admin unlocked on this device (password).' : 'This device is running without an account.'}
           </Txt>
         )}
+      </Card>
+
+      {/* Legal documents remain available after account acknowledgement. */}
+      <Card style={{ marginBottom: space(4) }}>
+        <Txt k="label" style={{ marginBottom: space(2) }}>Legal</Txt>
+        <LegalLinks />
       </Card>
 
       {/* Live tracking */}

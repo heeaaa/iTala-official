@@ -145,6 +145,8 @@ try {
 } catch { failed++; }
 
 console.log('\n• static structural checks');
+try { run('node', [path.join('tests', 'legal.test.js')], { env }); }
+catch { failed++; }
 try { run('node', [path.join('tests', 'guestSession.test.js')], { env }); }
 catch { failed++; }
 try { run('node', [path.join('tests', 'contentReports.test.js')], { env }); }

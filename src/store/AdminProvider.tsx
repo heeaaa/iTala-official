@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
@@ -6,6 +6,8 @@ import * as AppleAuthentication from 'expo-apple-authentication';
 import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
 import { ensureGuestSession } from './guestSession';
 import { devLog, warn } from '../lib/log';
+import { LegalAcknowledgement, LegalPrompt } from '../components/LegalAcknowledgement';
+import { LEGAL_VERSION, LegalVersionError, cacheLegalReceipt, cachedLegalReceipt, forgetLegalReceipt, readLegalStatus, recordLegalAcceptance } from '../lib/legal';
 import {
   AuthErrors, AuthScope, clearScopedError, describeAuthFailure, diagnoseAuthFailure,
   errorForScope, isNetworkFailure, sessionRecoveryPlan, setScopedError,
@@ -241,15 +243,106 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
   const [serverAdmin, setServerAdmin] = useState(false);   // profiles.is_admin (synced mode)
   const [localUnlocked, setLocalUnlocked] = useState(false); // password unlock (local-only mode)
-  const [authBusy, setAuthBusy] = useState(false);
+  const [authBusy, setAuthBusy] = useState(SYNC_ENABLED);
+  // Covers restoration, legal review and OAuth, including taps before React renders.
+  const authFlow = useRef(SYNC_ENABLED);
+  const mounted = useRef(true);
+  const [legalPrompt, setLegalPrompt] = useState<LegalPrompt | null>(null);
+  const legalAction = useRef<(() => Promise<void>) | null>(null);
+  const legalResolve = useRef<((accepted: boolean) => void) | null>(null);
+  const dismissed = useRef<(() => void) | null>(null);
+  const legalSubmitting = useRef(false);
   const [errors, setErrors] = useState<AuthErrors>({});
 
-  const setError = (scope: AuthScope, message: string | null) =>
-    setErrors(prev => setScopedError(prev, scope, message));
+  const setError = useCallback((scope: AuthScope, message: string | null) =>
+    setErrors(prev => setScopedError(prev, scope, message)), []);
   const errorFor = (scope: AuthScope): string | null => errorForScope(errors, scope);
   const clearError = (scope?: AuthScope) => setErrors(prev => clearScopedError(prev, scope));
   const [appleAvailable, setAppleAvailable] = useState(false);
   const [memberships, setMemberships] = useState<Record<string, 'owner' | 'scorekeeper'>>({});
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      legalResolve.current?.(false);
+      legalResolve.current = null;
+      dismissed.current?.();
+      dismissed.current = null;
+    };
+  }, []);
+
+  const finishLegalPrompt = (accepted: boolean) => {
+    const resolve = legalResolve.current;
+    legalResolve.current = null;
+    legalAction.current = null;
+    setLegalPrompt(null);
+    // iOS must dismiss our native modal before presenting Apple's native sheet.
+    if (Platform.OS === 'ios' && resolve) dismissed.current = () => resolve(accepted);
+    else resolve?.(accepted);
+  };
+
+  const askLegal = useCallback((returning: boolean, action: () => Promise<void>, error: string | null = null) =>
+    new Promise<boolean>(resolve => {
+      if (!mounted.current) { resolve(false); return; }
+      legalResolve.current = resolve;
+      legalAction.current = action;
+      setLegalPrompt({ version: LEGAL_VERSION, returning, busy: false, error });
+    }), []);
+
+  const submitLegal = async () => {
+    if (legalSubmitting.current || !legalAction.current) return;
+    legalSubmitting.current = true;
+    setLegalPrompt(value => value ? { ...value, busy: true, error: null } : null);
+    try {
+      await legalAction.current();
+      if (mounted.current) finishLegalPrompt(true);
+    } catch (e) {
+      if (mounted.current) setLegalPrompt(value => value ? {
+        ...value, busy: false, error: e instanceof Error ? e.message : 'Please try again.',
+      } : null);
+    } finally { legalSubmitting.current = false; }
+  };
+
+  const requireLegalReceipt = useCallback(async (
+    sb: NonNullable<ReturnType<typeof getSupabase>>, uid: string, preaccepted = false,
+  ): Promise<boolean> => {
+    const save = async () => {
+      await readLegalStatus(sb); // Refuse an outdated document version, including on retries.
+      const receipt = await recordLegalAcceptance(sb, LEGAL_VERSION);
+      await cacheLegalReceipt(uid, receipt);
+    };
+    let problem: string | null = null;
+    try {
+      if (preaccepted) { await save(); return true; }
+      const status = await readLegalStatus(sb);
+      if (status.accepted_at) { await cacheLegalReceipt(uid, status); return true; }
+    } catch (e) {
+      // Only a previously server-confirmed receipt can allow offline restoration.
+      // A known version mismatch always takes precedence over the cache.
+      if (e instanceof LegalVersionError) {
+        try { await forgetLegalReceipt(uid); }
+        catch { warn('[auth] Could not invalidate the outdated legal receipt cache.'); }
+      } else if (!preaccepted && await cachedLegalReceipt(uid)) return true;
+      problem = e instanceof Error ? e.message : 'Could not check your acknowledgement. Please try again.';
+    }
+    return askLegal(true, save, problem);
+  }, [askLegal]);
+
+  const returnToGuest = useCallback(async (sb: NonNullable<ReturnType<typeof getSupabase>>) => {
+    const result = await withTimeout<{ error: { message: string } | null }>(sb.auth.signOut({ scope: 'local' }), 6000,
+      { error: { message: 'timeout' } }, 'signOut(legal)');
+    setUser(null);
+    setUserId(null);
+    setServerAdmin(false);
+    setMemberships({});
+    if (result.error) {
+      setError('signin', 'Could not finish signing out. Please restart iTala and try again.');
+      return;
+    }
+    const guest = await ensureSession(sb);
+    if (mounted.current) setUserId(guest?.uid ?? null);
+  }, [setError]);
 
   // Native Apple sign-in exists only on iOS hardware; on Android/web the
   // module reports unavailable and the UI simply never shows the button.
@@ -287,22 +380,33 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
 
     (async () => {
-      const restored = await ensureSession(sb);
-      if (cancelled || !restored) return;
-      setUserId(restored.uid);
-      setUser(restored.user);
-      if (restored.user) {
-        // Refresh the server-side admin flag from the email allowlist
-        // (covers accounts created before an allowlist edit).
-        await withTimeout(sb.rpc('sync_admin_role'), 6000, { data: null, error: null } as any, 'sync_admin_role');
+      try {
+        const restored = await ensureSession(sb);
+        if (cancelled || !restored) return;
+        if (restored.user && !await requireLegalReceipt(sb, restored.uid)) {
+          if (!cancelled) await returnToGuest(sb);
+          return;
+        }
+        if (cancelled) return;
+        setUserId(restored.uid);
+        setUser(restored.user);
+        if (restored.user) {
+          // Refresh the server-side admin flag from the email allowlist
+          // (covers accounts created before an allowlist edit).
+          await withTimeout(sb.rpc('sync_admin_role'), 6000, { data: null, error: null } as any, 'sync_admin_role');
+        }
+        const flag = await readAdminFlag(sb, restored.uid);
+        if (!cancelled) setServerAdmin(flag);
+        if (!cancelled && restored.user) await refreshMemberships(sb);
+      } catch {
+        if (!cancelled) setError('signin', 'Could not restore your account. Please try signing in again.');
+      } finally {
+        if (!cancelled) { authFlow.current = false; setAuthBusy(false); }
       }
-      const flag = await readAdminFlag(sb, restored.uid);
-      if (!cancelled) setServerAdmin(flag);
-      if (!cancelled && restored.user) await refreshMemberships(sb);
     })();
 
     return () => { cancelled = true; };
-  }, []);
+  }, [requireLegalReceipt, returnToGuest, setError]);
 
   // Shared tail of every provider sign-in: read the user back, flip the
   // server-side admin flag from the allowlist, and derive the new role.
@@ -314,7 +418,13 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   ): Promise<Role | null> => {
     const got = await withTimeout(sb.auth.getUser(), 6000, { data: { user: null }, error: null } as any, 'getUser');
     const u = got?.data?.user;
-    if (!u) { setError('signin', 'Signed in, but the session could not be read. Try again.'); return null; }
+    if (!u || !toAuthUser(u)) { setError('signin', 'Signed in, but the session could not be read. Try again.'); return null; }
+
+    if (!await requireLegalReceipt(sb, u.id, true)) {
+      if (mounted.current) await returnToGuest(sb);
+      return null;
+    }
+    if (!mounted.current) return null;
 
     let authUser = toAuthUser(u);
     if (authUser && nameHint && authUser.name === authUser.email) {
@@ -335,6 +445,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
 
   // ---- Google Sign-In (Supabase OAuth + PKCE via the system browser) -------
   const signInWithGoogle = async (): Promise<Role | null> => {
+    if (authFlow.current) return null;
     setError('signin', null);
 
     if (!SYNC_ENABLED) {
@@ -344,8 +455,10 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     const sb = getSupabase();
     if (!sb) { setError('signin', 'Sync not configured.'); return null; }
 
+    authFlow.current = true;
     setAuthBusy(true);
     try {
+      if (!await askLegal(false, async () => { await readLegalStatus(sb); }) || !mounted.current) return null;
       // Deep link back into the app. Expo Go → exp://.../--/auth-callback,
       // dev/prod builds → itala://auth-callback (scheme from app.json).
       const { redirectTo, inExpoGo } = oauthRedirect();
@@ -419,12 +532,14 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
       setError('signin', describeAuthFailure((e as Error).message, 'Google'));
       return null;
     } finally {
+      authFlow.current = false;
       setAuthBusy(false);
     }
   };
 
   // ---- Sign in with Apple (native sheet → Supabase ID-token exchange) ------
   const signInWithApple = async (): Promise<Role | null> => {
+    if (authFlow.current) return null;
     setError('signin', null);
     if (!SYNC_ENABLED) {
       setError('signin', 'Apple sign-in needs the Supabase sync configuration. This build is running local-only.');
@@ -445,8 +560,10 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
              'Client IDs must list it for development (remove before shipping).');
     }
 
+    authFlow.current = true;
     setAuthBusy(true);
     try {
+      if (!await askLegal(false, async () => { await readLegalStatus(sb); }) || !mounted.current) return null;
       const credential = await AppleAuthentication.signInAsync({
         requestedScopes: [
           AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
@@ -481,17 +598,20 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
       setError('signin', describeAuthFailure((e as Error).message, 'Apple'));
       return null;
     } finally {
+      authFlow.current = false;
       setAuthBusy(false);
     }
   };
 
   // ---- Account deletion (store-policy requirement) --------------------------
   const deleteAccount = async (): Promise<boolean> => {
+    if (authFlow.current) return false;
     setError('account', null);
     if (!SYNC_ENABLED) { setError('account', 'There is no account to delete in local-only mode.'); return false; }
     const sb = getSupabase();
     if (!sb) { setError('account', 'Sync not configured.'); return false; }
 
+    authFlow.current = true;
     setAuthBusy(true);
     try {
       const res = await withTimeout(
@@ -509,6 +629,10 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
       // The server-side user is gone; clear the (now-orphaned) local session
       // and return to a fresh guest session. scope 'local' avoids a doomed
       // round-trip to the logout endpoint for a user that no longer exists.
+      if (userId) {
+        try { await forgetLegalReceipt(userId); }
+        catch { warn('[auth] Could not remove the deleted account legal receipt cache.'); }
+      }
       await withTimeout(sb.auth.signOut({ scope: 'local' }), 6000, { error: null } as any, 'signOut(local)');
       setUser(null);
       setServerAdmin(false);
@@ -517,15 +641,18 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
       setUserId(restored?.uid ?? null);
       return true;
     } finally {
+      authFlow.current = false;
       setAuthBusy(false);
     }
   };
 
   const signOut = async (): Promise<void> => {
+    if (authFlow.current) return;
     clearError();
     if (!SYNC_ENABLED) { setLocalUnlocked(false); return; }
     const sb = getSupabase();
     if (!sb) return;
+    authFlow.current = true;
     setAuthBusy(true);
     try {
       await withTimeout(sb.auth.signOut(), 6000, { error: null } as any, 'signOut');
@@ -536,6 +663,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
       const restored = await ensureSession(sb);
       setUserId(restored?.uid ?? null);
     } finally {
+      authFlow.current = false;
       setAuthBusy(false);
     }
   };
@@ -658,6 +786,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
 
   // ---- Password backup (hidden lock) ---------------------------------------
   const unlock = async (password: string): Promise<boolean> => {
+    if (authFlow.current) return false;
     setError('admin', null);
 
     // Local-only mode: no server, so this is a device-local check. Fails closed
@@ -729,6 +858,9 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
       signInWithGoogle, appleAvailable, signInWithApple, deleteAccount, signOut, unlock, lock,
     }}>
       {children}
+      <LegalAcknowledgement prompt={legalPrompt} onContinue={() => { void submitLegal(); }}
+        onCancel={() => { if (!legalSubmitting.current) finishLegalPrompt(false); }}
+        onDismiss={() => { const done = dismissed.current; dismissed.current = null; done?.(); }} />
     </Ctx.Provider>
   );
 }

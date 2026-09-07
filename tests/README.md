@@ -1,5 +1,14 @@
 # iTala regression tests
 
+`node tests/legal.test.js` runs the real legal receipt client, acknowledgement
+component handlers, and AdminProvider using the existing small hook runtime.
+It covers both OAuth paths, cancellation, receipt ordering, failed saves/retry,
+session restoration, cache isolation, and known-version invalidation. It is also
+included in `npm test`. Native modal rendering, accessibility, and OAuth browser
+handoff require device evidence. `node tests/sql/run.js legal` exercises the
+shipped legal schema, RPC permissions, own-only receipts, timestamps, reruns and
+version history against PostgreSQL; a skip is not a pass.
+
 The supported synced workflow is online league/roster/game setup followed by live
 scoring that can continue through a connection loss. Tests for offline game-row writes
 exercise recovery primitives; they do not promise offline league, team, player or

@@ -17,6 +17,80 @@ alter table public.profiles add column if not exists email text;
 alter table public.profiles add column if not exists name  text;
 
 -- =============================================================================
+-- LEGAL ACKNOWLEDGEMENT: versioned receipts, checked only at account entry
+-- =============================================================================
+create table if not exists public.legal_versions (
+  version text primary key,
+  terms_url text not null,
+  privacy_url text not null,
+  content_policy_url text not null,
+  is_current boolean not null default false
+);
+create unique index if not exists legal_one_current_version
+  on public.legal_versions (is_current) where is_current;
+alter table public.legal_versions enable row level security;
+revoke all on public.legal_versions from anon, authenticated;
+-- Re-running the schema never rolls back an operator's newer required version.
+insert into public.legal_versions (version, terms_url, privacy_url, content_policy_url, is_current)
+values ('2026-09-04', 'https://itala.abejohanna.workers.dev/terms/',
+  'https://itala.abejohanna.workers.dev/privacy/',
+  'https://itala.abejohanna.workers.dev/content-policy/',
+  not exists (select 1 from public.legal_versions where is_current))
+on conflict (version) do nothing;
+
+create table if not exists public.legal_acceptances (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  version text not null references public.legal_versions(version),
+  accepted_at timestamptz not null default now(),
+  primary key (user_id, version)
+);
+alter table public.legal_acceptances enable row level security;
+revoke all on public.legal_acceptances from anon, authenticated;
+grant select on public.legal_acceptances to authenticated;
+drop policy if exists "read own legal receipts" on public.legal_acceptances;
+create policy "read own legal receipts" on public.legal_acceptances
+  for select to authenticated using (user_id = auth.uid());
+
+create or replace function public.legal_status()
+returns jsonb language plpgsql security definer set search_path = public
+as $$
+declare required_version text; receipt_date timestamptz;
+begin
+  select version into required_version from public.legal_versions where is_current;
+  if required_version is null then raise exception 'Legal version unavailable'; end if;
+  select accepted_at into receipt_date from public.legal_acceptances
+    where user_id = auth.uid() and version = required_version;
+  return jsonb_build_object('version', required_version, 'accepted_at', receipt_date);
+end;
+$$;
+revoke all on function public.legal_status() from public;
+grant execute on function public.legal_status() to anon, authenticated;
+
+create or replace function public.accept_legal(p_version text)
+returns jsonb language plpgsql security definer set search_path = public
+as $$
+declare required_version text; receipt_date timestamptz;
+begin
+  -- Read the auth row, not client-editable user_metadata or a supplied user id.
+  if auth.uid() is null or not exists (
+    select 1 from auth.users where id = auth.uid() and is_anonymous is false
+  ) then raise exception 'A signed-in account is required'; end if;
+  select version into required_version from public.legal_versions where is_current for share;
+  if required_version is null or p_version is distinct from required_version then
+    raise exception 'Review the current legal version first';
+  end if;
+  insert into public.legal_acceptances (user_id, version)
+    values (auth.uid(), required_version) on conflict (user_id, version) do nothing;
+  select accepted_at into receipt_date from public.legal_acceptances
+    where user_id = auth.uid() and version = required_version;
+  return jsonb_build_object('version', required_version, 'accepted_at', receipt_date);
+end;
+$$;
+revoke all on function public.accept_legal(text) from public, anon;
+grant execute on function public.accept_legal(text) to authenticated;
+-- END LEGAL ACKNOWLEDGEMENT
+
+-- =============================================================================
 -- 1b) ADMIN EMAIL ALLOWLIST — Google accounts that are admins automatically
 -- =============================================================================
 -- Adding/removing an admin is one row here (plus the ADMIN_EMAILS list in
