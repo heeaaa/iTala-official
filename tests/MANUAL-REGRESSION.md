@@ -6,6 +6,12 @@ failure there makes most of this moot.
 
 Report failures by id, for example "R14 failed", so the exact case is unambiguous.
 
+The checklist below is a reference catalog of manual verification scenarios only.
+Checkbox state must not be interpreted as test execution history, pass/fail status,
+coverage, or evidence that a scenario has or has not previously been run.
+Use the list solely as a guide for which manual checks should be performed
+when validating functionality.
+
 ---
 
 ## Before you start
@@ -179,11 +185,15 @@ evidence of native presentation):
 
 - [ ] Fresh install: onboarding completes/deferred prompts respect `authBusy`;
       legal review does not compete with another native modal.
-- [ ] Tap Google and Apple separately: no provider browser/sheet opens before
-      checking the agreement and tapping Agree and continue. Cancel/back/Not now
-      at pre-auth returns to guest browsing without creating an account.
-- [ ] iOS: legal modal fully dismisses before Apple's sheet appears. Rapid double
-      taps launch only one flow. Cancel the provider sheet and retry normally.
+- [ ] Tap Google and Apple separately: provider browser/sheet opens first. An account
+      with a current receipt enters without a prompt or another acceptance write.
+      An account without a receipt must agree before account features become available.
+- [ ] Decline review: the app explains agreement is required and signs out into guest
+      browsing without deleting the account. Reopening stays guest; signing in again asks
+      again. Closing with an unanswered prompt and reopening restores that prompt.
+- [ ] iOS: provider sheet closes before legal review appears; legal review dismisses
+      before navigation/sharing. Rapid double taps launch only one flow. Cancel the
+      provider sheet and retry normally.
 - [ ] Terms, Privacy and Content links each open the correct external document;
       returning to the app preserves the current review. Link failure is readable.
 - [ ] VoiceOver/TalkBack announces checkbox label/state and disabled Continue;
@@ -658,15 +668,15 @@ anyone mis-tapping.
 
 ## P9. Store submission prerequisites (NEW, not app behaviour)
 
-- [x] **S1** Privacy policy deployed and loading over HTTPS (see `site/README.md` for the
+- [ ] **S1** Privacy policy deployed and loading over HTTPS (see `site/README.md` for the
       Cloudflare Pages setup).
-- [x] **S2** Every `[OPERATOR]` and `[CONTACT EMAIL]` placeholder replaced, and the orange
+- [ ] **S2** Every `[OPERATOR]` and `[CONTACT EMAIL]` placeholder replaced, and the orange
       "before publishing" notice deleted from `site/privacy/index.html`.
-- [x] **S3** The contact address actually receives mail. It is the only route by which someone who
+- [ ] **S3** The contact address actually receives mail. It is the only route by which someone who
       never installed the app can have their name removed.
-- [x] **S4** Policy content read side by side with the two declaration tables in `docs/DEPLOYMENT.md`
+- [ ] **S4** Policy content read side by side with the two declaration tables in `docs/DEPLOYMENT.md`
       and confirmed to agree.
-- [x] **S5** Sponsor promo taps **are/will be** declared (Apple Usage Data, Google App activity).
+- [ ] **S5** Sponsor promo taps **are/will be** declared (Apple Usage Data, Google App activity).
 
 
 ## P10 - live-score consistency, sign-in, and the drop-in flow

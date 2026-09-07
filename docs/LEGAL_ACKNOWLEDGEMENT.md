@@ -1,18 +1,22 @@
 # Legal acknowledgement
 
-The app asks for one unchecked acknowledgement after a user taps Google or Apple,
-before opening the provider. The user agrees to the Terms of Use and Content Policy
-and acknowledges the Privacy Policy. The three documents have separate links.
-Cancelling does not start OAuth. Settings also keeps the links available after sign-in.
+The app opens Google or Apple first, then checks the authenticated account's receipt.
+Only accounts without acceptance of the current version see an unchecked acknowledgement.
+The user agrees to the Terms of Use and Content Policy and acknowledges the Privacy Policy.
+The three documents have individual inline links; Settings keeps its separate link rows.
+Declining signs out locally, explains that agreement is required for account use,
+and returns to guest browsing. The account record is retained.
 
 All sign-in entry points use `AdminProvider`. Account roles and memberships are
 published only after the server confirms an acceptance receipt. If saving fails,
 the user can retry or return to guest browsing. A restart after interrupted OAuth
 checks the receipt rather than assuming that the persisted auth session means the
 user accepted. Previously signed-in accounts without a receipt are asked once too.
-Because the provider account is not known until OAuth completes, an explicit sign-in
-asks again even if that account already accepted; the server preserves its original
-receipt date. Normal session restoration does not ask again for an accepted version.
+Explicit sign-in and normal session restoration skip the prompt for a current receipt.
+Only session restoration may fall back to a confirmed offline cache; explicit sign-in
+requires a fresh server check. Closing the app with an unanswered prompt leaves the
+session present, so reopening asks again. After declining and signing out, reopening
+stays in guest mode; signing in to the unaccepted account asks again.
 
 ## Storage and scope
 
@@ -37,10 +41,11 @@ Local-only development mode and the existing emergency admin mechanism are uncha
 
 **OAuth boundary:** Supabase creates `auth.users` during OAuth/ID-token exchange,
 before the receipt RPC can run. Anonymous spectators also already have auth identities.
-This feature prevents the shipped app from starting account creation without agreement
-and from completing account entry without a receipt. It is not a universal backend
-signup prohibition for modified/older clients or direct Auth API calls. That stricter
-requirement would need a separate trusted pre-auth flow and Supabase Auth hook.
+Account creation may happen before agreement, including when the user later declines.
+This feature prevents the shipped app from completing account entry without a receipt.
+It is not a universal backend signup prohibition for modified/older clients or direct
+Auth API calls. That stricter requirement would need a separate trusted pre-auth flow
+and Supabase Auth hook.
 
 ## Deployment
 

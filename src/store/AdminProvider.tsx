@@ -277,7 +277,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     legalResolve.current = null;
     legalAction.current = null;
     setLegalPrompt(null);
-    // iOS must dismiss our native modal before presenting Apple's native sheet.
+    // Finish native dismissal before account-entry callers navigate or share.
     if (Platform.OS === 'ios' && resolve) dismissed.current = () => resolve(accepted);
     else resolve?.(accepted);
   };
@@ -305,7 +305,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   };
 
   const requireLegalReceipt = useCallback(async (
-    sb: NonNullable<ReturnType<typeof getSupabase>>, uid: string, preaccepted = false,
+    sb: NonNullable<ReturnType<typeof getSupabase>>, uid: string, restoring = true,
   ): Promise<boolean> => {
     const save = async () => {
       await readLegalStatus(sb); // Refuse an outdated document version, including on retries.
@@ -314,7 +314,6 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     };
     let problem: string | null = null;
     try {
-      if (preaccepted) { await save(); return true; }
       const status = await readLegalStatus(sb);
       if (status.accepted_at) { await cacheLegalReceipt(uid, status); return true; }
     } catch (e) {
@@ -323,10 +322,10 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
       if (e instanceof LegalVersionError) {
         try { await forgetLegalReceipt(uid); }
         catch { warn('[auth] Could not invalidate the outdated legal receipt cache.'); }
-      } else if (!preaccepted && await cachedLegalReceipt(uid)) return true;
+      } else if (restoring && await cachedLegalReceipt(uid)) return true;
       problem = e instanceof Error ? e.message : 'Could not check your acknowledgement. Please try again.';
     }
-    return askLegal(true, save, problem);
+    return askLegal(restoring, save, problem);
   }, [askLegal]);
 
   const returnToGuest = useCallback(async (sb: NonNullable<ReturnType<typeof getSupabase>>) => {
@@ -341,7 +340,10 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     const guest = await ensureSession(sb);
-    if (mounted.current) setUserId(guest?.uid ?? null);
+    if (mounted.current) {
+      setUserId(guest?.uid ?? null);
+      setError('signin', 'You need to agree to the terms to use your account. You have been signed out and can continue browsing as a guest.');
+    }
   }, [setError]);
 
   // Native Apple sign-in exists only on iOS hardware; on Android/web the
@@ -420,7 +422,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     const u = got?.data?.user;
     if (!u || !toAuthUser(u)) { setError('signin', 'Signed in, but the session could not be read. Try again.'); return null; }
 
-    if (!await requireLegalReceipt(sb, u.id, true)) {
+    if (!await requireLegalReceipt(sb, u.id, false)) {
       if (mounted.current) await returnToGuest(sb);
       return null;
     }
@@ -458,7 +460,6 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     authFlow.current = true;
     setAuthBusy(true);
     try {
-      if (!await askLegal(false, async () => { await readLegalStatus(sb); }) || !mounted.current) return null;
       // Deep link back into the app. Expo Go → exp://.../--/auth-callback,
       // dev/prod builds → itala://auth-callback (scheme from app.json).
       const { redirectTo, inExpoGo } = oauthRedirect();
@@ -563,7 +564,6 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     authFlow.current = true;
     setAuthBusy(true);
     try {
-      if (!await askLegal(false, async () => { await readLegalStatus(sb); }) || !mounted.current) return null;
       const credential = await AppleAuthentication.signInAsync({
         requestedScopes: [
           AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
@@ -711,6 +711,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   };
 
   const redeemCode: AdminCtx['redeemCode'] = async (code) => {
+    const connectionMessage = 'An internet connection is needed to redeem a code and create or join a league. Check your connection and try again.';
     setError('code', null);
     const sb = getSupabase();
     if (!SYNC_ENABLED || !sb) return { type: 'error', message: 'Invite codes need the synced (Supabase) setup.' };
@@ -720,7 +721,8 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
       const res = await withTimeout(sb.rpc('redeem_code', { p_code: code }), 8000,
         { data: null, error: { message: 'timeout' } } as any, 'redeem_code');
       if (res?.error) {
-        return { type: 'error', message: res.error.message === 'timeout' ? 'Server did not respond. Try again.' : res.error.message };
+        return { type: 'error', message: res.error.message === 'timeout' || isNetworkFailure(res.error.message)
+          ? connectionMessage : res.error.message };
       }
       const d = res?.data as { type: string; league_id?: string; role?: 'owner' | 'scorekeeper'; league_name?: string };
       if (d?.type === 'create') return { type: 'create' };
@@ -729,6 +731,10 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         return { type: 'joined', leagueId: d.league_id, role: d.role, leagueName: d.league_name ?? 'the league' };
       }
       return { type: 'error', message: 'Invalid code.' };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return { type: 'error', message: isNetworkFailure(message)
+        ? connectionMessage : 'Could not redeem your code. Please try again.' };
     } finally {
       setAuthBusy(false);
     }
