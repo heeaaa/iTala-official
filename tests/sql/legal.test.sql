@@ -6,9 +6,12 @@
 
 grant usage on schema public, auth to anon, authenticated;
 grant select on public.auth_state to anon, authenticated;
+create table public.legal_test_results (label text not null, ok boolean not null);
+grant insert on public.legal_test_results to anon, authenticated;
 create function public.legal_test_assert(condition boolean, label text)
 returns void language plpgsql as $$ begin
   if condition is distinct from true then raise exception 'FAIL: %', label; end if;
+  insert into public.legal_test_results values (label, true);
 end $$;
 
 select legal_test_assert(not has_table_privilege('authenticated', 'legal_acceptances', 'INSERT'), 'clients cannot forge receipts');
@@ -95,4 +98,8 @@ reset role;
 select legal_test_assert((select count(*) = 3 from legal_acceptances), 'receipts are distinct across accounts and releases');
 delete from auth.users where id = '22222222-2222-2222-2222-222222222222';
 select legal_test_assert((select count(*) = 1 from legal_acceptances), 'account deletion cascades only its own receipts');
-select 'PASS legal: grants, anonymous rejection, own-only RLS, server timestamps, idempotency, version history, account deletion';
+select case when ok then '  PASS  ' else '  FAIL  ' end || label
+  from public.legal_test_results order by label;
+select '  ' || count(*) filter (where ok) || ' passed, '
+       || count(*) filter (where not coalesce(ok, false)) || ' failed   [legal]'
+  from public.legal_test_results;
