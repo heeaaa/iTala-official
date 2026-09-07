@@ -179,11 +179,15 @@ evidence of native presentation):
 
 - [ ] Fresh install: onboarding completes/deferred prompts respect `authBusy`;
       legal review does not compete with another native modal.
-- [ ] Tap Google and Apple separately: no provider browser/sheet opens before
-      checking the agreement and tapping Agree and continue. Cancel/back/Not now
-      at pre-auth returns to guest browsing without creating an account.
-- [ ] iOS: legal modal fully dismisses before Apple's sheet appears. Rapid double
-      taps launch only one flow. Cancel the provider sheet and retry normally.
+- [ ] Tap Google and Apple separately: provider browser/sheet opens first. An account
+      with a current receipt enters without a prompt or another acceptance write.
+      An account without a receipt must agree before account features become available.
+- [ ] Decline review: the app explains agreement is required and signs out into guest
+      browsing without deleting the account. Reopening stays guest; signing in again asks
+      again. Closing with an unanswered prompt and reopening restores that prompt.
+- [ ] iOS: provider sheet closes before legal review appears; legal review dismisses
+      before navigation/sharing. Rapid double taps launch only one flow. Cancel the
+      provider sheet and retry normally.
 - [ ] Terms, Privacy and Content links each open the correct external document;
       returning to the app preserves the current review. Link failure is readable.
 - [ ] VoiceOver/TalkBack announces checkbox label/state and disabled Continue;

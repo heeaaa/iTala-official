@@ -57,10 +57,15 @@ function setup(options = {}) {
   };
   const provider = load('src/store/AdminProvider.tsx', {
     react: HookRuntime, 'react-native': RN,
-    'expo-web-browser': { maybeCompleteAuthSession() {}, openAuthSessionAsync: async () => ({ type: 'success', url: 'itala://auth-callback?code=code' }) },
+    'expo-web-browser': { maybeCompleteAuthSession() {}, openAuthSessionAsync: async () => options.cancelProvider
+      ? { type: 'cancel' } : { type: 'success', url: 'itala://auth-callback?code=code' } },
     'expo-linking': { createURL: () => 'itala://auth-callback', parse: () => ({ queryParams: { code: 'code' } }) },
     'expo-apple-authentication': { isAvailableAsync: async () => true, AppleAuthenticationScope: { FULL_NAME: 'full-name', EMAIL: 'email' },
-      signInAsync: async args => { calls.push(['apple', args]); return { identityToken: 'test-token' }; } },
+      signInAsync: async args => {
+        calls.push(['apple', args]);
+        if (options.cancelProvider) throw Object.assign(new Error('cancelled'), { code: 'ERR_REQUEST_CANCELED' });
+        return { identityToken: 'test-token' };
+      } },
     '../sync/supabase': { SYNC_ENABLED: true, getSupabase: () => sb },
     './guestSession': load('src/store/guestSession.ts', {}), '../lib/log': { devLog() {}, warn() {} },
     '../components/LegalAcknowledgement': component, '../lib/legal': legal,
@@ -97,21 +102,51 @@ test('unchecked dialog blocks continuation, check enables it, busy and new promp
   const links = HookRuntime.render(p.component.LegalLinks, {});
   for (const n of nodes(links.element).filter(n => n.props?.accessibilityRole === 'link')) n.props.onPress();
   assert.deepEqual(p.calls.filter(c => c[0] === 'link').map(c => c[1]), Array.from(p.legal.LEGAL_LINKS, l => l.url));
-  root.unmount(); links.unmount(); p.root.unmount();
+  const inline = HookRuntime.render(p.component.LegalLinks, { inline: true });
+  const inlineNodes = nodes(inline.element);
+  assert.equal(inlineNodes.flatMap(n => [n.props?.children].flat(Infinity)
+    .filter(child => typeof child === 'string')).join(''), p.legal.LEGAL_STATEMENT,
+  'inline presentation preserves the exact agreement wording');
+  const inlineLinks = inlineNodes.filter(n => n.props?.accessibilityRole === 'link');
+  assert.equal(inlineLinks.length, 3);
+  for (const n of inlineLinks) n.props.onPress();
+  assert.deepEqual(p.calls.filter(c => c[0] === 'link').slice(-3).map(c => c[1]),
+    [p.legal.LEGAL_LINKS[0].url, p.legal.LEGAL_LINKS[2].url, p.legal.LEGAL_LINKS[1].url]);
+  assert.equal(checkbox().props.accessibilityState.checked, false);
+  root.unmount(); links.unmount(); inline.unmount(); p.root.unmount();
 });
 for (const provider of ['Google', 'Apple']) {
-  test(`${provider}: cancel legal review never starts OAuth; duplicate calls are ignored`, async () => {
+  test(`${provider}: cancelling the provider never opens review or records acceptance`, async () => {
+    const p = setup({ cancelProvider: true }); await p.settle();
+    assert.equal(await p.ctx[`signInWith${provider}`](), null); await p.settle();
+    assert.equal(p.dialog.prompt, null); assert.equal(p.ctx.role, 'guest');
+    assert.equal(p.ctx.authBusy, false); assert.equal(p.count('legal_status'), 0);
+    assert.equal(p.count('accept_legal'), 0); p.root.unmount();
+  });
+  test(`${provider}: authenticate before review; declining signs out and duplicate calls are ignored`, async () => {
     const p = setup(); await p.settle(); const result = p.ctx[`signInWith${provider}`](); await p.settle();
-    assert.equal(p.count(provider.toLowerCase()), 0); assert.equal(p.dialog.prompt.returning, false);
+    assert.equal(p.count(provider.toLowerCase()), 1); assert.equal(p.dialog.prompt.returning, false);
+    assert.equal(p.count('accept_legal'), 0);
     assert.equal(await p.ctx.signInWithGoogle(), null); assert.equal(await p.ctx.signInWithApple(), null);
     p.dialog.onCancel(); await p.settle(); assert.equal(await result, null);
-    assert.equal(p.count(provider.toLowerCase()), 0); assert.equal(p.ctx.role, 'guest'); p.root.unmount();
+    assert.equal(p.count('signOut'), 1); assert.equal(p.ctx.role, 'guest');
+    assert.match(p.ctx.errorFor('signin'), /need to agree/);
+    const retry = p.ctx[`signInWith${provider}`](); await p.settle();
+    assert.ok(p.dialog.prompt, 'declining does not create a receipt; next sign-in asks again');
+    p.dialog.onCancel(); await p.settle(); await retry; p.root.unmount();
+  });
+  test(`${provider}: previously accepted account signs in without a prompt or duplicate write`, async () => {
+    const p = setup(); await p.settle(); p.state.status = p.receipt;
+    assert.equal(await p.ctx[`signInWith${provider}`](), 'user'); await p.settle();
+    assert.equal(p.dialog.prompt, null); assert.equal(p.count('accept_legal'), 0);
+    assert.equal(p.count(provider.toLowerCase()), 1); p.root.unmount();
   });
   test(`${provider}: role and memberships wait for confirmed receipt; retry is single-flight`, async () => {
     const p = setup({ ios: true }); await p.settle(); const result = p.ctx[`signInWith${provider}`](); await p.settle();
     p.state.save = { error: { message: 'network request failed' } };
-    await p.submit(); assert.equal(p.count(provider.toLowerCase()), 0, 'native sheet must await modal dismissal');
-    await p.dismiss(); assert.equal(p.count(provider.toLowerCase()), 1);
+    assert.equal(p.count(provider.toLowerCase()), 1);
+    assert.equal(p.count('accept_legal'), 0, 'authentication alone must not record agreement');
+    await p.submit();
     if (provider === 'Apple') assert.equal(JSON.stringify(p.calls.find(c => c[0] === 'apple')[1].requestedScopes), JSON.stringify(['full-name', 'email']));
     assert.equal(p.ctx.role, 'guest'); assert.equal(p.count('sync_admin_role'), 0); assert.equal(p.count('my_memberships'), 0);
     assert.match(p.dialog.prompt.error, /save/);
@@ -144,7 +179,7 @@ test('offline without receipt and another account cache both remain guest', asyn
   p.disk.set('itala.legal.receipt.v1.someone-else', JSON.stringify(p.receipt)); await p.settle();
   assert.equal(p.ctx.role, 'guest'); assert.ok(p.dialog.prompt.error); p.root.unmount();
 });
-test('known newer server version overrides valid cache and blocks OAuth/save', async () => {
+test('known newer server version overrides valid cache and blocks account access/save', async () => {
   const p = setup({ restored: true, cache: true, status: { version: 'new-version', accepted_at: null } }); await p.settle();
   assert.equal(p.ctx.role, 'guest'); assert.match(p.dialog.prompt.error, /update/);
   await p.submit(); assert.equal(p.count('accept_legal'), 0); assert.equal(p.ctx.role, 'guest'); p.root.unmount();
@@ -156,20 +191,22 @@ test('observing a newer release invalidates the receipt across an offline restar
   assert.equal(next.ctx.role, 'guest', 'known obsolete receipt must not reopen account on offline restart');
   assert.ok(next.dialog.prompt); next.root.unmount();
 });
-test('unmounting an open pre-auth prompt never launches a provider', async () => {
+test('unmounting an open post-auth prompt never grants account access', async () => {
   const p = setup({ ios: true }); await p.settle(); const result = p.ctx.signInWithApple(); await p.settle();
-  p.root.unmount(); assert.equal(await result, null); assert.equal(p.count('apple'), 0);
+  p.root.unmount(); assert.equal(await result, null); assert.equal(p.count('apple'), 1);
+  assert.equal(p.count('accept_legal'), 0); assert.equal(p.count('sync_admin_role'), 0);
 });
-test('unmount while iOS legal modal is dismissing never launches OAuth', async () => {
+test('unmount while iOS legal modal is dismissing never publishes the account', async () => {
   const p = setup({ ios: true }); await p.settle(); const result = p.ctx.signInWithApple(); await p.settle();
-  await p.submit(); assert.equal(p.count('apple'), 0);
+  await p.submit(); assert.equal(p.count('apple'), 1); assert.equal(p.ctx.role, 'guest');
   p.root.unmount(); await p.settle(); assert.equal(await result, null);
-  assert.equal(p.count('apple'), 0, 'provider unmount must cancel an accepted but not yet dismissed review');
+  assert.equal(p.count('sync_admin_role'), 0, 'provider unmount must cancel an accepted but not yet dismissed review');
 });
-test('pre-auth status rejection holds review open before either OAuth provider', async () => {
-  const p = setup({ status: { error: { message: 'offline' } } }); await p.settle();
+test('post-auth status rejection holds account access even with a cached receipt', async () => {
+  const p = setup({ cache: true, status: { error: { message: 'offline' } } }); await p.settle();
   const result = p.ctx.signInWithGoogle(); await p.settle(); await p.submit();
-  assert.equal(p.count('google'), 0); assert.match(p.dialog.prompt.error, /load/);
+  assert.equal(p.count('google'), 1); assert.match(p.dialog.prompt.error, /load/);
+  assert.equal(p.ctx.role, 'guest'); assert.equal(p.count('accept_legal'), 0);
   p.dialog.onCancel(); await p.settle(); assert.equal(await result, null); p.root.unmount();
 });
 test('stale, malformed and unconfirmed local receipts are never accepted', async () => {

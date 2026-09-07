@@ -10,7 +10,7 @@ export interface LegalPrompt {
   error: string | null;
 }
 
-export function LegalLinks() {
+export function LegalLinks({ inline = false }: { inline?: boolean } = {}) {
   const [error, setError] = useState<string | null>(null);
   const open = async (url: string) => {
     setError(null);
@@ -18,7 +18,15 @@ export function LegalLinks() {
     catch { setError('Could not open the document. Please check your connection and try again.'); }
   };
   return <View>
-    {LEGAL_LINKS.map(link => <TouchableOpacity key={link.url} accessibilityRole="link"
+    {inline ? <Text style={styles.agreement}>
+      {LEGAL_STATEMENT.split(/(Terms of Use|Privacy Policy|Content Policy)/).map((part, index) => {
+        const link = LEGAL_LINKS.find(item => item.label === part);
+        return link ? <Text key={link.url} accessibilityRole="link"
+          accessibilityLabel={link.label} accessibilityHint="Opens in your browser"
+          onPress={() => { void open(link.url); }} style={styles.inlineLink}>{part}</Text>
+          : <Text key={index}>{part}</Text>;
+      })}
+    </Text> : LEGAL_LINKS.map(link => <TouchableOpacity key={link.url} accessibilityRole="link"
       accessibilityLabel={link.label} accessibilityHint="Opens in your browser"
       onPress={() => { void open(link.url); }} style={styles.link}>
       <Text style={styles.linkText}>{link.label}</Text>
@@ -39,19 +47,18 @@ export function LegalAcknowledgement({ prompt, onContinue, onCancel, onDismiss }
       <View style={styles.card} accessibilityViewIsModal>
         <ScrollView contentContainerStyle={styles.content}>
           <Text accessibilityRole="header" style={styles.heading}>{prompt?.returning ? 'Review our legal documents' : 'Before you continue'}</Text>
-          <Text style={styles.body}>{prompt?.returning
-            ? 'Please acknowledge the current documents to continue with your account.'
-            : 'Review these documents before signing in or creating an iTala account.'}</Text>
-          <LegalLinks />
-          <TouchableOpacity accessibilityRole="checkbox" accessibilityLabel={LEGAL_STATEMENT}
+          <View style={styles.checkboxRow}>
+            <TouchableOpacity accessibilityRole="checkbox" accessibilityLabel={LEGAL_STATEMENT}
             accessibilityState={{ checked, disabled: prompt?.busy }} disabled={prompt?.busy}
-            onPress={() => setChecked(value => !value)} style={styles.checkboxRow}>
-            <View style={[styles.checkbox, checked && styles.checked]}>
-              <Text style={styles.checkmark}>{checked ? '✓' : ''}</Text>
+            onPress={() => setChecked(value => !value)} style={styles.checkboxTarget}>
+              <View style={[styles.checkbox, checked && styles.checked]}>
+                <Text style={styles.checkmark}>{checked ? '✓' : ''}</Text>
+              </View>
+            </TouchableOpacity>
+            <View style={styles.agreementContainer}>
+              <LegalLinks inline />
             </View>
-            <Text style={[styles.body, { flex: 1 }]}>{LEGAL_STATEMENT}</Text>
-          </TouchableOpacity>
-          <Text style={styles.detail}>Document version: {prompt?.version}. Guest browsing does not require an account.</Text>
+          </View>
           {prompt?.error ? <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={styles.error}>{prompt.error}</Text> : null}
           <TouchableOpacity accessibilityRole="button" accessibilityState={{ disabled: !checked || prompt?.busy, busy: prompt?.busy }}
             disabled={!checked || prompt?.busy} onPress={() => { if (checked && !prompt?.busy) onContinue(); }}
@@ -60,8 +67,9 @@ export function LegalAcknowledgement({ prompt, onContinue, onCancel, onDismiss }
           </TouchableOpacity>
           <TouchableOpacity accessibilityRole="button" disabled={prompt?.busy} onPress={onCancel}
             accessibilityState={{ disabled: prompt?.busy }} style={styles.button}>
-            <Text style={styles.body}>{prompt?.returning ? 'Continue as guest' : 'Not now'}</Text>
+            <Text style={styles.body}>Sign out and browse as guest</Text>
           </TouchableOpacity>
+          <Text style={styles.detail}>Version {prompt?.version}</Text>
         </ScrollView>
       </View>
     </View>
@@ -70,14 +78,18 @@ export function LegalAcknowledgement({ prompt, onContinue, onCancel, onDismiss }
 
 const styles = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: '#000C', justifyContent: 'center', alignItems: 'center', padding: space(5) },
-  card: { width: '100%', maxWidth: 440, maxHeight: '90%', backgroundColor: colors.surface, borderRadius: radius.lg },
-  content: { padding: space(5) },
-  heading: { fontFamily: font.bodyBold, fontSize: 22, color: colors.text, marginBottom: 12 },
+  card: { width: '100%', maxWidth: 400, maxHeight: '90%', backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line },
+  content: { padding: space(6) },
+  heading: { fontFamily: font.bodyBold, fontSize: 23, color: colors.text, marginBottom: 20 },
   body: { fontFamily: font.body, fontSize: 15, color: colors.text, lineHeight: 22 },
-  detail: { fontFamily: font.body, fontSize: 12, color: colors.muted, marginVertical: 10 },
+  detail: { fontFamily: font.body, fontSize: 12, color: colors.muted, textAlign: 'center', marginTop: 12 },
   link: { minHeight: 48, justifyContent: 'center' },
   linkText: { fontFamily: font.bodyMed, fontSize: 15, color: colors.brandTeal, textDecorationLine: 'underline' },
-  checkboxRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 48, paddingVertical: 12 },
+  checkboxRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginBottom: 14 },
+  checkboxTarget: { width: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center', marginLeft: -9, marginTop: -9 },
+  agreementContainer: { flex: 1 },
+  agreement: { fontFamily: font.body, fontSize: 16, color: colors.text, lineHeight: 26 },
+  inlineLink: { color: colors.brandTeal, textDecorationLine: 'underline' },
   checkbox: { width: 26, height: 26, borderWidth: 2, borderColor: colors.muted, borderRadius: 5, alignItems: 'center', justifyContent: 'center' },
   checked: { backgroundColor: colors.brandTeal, borderColor: colors.brandTeal },
   checkmark: { color: colors.bg, fontSize: 18, fontWeight: 'bold' },
