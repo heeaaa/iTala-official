@@ -711,6 +711,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   };
 
   const redeemCode: AdminCtx['redeemCode'] = async (code) => {
+    const connectionMessage = 'An internet connection is needed to redeem a code and create or join a league. Check your connection and try again.';
     setError('code', null);
     const sb = getSupabase();
     if (!SYNC_ENABLED || !sb) return { type: 'error', message: 'Invite codes need the synced (Supabase) setup.' };
@@ -720,7 +721,8 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
       const res = await withTimeout(sb.rpc('redeem_code', { p_code: code }), 8000,
         { data: null, error: { message: 'timeout' } } as any, 'redeem_code');
       if (res?.error) {
-        return { type: 'error', message: res.error.message === 'timeout' ? 'Server did not respond. Try again.' : res.error.message };
+        return { type: 'error', message: res.error.message === 'timeout' || isNetworkFailure(res.error.message)
+          ? connectionMessage : res.error.message };
       }
       const d = res?.data as { type: string; league_id?: string; role?: 'owner' | 'scorekeeper'; league_name?: string };
       if (d?.type === 'create') return { type: 'create' };
@@ -729,6 +731,10 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
         return { type: 'joined', leagueId: d.league_id, role: d.role, leagueName: d.league_name ?? 'the league' };
       }
       return { type: 'error', message: 'Invalid code.' };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return { type: 'error', message: isNetworkFailure(message)
+        ? connectionMessage : 'Could not redeem your code. Please try again.' };
     } finally {
       setAuthBusy(false);
     }
