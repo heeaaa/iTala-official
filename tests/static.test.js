@@ -1965,6 +1965,19 @@ for (const f of srcFiles) {
          !/(?<!withTimeout\(\s{0,8})await\s+\w+\.functions\.invoke\(/.test(body),
          'an Edge Function call can hang exactly like any other Supabase call');
     }
+    // The module states a rule at MANUAL_DELETION_CONTACT: a message for a
+    // failure the person cannot fix must name the manual route, because "please
+    // try again" on a permanent failure is a dead end. The fallback wording was
+    // the one path that broke it, and it was reachable - an undeployed function
+    // answers 404, which carries none of our slugs. Deployment is manual, so
+    // this is the most likely failure of all before launch.
+    ok('the unclassified-failure wording offers a route out',
+       /const FALLBACK_WORDING = [\s\S]{0,200}?MANUAL_DELETION_CONTACT/.test(client),
+       'an unclassified refusal is by definition one nobody can diagnose from the screen');
+    ok('an undeployed function is classified rather than left to the fallback',
+       /not_deployed/.test(client) && /status === 404/.test(client),
+       'the functions gateway answers 404 with its own body shape, carrying none of our slugs');
+
     ok('a cancelled Apple confirmation is not reported as a failure',
        /outcome\.status === 'cancelled'/.test(provider),
        'closing the sheet changed nothing and must not accuse anybody of anything');

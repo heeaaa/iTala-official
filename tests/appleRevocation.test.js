@@ -868,6 +868,60 @@ test('each server slug becomes its own message, read out of the FunctionsHttpErr
   assert.deepEqual(notApple, { status: 'not-apple' });
 });
 
+// ---------------------------------------------------------------------------
+// Answers from the FUNCTIONS GATEWAY, not from our handler. Their body is a
+// different shape ({ code, message }), so none of our slugs are in it. The
+// important member is 404 - the function was never deployed - which is
+// permanent and, before this was mapped, told the person to try again forever
+// after they had already confirmed with Apple.
+// ---------------------------------------------------------------------------
+test('an undeployed function is named as such, and offers a way out', async () => {
+  const gateway = (status, body) => ({
+    name: 'FunctionsHttpError',
+    message: 'Edge Function returned a non-2xx status code',
+    context: { status, json: async () => body },
+  });
+  const outcome = await clientDefault.deleteAppleAccount({
+    requestAuthorizationCode: clientDefault.requestAppleAuthorizationCode,
+    // Verbatim what Supabase answers for a function that is not deployed.
+    invoke: async () => ({ data: null, error: gateway(404, { code: 404, message: 'Requested function was not found' }) }),
+  });
+  assert.equal(outcome.status, 'failed');
+  assert.match(outcome.message, /@/, 'a permanent failure must name the manual route');
+  assert.ok(!/please try again\.?$/i.test(outcome.message),
+    `retrying cannot fix an undeployed function: ${outcome.message}`);
+  assert.match(outcome.diagnosis, /not_deployed/, 'the log has to name the cause');
+
+  for (const [status, expected] of [[401, /session has expired/i], [403, /session has expired/i],
+    [500, /@/], [503, /@/]]) {
+    const answer = await clientDefault.deleteAppleAccount({
+      requestAuthorizationCode: clientDefault.requestAppleAuthorizationCode,
+      invoke: async () => ({ data: null, error: gateway(status, { code: status, message: 'gateway' }) }),
+    });
+    assert.equal(answer.status, 'failed', `status ${status}`);
+    assert.match(answer.message, expected, `status ${status}: ${answer.message}`);
+  }
+});
+
+test('no refusal this module cannot classify leaves the person without a route', async () => {
+  // The catch-all. Whatever arrives, if it is a refusal rather than an
+  // unanswered request, the wording must not be a dead end.
+  const shapes = [
+    { message: 'something nobody mapped' },
+    { message: 'non-2xx', context: { status: 418, json: async () => ({ code: 418 }) } },
+    { message: 'non-2xx', context: { status: 400, json: async () => { throw new Error('unreadable'); } } },
+    {},
+  ];
+  for (const error of shapes) {
+    const outcome = await clientDefault.deleteAppleAccount({
+      requestAuthorizationCode: clientDefault.requestAppleAuthorizationCode,
+      invoke: async () => ({ data: null, error }),
+    });
+    assert.equal(outcome.status, 'failed', JSON.stringify(error));
+    assert.match(outcome.message, /@/, `no contact route for ${JSON.stringify(error)}: ${outcome.message}`);
+  }
+});
+
 test('a timeout or transport failure reads as a connection problem, not a refusal', async () => {
   for (const error of [
     { message: 'timeout' },

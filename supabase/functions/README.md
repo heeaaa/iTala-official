@@ -144,11 +144,35 @@ the same one-line `\n` form of the key there.
 
 ## Deploy
 
+**Run it from the repository root.** The positional argument is the function
+NAME, not a path: the CLI resolves `delete-account` to
+`supabase/functions/delete-account/` relative to the project directory. Passing
+a path instead fails with `Invalid Function name. Must start with at least one
+letter...`, because a path is not a legal name - and if the path is unquoted,
+the space in this checkout's directory name splits it into two arguments first.
+
 ```bash
+cd "/c/Users/aeron.santos/Downloads/HEAS files/iTala"
+
 npx supabase@latest login          # once; opens a browser
 npx supabase@latest functions deploy delete-account \
   --project-ref dsoogiyfgsagbetlumnc --use-api
+
+npx supabase@latest functions list --project-ref dsoogiyfgsagbetlumnc
 ```
+
+From anywhere else, point the CLI at the project with the global `--workdir`
+flag instead of `cd`:
+
+```bash
+npx supabase@latest functions deploy delete-account \
+  --project-ref dsoogiyfgsagbetlumnc --use-api \
+  --workdir "/c/Users/aeron.santos/Downloads/HEAS files/iTala"
+```
+
+Deploying succeeds whether or not the secrets are set - the function reads them
+per request - so until all four exist it answers `500 configuration` and deletes
+nothing. Both steps have to be done; the order does not matter.
 
 `--use-api` bundles server-side, so Docker is not needed - relevant on Windows.
 The CLI follows the relative import into `_shared/`, and a directory whose name

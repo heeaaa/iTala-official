@@ -247,10 +247,17 @@ evidence of native presentation):
       (the handed-down-phone / restored-backup case; the iTala session survives
       in app storage, so this is not exotic). Try to delete.
       *Expect:* a refusal saying the account was created with a different Apple
-      ID, offering an email route. **The account must still exist, and Apple ID
-      B must not gain or lose any iTala authorisation** - check B's *Sign in
-      with Apple* list before and after. Signing the device back in as A and
-      retrying must then succeed.
+      ID, offering an email route, and **the account must still exist**.
+      Signing the device back in as A and retrying must then succeed.
+      *Also expect, and do not report as a failure:* **B may now appear in its
+      own Sign in with Apple list.** Getting a code requires the Apple sheet,
+      the sheet authorises whichever Apple ID is on the device, and Apple mints
+      a grant for B the moment B confirms. iTala then refuses on the subject
+      mismatch **without revoking**, on purpose - that grant may belong to B's
+      own iTala account, and revoking it would cut off somebody who asked for
+      nothing. What must NOT happen is A's authorisation being revoked, or the
+      account being deleted. B can remove the grant from its own Apple ID
+      settings.
 - [ ] **R62** **Device signed out of iCloud.** With no Apple ID on the device,
       try to delete an Apple-linked account. *Expect:* a message that names
       iCloud and gives an email address, not a bare "please try again". Nothing

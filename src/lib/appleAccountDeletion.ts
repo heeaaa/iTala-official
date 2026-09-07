@@ -189,6 +189,11 @@ const FAILURE_WORDING: Record<string, string> = {
   configuration:
     "Account deletion isn't available right now. Please try again later, or email "
     + `${MANUAL_DELETION_CONTACT} to have your account deleted.`,
+  // The Edge Function is not deployed. Nothing the person does will change
+  // that, so this must not say "try again" without also giving them a route.
+  not_deployed:
+    "Account deletion isn't available in this version of the app. Please email "
+    + `${MANUAL_DELETION_CONTACT} and we will delete your account for you.`,
   invalid_session:
     'Your session has expired. Sign in again, then delete your account.',
   anonymous_session:
@@ -199,7 +204,16 @@ const FAILURE_WORDING: Record<string, string> = {
     "Account deletion isn't available right now. Please try again later.",
 };
 
-const FALLBACK_WORDING = 'Your account could not be deleted. Nothing was changed - please try again.';
+/**
+ * For a refusal this module could not classify at all.
+ *
+ * It names the contact route deliberately. An unclassified failure is by
+ * definition one nobody can diagnose from the screen, so "please try again" on
+ * its own risks being a dead end - which is the rule stated at
+ * MANUAL_DELETION_CONTACT, and this was the one path that broke it.
+ */
+const FALLBACK_WORDING = 'Your account could not be deleted and nothing was changed. Please try '
+  + `again, or email ${MANUAL_DELETION_CONTACT} if it keeps happening.`;
 
 /** Read the `{ error, detail }` body out of whatever supabase-js reported. */
 async function readFailure(error: unknown): Promise<{ slug: string; detail: string }> {
@@ -209,7 +223,7 @@ async function readFailure(error: unknown): Promise<{ slug: string; detail: stri
   // reading that body. Without this the person would get the generic
   // "Edge Function returned a non-2xx status code" for every distinct cause.
   const context = (error as { context?: unknown })?.context as
-    | { json?: () => Promise<unknown> }
+    | { json?: () => Promise<unknown>; status?: unknown }
     | undefined;
   if (context && typeof context.json === 'function') {
     try {
@@ -218,10 +232,23 @@ async function readFailure(error: unknown): Promise<{ slug: string; detail: stri
       const detail = typeof body?.detail === 'string' ? body.detail : '';
       if (slug) return { slug, detail };
     } catch {
-      // An unreadable body is not worth failing over. Fall through: the outcome
-      // is still a refusal, it just gets the generic wording, and the raw
-      // message is kept in the diagnosis for the log.
+      // An unreadable body is not worth failing over - the status below still
+      // classifies it, and the raw message is kept for the log.
     }
+    // No slug of ours, so this answer came from the FUNCTIONS GATEWAY rather
+    // than from our handler, and its body is a different shape entirely
+    // ({ code, message }). Classifying by status matters because the most
+    // likely member of this group by far is "the function was never deployed",
+    // which answers 404 - and that is permanent. Left unmapped it fell through
+    // to FALLBACK_WORDING, which told the person to try again forever after
+    // making them confirm with Apple. Deployment is a manual step (see
+    // supabase/functions/README.md), so this is a live path, not a theoretical
+    // one.
+    const status = typeof context.status === 'number' ? context.status : 0;
+    if (status === 404) return { slug: 'not_deployed', detail: 'http 404 from the functions gateway' };
+    if (status === 401 || status === 403) return { slug: 'invalid_session', detail: `http ${status} from the functions gateway` };
+    if (status >= 500) return { slug: 'configuration', detail: `http ${status} from the functions gateway` };
+    if (status) return { slug: '', detail: `http ${status} from the functions gateway` };
   }
   // `isNetworkFailure` knows the transport's own spellings, but supabase-js
   // wraps a failed fetch to an Edge Function in its OWN sentence - "Failed to
