@@ -1097,6 +1097,8 @@ function providerHarness(options = {}) {
     'expo-apple-authentication': { isAvailableAsync: async () => true, AppleAuthenticationScope: {}, signInAsync: async () => ({}) },
     '../sync/supabase': { SYNC_ENABLED: true, getSupabase: () => sb },
     './guestSession': load('src/store/guestSession.ts', {}),
+    './rosterDraft': { clearAccountRosterDrafts: async actor => { calls.push(['clearRosterDrafts', actor]); } },
+    '../sync/recSetup': { clearRecSetup: async actor => { calls.push(['clearRecSetup', actor]); } },
     '../lib/appleAccountDeletion': appleClient,
     '../lib/log': { devLog() {}, warn() {} },
     '../components/LegalAcknowledgement': component, '../lib/legal': legal,
@@ -1124,6 +1126,8 @@ test('an Apple account is deleted through the revoking function, never the bare 
   assert.equal(p.ctx.user, null);
   assert.equal(p.ctx.userId, 'guest', 'the device returns to guest browsing');
   assert.equal(p.disk.size, 0, 'the deleted account keeps no legal receipt cache');
+  assert.equal(p.count('clearRosterDrafts'), 1, 'successful deletion removes local import drafts');
+  assert.equal(p.count('clearRecSetup'), 1, 'successful deletion removes local drop-in setup');
   p.root.unmount();
 });
 
@@ -1140,6 +1144,8 @@ test('a refused revocation leaves the account alone and says so', async () => {
   assert.equal(p.count('delete_own_account'), 0, 'no revocation, no deletion');
   assert.match(p.ctx.errorFor('account'), /nothing was deleted/i);
   assert.equal(p.ctx.role, 'user', 'the account is still usable');
+  assert.equal(p.count('clearRosterDrafts'), 0, 'refused deletion preserves import drafts');
+  assert.equal(p.count('clearRecSetup'), 0, 'refused deletion preserves drop-in setup');
   assert.equal(p.ctx.authBusy, false);
   p.root.unmount();
 });

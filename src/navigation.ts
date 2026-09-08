@@ -7,13 +7,13 @@ export type RootStackParams = {
   RecGame: undefined;
   LeagueDetail: { leagueId: string };
   GamesOnDate: { leagueId: string; dayKey: string; teamId?: string };
-  ManageRoster: { leagueId: string };
+  ManageRoster: { leagueId: string; awaitOwner?: boolean };
   EditTeam: { leagueId: string; teamId: string };
   TeamProfile: { leagueId: string; teamId: string };
   NewGame: { leagueId: string };
   // `pending` carries a game that has NOT been created yet: the lineup screen
   // creates it when Tip off is pressed. Absent for the drop-in flow, where
-  // REC_SETUP_GAME has already made the row in one transaction with its teams.
+  // setup has already saved and loaded the game together with its teams.
   SelectLineup: { leagueId: string; gameId: string; pending?: { homeTeamId: string; awayTeamId: string; location?: string } };
   LiveGame: { leagueId: string; gameId: string; spectator?: boolean };
   BoxScore: { leagueId: string; gameId: string };

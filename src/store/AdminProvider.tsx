@@ -5,6 +5,8 @@ import * as Linking from 'expo-linking';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
 import { ensureGuestSession } from './guestSession';
+import { clearAccountRosterDrafts } from './rosterDraft';
+import { clearRecSetup } from '../sync/recSetup';
 import {
   DELETE_ACCOUNT_FUNCTION, DELETE_ACCOUNT_TIMEOUT_MS, deleteAppleAccount,
   hasAppleIdentity, requestAppleAuthorizationCode,
@@ -651,6 +653,10 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     if (userId) {
       try { await forgetLegalReceipt(userId); }
       catch { warn('[auth] Could not remove the deleted account legal receipt cache.'); }
+      try { await clearAccountRosterDrafts(userId); }
+      catch { warn('[auth] Could not remove the deleted account roster drafts.'); }
+      try { await clearRecSetup(userId); }
+      catch { warn('[auth] Could not remove the deleted account drop-in setup.'); }
     }
     // scope 'local' avoids a doomed round-trip to the logout endpoint for a
     // user that no longer exists.

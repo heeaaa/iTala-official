@@ -851,9 +851,88 @@ async function preflight() {
   wipeDisk();
 }
 
+// The importer now saves a draft and awaits the server instead of dispatching
+// optimistic roster rows. The actual provider then reads the confirmed rows.
+async function p12_bulk_transport_failure_recovers() {
+  wipeDisk();
+  const server = new FakeServer();
+  server.memberships = ['lg1'];
+  const A = new Phone(server);
+  await A.settle();
+  A.ctx.dispatch({ t: 'ADD_LEAGUE', id: 'lg1', name: 'Sunday Run', season: 'Spring 2026' });
+  await A.settle();
+  const draft = { version: 1, actorId: 'u1', leagueId: 'lg1', text: 'Alpha\nAlex 07', teams: null, operation: {
+    id: 'import-1', teams: [
+      { id: 'bulk-team', name: 'Alpha', color: '#12D7D0', players: [{ id: 'bulk-player', name: 'Alex', number: '07' }] },
+    ],
+  } };
+  server.failures['rpc:bulk_import_roster_once'] = 'network-resolved';
+  const failed = await M.submitRosterImport(globalThis.__ITALA_CLIENT, draft);
+  eq('P12.1 no false saved outcome', failed.saved, false);
+  await A.settle();
+  eq('P12.2 unconfirmed rows never enter the league', A.league().teams.length, 0);
+  eq('P12.3 the full draft survives', await M.loadRosterDraft('u1', 'lg1'), draft);
+  eq('P12.4 another account cannot load it', await M.loadRosterDraft('u2', 'lg1'), null);
+  A.quit();
+  const B = new Phone(server);
+  await B.settle();
+  delete server.failures['rpc:bulk_import_roster_once'];
+  const restored = await M.loadRosterDraft('u1', 'lg1');
+  const retry = M.submitRosterImport(globalThis.__ITALA_CLIENT, restored);
+  eq('P12.5 double tap joins the same promise', M.submitRosterImport(globalThis.__ITALA_CLIENT, restored) === retry, true);
+  eq('P12.6 retry confirms saving', (await retry).saved, true);
+  await B.ctx.loadLeagueDetail('lg1'); await B.settle();
+  eq('P12.7 confirmed team is visible', B.league().teams.map(t => t.id), ['bulk-team']);
+  eq('P12.8 confirmed jersey retains leading zero', B.league().players[0].number, '07');
+  await M.submitRosterImport(globalThis.__ITALA_CLIENT, restored);
+  eq('P12.9 retry cannot duplicate rows', [server.count('teams'), server.count('players')], [1, 1]);
+  server.rows.players[0].name = 'Later edit';
+  await M.submitRosterImport(globalThis.__ITALA_CLIENT, restored);
+  eq('P12.10 old retry cannot overwrite later edits', server.rows.players[0].name, 'Later edit');
+  await M.clearRosterDraft('u1', 'lg1');
+  eq('P12.11 completion removes the draft', await M.loadRosterDraft('u1', 'lg1'), null);
+}
+
 /* ------------------------------------------------------------------ runner -- */
 
+async function p13_dropin_legacy_race_and_confirmed_publish() {
+  wipeDisk();
+  const server = new FakeServer();
+  server.memberships = ['rec-shared'];
+  server.rows.leagues.push({ id: 'rec-shared', name: 'Community', season: 'Drop-In', kind: 'recreational', is_shared: true, created_at: 1 });
+  const A = new Phone(server); await A.settle();
+  const setup = { t: 'REC_SETUP_GAME', leagueId: 'rec-shared', gameId: 'race-game', createdBy: 'u1',
+    teams: [{ id: 'race-home', name: 'Home', players: [{ id: 'race-p1', name: 'One' }] },
+      { id: 'race-away', name: 'Away', players: [{ id: 'race-p2', name: 'Two' }] }] };
+  server.failures['rpc:rec_setup_game'] = 'network-resolved';
+  // Characterization: exact old sequence in the user's log, dispatched before
+  // the setup response. The provider queues snapshots containing the game.
+  A.ctx.dispatch(setup);
+  A.ctx.dispatch({ t: 'SET_LINEUPS', leagueId: 'rec-shared', gameId: 'race-game', home: ['race-p1'], away: ['race-p2'] });
+  A.ctx.dispatch({ t: 'ADD_EVENT', leagueId: 'rec-shared', gameId: 'race-game', teamId: 'race-home', playerId: 'race-p1', type: 'fg2_make' });
+  await A.settle();
+  eq('P13.1 old sequence creates an orphan game after failed setup', server.rows.games.some(g => g.id === 'race-game'), true);
+  eq('P13.2 old sequence has no persisted teams', server.count('teams'), 0);
+  A.quit(); wipeDisk();
+
+  const safeServer = new FakeServer();
+  const B = new Phone(safeServer); await B.settle();
+  const bundle = M.reducer({ leagues: [] }, { ...setup,
+    ensureLeague: { name: 'Community', isShared: true } }).leagues[0];
+  const before = safeServer.log.length;
+  B.ctx.dispatch({ t: 'REC_SETUP_CONFIRMED', bundle });
+  await B.settle();
+  eq('P13.3 publishing server-confirmed data does not echo any write', safeServer.log.slice(before).filter(x => x.op !== 'select').length, 0);
+  eq('P13.4 confirmed publish creates no game outbox entry', M.unsyncedCount(), 0);
+  eq('P13.5 confirmed game includes both team names', B.league('rec-shared').teams.map(t => t.name), ['Home', 'Away']);
+  B.ctx.dispatch({ t: 'REC_SETUP_CONFIRMED', bundle }); await B.settle();
+  eq('P13.6 repeated local publish cannot duplicate a game', B.league('rec-shared').games.length, 1);
+  B.quit(); wipeDisk();
+}
+
 const groups = [
+  ['P13 legacy drop-in race and confirmed publication', p13_dropin_legacy_race_and_confirmed_publish],
+  ['P12 bulk import survives failure and restart', p12_bulk_transport_failure_recovers],
   ['P1 online stats survive a force-quit', p1_online_stats_survive_a_force_quit],
   ['P2 offline round trip survives a force-quit', p2_offline_round_trip_survives_a_force_quit],
   ['P3 a truncated read must not delete the game', p3_a_truncated_read_must_not_delete_the_game],

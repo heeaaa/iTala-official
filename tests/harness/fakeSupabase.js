@@ -101,7 +101,7 @@ class FakeServer {
   // does. A test that wants the rejecting transport asks for it by name.
   offline(on = true, mode = 'resolve') {
     const ops = ['select', 'insert', 'upsert', 'delete'];
-    const rpcs = ['create_league', 'add_player', 'rec_setup_game', 'bulk_import_roster'];
+    const rpcs = ['create_league', 'add_player', 'rec_setup_game', 'bulk_import_roster', 'bulk_import_roster_once'];
     const keys = [
       ...TABLES.flatMap(t => ops.map(op => `${op}:${t}`)),
       ...rpcs.map(r => `rpc:${r}`),
@@ -283,13 +283,14 @@ function makeClient(server) {
         delete() { return makeBuilder(server, table, 'delete'); },
       };
     },
-    async rpc(name, args) {
+    rpc(name, args) {
+      const run = (async () => {
       await wait(server.delayFor(`rpc:${name}`));
       server.log.push({ op: 'rpc', name, payload: clone(args) });
       const f = server.failures[`rpc:${name}`];
       if (f === 'network') throw new TypeError('Network request failed');
       if (f === 'network-resolved') return transportResolved();
-      if (f) return { data: null, error: { message: f.message || String(f) } };
+      if (f) return { data: null, error: { code: f.code, message: f.message || String(f) } };
       switch (name) {
         // Which leagues this account runs. The real one reads league_members;
         // the suite sets server.memberships directly.
@@ -308,6 +309,39 @@ function makeClient(server) {
             });
           }
           return { data: true, error: null };
+        case 'bulk_import_roster':
+        case 'bulk_import_roster_once': {
+          const once = name === 'bulk_import_roster_once';
+          const refuse = message => ({ data: null, error: { code: 'P0001', message } });
+          if (!server.has('leagues', args.p_league_id)) return refuse('League not found.');
+          const old = server.importReceipts?.[args.p_import_id];
+          if (once && old) {
+            if (old.actor !== args.p_actor_id || old.league !== args.p_league_id || old.payload !== JSON.stringify(args.p_teams)) return refuse('Different content.');
+            return { data: old.receipt, error: null };
+          }
+          if (once && server.rows.teams.some(t => t.league_id === args.p_league_id)) return refuse('League already has a roster.');
+          // Stage both tables and publish only after all rows pass collision checks.
+          const teams = clone(server.rows.teams), players = clone(server.rows.players);
+          const put = (rows, row) => {
+            const at = rows.findIndex(x => x.id === row.id);
+            if (at >= 0 && (once || rows[at].league_id !== row.league_id)) throw new Error('ID collision');
+            if (at < 0) rows.push(row); else rows[at] = { ...rows[at], ...row };
+          };
+          try {
+            for (const t of args.p_teams) {
+              put(teams, { id: t.id, league_id: args.p_league_id, name: t.name, color: t.color || '#12D7D0', player_ids: t.players.map(p => p.id), team_only: false });
+              for (const p of t.players) put(players, { id: p.id, league_id: args.p_league_id, name: p.name, number: p.number || null });
+            }
+          } catch { return refuse('ID collision'); }
+          server.rows.teams = teams; server.rows.players = players;
+          const receipt = { import_id: args.p_import_id, team_count: args.p_teams.length, player_count: args.p_teams.reduce((n, t) => n + t.players.length, 0) };
+          if (once) {
+            server.importReceipts ??= {};
+            server.importReceipts[args.p_import_id] = { actor: args.p_actor_id, league: args.p_league_id, payload: JSON.stringify(args.p_teams), receipt };
+          }
+          if (server.failures[`after:rpc:${name}`]) return transportResolved();
+          return { data: once ? receipt : null, error: null };
+        }
         case 'add_player': {
           if (!server.has('players', args.p_player_id)) {
             server.rows.players.push({
@@ -319,9 +353,17 @@ function makeClient(server) {
           if (t && !t.player_ids.includes(args.p_player_id)) t.player_ids.push(args.p_player_id);
           return { data: true, error: null };
         }
-        default:
+        case 'rec_setup_game':
+          // Existing drop-in tests override this RPC where they assert its
+          // server transaction; keep that fixture contract separate from imports.
           return { data: true, error: null };
+        default:
+          throw new Error(`FakeServer has no implementation for RPC ${name}`);
       }
+      })();
+      // Supabase builders are thenable and expose abortSignal before awaiting.
+      run.abortSignal = () => run;
+      return run;
     },
     channel() {
       const ch = { on() { return ch; }, subscribe() { return ch; } };

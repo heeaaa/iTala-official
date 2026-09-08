@@ -225,6 +225,7 @@ export type Action =
   // Local-only: the rows this removes never reached the server, so there is
   // nothing to delete there and nothing to push. See the dispatch wrapper.
   | { t: 'ROLLBACK_BUNDLE'; leagueId: string; gameIds: string[]; teamIds: string[]; playerIds: string[]; removeLeague?: boolean }
+  | { t: 'REC_SETUP_CONFIRMED'; bundle: League }
 
 const initial: AppState = { leagues: [] };
 
@@ -920,6 +921,20 @@ export function reducer(state: AppState, a: Action): AppState {
         ...(a.isClosed !== undefined ? { isClosed: a.isClosed } : {}),
         ...(a.isArchived !== undefined ? { isArchived: a.isArchived } : {}),
       }));
+
+    case 'REC_SETUP_CONFIRMED': {
+      // Publish only an acknowledged bundle. Reopening a completed draft must
+      // not duplicate it or overwrite lineups/stats/edits already on this device.
+      const bundle = a.bundle;
+      const existing = state.leagues.find(l => l.id === bundle.id);
+      if (!existing) return { ...state, leagues: [bundle, ...state.leagues] };
+      return mapLeague(state, bundle.id, l => ({ ...l,
+        teams: [...l.teams, ...bundle.teams.filter(t => !l.teams.some(x => x.id === t.id))],
+        players: [...l.players, ...bundle.players.filter(p => !l.players.some(x => x.id === p.id))],
+        games: [...bundle.games.filter(g => !l.games.some(x => x.id === g.id)), ...l.games],
+        events: [...l.events, ...bundle.events.filter(e => !l.events.some(x => x.id === e.id))],
+      }));
+    }
 
     case 'REC_SETUP_GAME': {
       // Ensure the rec league exists locally first (create if needed).
@@ -1718,6 +1733,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   // to Supabase. We compute the post-dispatch state inline via the reducer so
   // pushAction sees the exact rows we want to mirror — no React render gap.
   const dispatch = useCallback<React.Dispatch<Action>>((incoming) => {
+    if (incoming.t === 'REC_SETUP_CONFIRMED') {
+      guardBundle({ leagueId: incoming.bundle.id,
+        gameIds: incoming.bundle.games.map(g => g.id), teamIds: incoming.bundle.teams.map(t => t.id),
+        playerIds: incoming.bundle.players.map(p => p.id) });
+      stateRef.current = reducer(stateRef.current, incoming);
+      baseDispatch(incoming);
+      return;
+    }
     // HYDRATE and HYDRATE_LEAGUE are server→local; don't echo them back.
     // loadLeagueDetail already uses baseDispatch, so this is the guard for a
     // future caller reaching for the public dispatch - which would otherwise

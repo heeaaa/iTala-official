@@ -803,6 +803,84 @@ begin
 end $$;
 grant execute on function public.bulk_import_roster(text,jsonb) to authenticated;
 
+-- BEGIN ROSTER IMPORT RECEIPTS
+-- Additive: existing bulk_import_roster clients keep their original contract.
+-- New clients use insert-only, transactional imports and durable receipts.
+create table if not exists public.roster_import_receipts (
+  import_id text primary key,
+  league_id text not null references public.leagues(id) on delete cascade,
+  actor_id uuid not null references auth.users(id) on delete cascade,
+  payload jsonb not null,
+  team_count integer not null,
+  player_count integer not null,
+  created_at timestamptz not null default now()
+);
+alter table public.roster_import_receipts enable row level security;
+revoke all on public.roster_import_receipts from public, anon, authenticated;
+
+create or replace function public.bulk_import_roster_once(
+  p_import_id text, p_league_id text, p_actor_id uuid, p_teams jsonb
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare receipt public.roster_import_receipts; team jsonb; ply jsonb; player_total integer := 0;
+begin
+  if not public.is_authed_user() or auth.uid() is distinct from p_actor_id then
+    raise exception 'Sign in with the account that started this import.';
+  end if;
+  if not public.can_score(p_league_id) then raise exception 'Scorekeeper access required.'; end if;
+  if p_import_id is null or length(p_import_id) not between 1 and 128 then
+    raise exception 'Invalid import identifier.';
+  end if;
+  -- Serialize identical operations, including a retry while the first is still running.
+  perform pg_advisory_xact_lock(hashtextextended(p_import_id, 0));
+  select * into receipt from public.roster_import_receipts where import_id = p_import_id;
+  if found then
+    if receipt.actor_id is distinct from p_actor_id or receipt.league_id is distinct from p_league_id
+       or receipt.payload is distinct from p_teams then
+      raise exception 'Import identifier already used with different content.';
+    end if;
+    return jsonb_build_object('import_id', receipt.import_id,
+      'team_count', receipt.team_count, 'player_count', receipt.player_count);
+  end if;
+  -- Distinct new imports into one empty league must not both pass the empty check.
+  perform 1 from public.leagues where id = p_league_id for update;
+  if not found then raise exception 'League not found.'; end if;
+  if exists (select 1 from public.teams where league_id = p_league_id)
+     or exists (select 1 from public.players where league_id = p_league_id) then
+    raise exception 'This league already has a roster. Refresh it before importing.';
+  end if;
+  if jsonb_typeof(p_teams) is distinct from 'array' then raise exception 'Invalid roster.'; end if;
+  if jsonb_array_length(p_teams) = 0 then raise exception 'The roster is empty.'; end if;
+  for team in select * from jsonb_array_elements(p_teams) loop
+    if coalesce(length(trim(team->>'id')), 0) = 0 or coalesce(length(trim(team->>'name')), 0) = 0
+       or jsonb_typeof(team->'players') is distinct from 'array' then
+      raise exception 'Invalid team.';
+    end if;
+    if jsonb_array_length(team->'players') = 0 then raise exception 'A team needs a player.'; end if;
+    -- Deliberately no upsert: conflicting IDs must never overwrite existing rows.
+    insert into public.teams (id, league_id, name, color, player_ids)
+      values (team->>'id', p_league_id, team->>'name',
+        coalesce(nullif(team->>'color', ''), '#12D7D0'),
+        array(select p->>'id' from jsonb_array_elements(team->'players') p));
+    for ply in select * from jsonb_array_elements(team->'players') loop
+      if coalesce(length(trim(ply->>'id')), 0) = 0 or coalesce(length(trim(ply->>'name')), 0) = 0 then
+        raise exception 'Invalid player.';
+      end if;
+      insert into public.players (id, league_id, name, number)
+        values (ply->>'id', p_league_id, ply->>'name', nullif(ply->>'number', ''));
+      player_total := player_total + 1;
+    end loop;
+  end loop;
+  insert into public.roster_import_receipts (import_id, league_id, actor_id, payload, team_count, player_count)
+    values (p_import_id, p_league_id, p_actor_id, p_teams, jsonb_array_length(p_teams), player_total);
+  return jsonb_build_object('import_id', p_import_id,
+    'team_count', jsonb_array_length(p_teams), 'player_count', player_total);
+end $$;
+revoke all on function public.bulk_import_roster_once(text,text,uuid,jsonb) from public, anon;
+grant execute on function public.bulk_import_roster_once(text,text,uuid,jsonb) to authenticated;
+notify pgrst, 'reload schema';
+
+-- END ROSTER IMPORT RECEIPTS
+
 -- Drop-in game setup: league (if new) + both teams + all players + the game in
 -- ONE transaction. Previously this was four sequential round trips, which left
 -- windows where the server held a PARTIAL bundle (e.g. game row but no teams).
@@ -947,6 +1025,97 @@ begin
   end if;
 end $$;
 grant execute on function public.rec_setup_game(text,text,boolean,bigint,text,text,boolean,boolean,jsonb) to authenticated;
+
+-- BEGIN REC SETUP RECEIPTS
+-- New clients wait for this acknowledgement before allowing lineups/scoring.
+-- Preserve the old RPC contract; retrying the wrapper never rewrites live data.
+create table if not exists public.rec_setup_receipts (
+  game_id text primary key,
+  league_id text not null references public.leagues(id) on delete cascade,
+  actor_id uuid not null references auth.users(id) on delete cascade,
+  payload jsonb not null
+);
+alter table public.rec_setup_receipts enable row level security;
+revoke all on public.rec_setup_receipts from public, anon, authenticated;
+
+create or replace function public.rec_setup_game_once(p_actor_id uuid, p_setup jsonb)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare receipt public.rec_setup_receipts; team jsonb; ply jsonb;
+  gid text := p_setup->>'game_id'; lid text := p_setup->>'league_id';
+begin
+  if auth.uid() is distinct from p_actor_id or not (public.is_authed_user() or public.is_admin()) then
+    raise exception 'Sign in with the account that started this game.';
+  end if;
+  if coalesce(length(gid), 0) = 0 or coalesce(length(lid), 0) = 0 then raise exception 'Invalid setup.'; end if;
+  perform pg_advisory_xact_lock(hashtextextended('rec-setup:' || gid, 0));
+  select * into receipt from public.rec_setup_receipts where game_id = gid;
+  if found then
+    if receipt.actor_id is distinct from p_actor_id or receipt.payload is distinct from p_setup then
+      raise exception 'Game identifier already used with different content.';
+    end if;
+    if not exists (select 1 from public.games where id = gid and league_id = lid
+      and public.can_score_row(league_id, created_by)) then raise exception 'Game was removed or access changed.'; end if;
+    return jsonb_build_object('game_id', gid);
+  end if;
+  if exists (select 1 from public.games where id = gid) then raise exception 'Game identifier already in use.'; end if;
+  if exists (select 1 from public.leagues where id = lid and
+    (kind <> 'recreational' or coalesce(is_shared, false) <> coalesce((p_setup->>'shared')::boolean, false)
+     or not public.can_score(id))) then raise exception 'Drop-in space not available.'; end if;
+  if jsonb_typeof(p_setup->'teams') is distinct from 'array' then raise exception 'Invalid teams.'; end if;
+  if jsonb_array_length(p_setup->'teams') <> 2 then raise exception 'Two teams required.'; end if;
+  for team in select * from jsonb_array_elements(p_setup->'teams') loop
+    if coalesce(length(team->>'id'), 0) = 0 or jsonb_typeof(team->'players') is distinct from 'array' then raise exception 'Invalid team.'; end if;
+    if jsonb_array_length(team->'players') = 0 then raise exception 'Players required.'; end if;
+    if exists (select 1 from public.teams where id = team->>'id') then raise exception 'Team identifier already in use.'; end if;
+    for ply in select * from jsonb_array_elements(team->'players') loop
+      if coalesce(length(ply->>'id'), 0) = 0 or exists (select 1 from public.players where id = ply->>'id') then
+        raise exception 'Player identifier already in use.';
+      end if;
+    end loop;
+  end loop;
+  -- Reject duplicates within the input too, before the legacy upsert can merge them.
+  if (select count(distinct t->>'id') from jsonb_array_elements(p_setup->'teams') t) <> 2
+    or (select count(*) <> count(distinct p->>'id') from jsonb_array_elements(p_setup->'teams') t,
+      lateral jsonb_array_elements(t->'players') p) then raise exception 'Duplicate identifiers.'; end if;
+  insert into public.leagues (id, name, season, kind, foul_out_limit, track_misses, track_turnovers, is_shared, created_at)
+    values (lid, p_setup->>'league_name', 'Drop-In', 'recreational', null, true, true,
+      coalesce((p_setup->>'shared')::boolean, false), (p_setup->>'created_at')::bigint)
+    on conflict (id) do nothing;
+  -- Lock and recheck after a concurrent creator may have inserted the space.
+  perform 1 from public.leagues where id = lid for update;
+  if exists (select 1 from public.leagues where id = lid and (kind <> 'recreational'
+    or coalesce(is_shared, false) <> coalesce((p_setup->>'shared')::boolean, false))) then
+    raise exception 'Drop-in space not available.';
+  end if;
+  if not coalesce((p_setup->>'shared')::boolean, false)
+    and not exists (select 1 from public.league_members where league_id = lid) then
+    insert into public.league_members values (lid, auth.uid(), 'owner');
+  end if;
+  if not public.can_score(lid) then raise exception 'Scorekeeper access required.'; end if;
+  -- Insert-only: a race with another game must fail atomically, never upsert
+  -- someone else's team/player inside the shared community league.
+  for team in select * from jsonb_array_elements(p_setup->'teams') loop
+    insert into public.teams (id, league_id, name, color, player_ids)
+      values (team->>'id', lid, coalesce(nullif(team->>'name', ''), 'Team'),
+        coalesce(nullif(team->>'color', ''), '#12D7D0'),
+        array(select p->>'id' from jsonb_array_elements(team->'players') p));
+    for ply in select * from jsonb_array_elements(team->'players') loop
+      insert into public.players (id, league_id, name, number)
+        values (ply->>'id', lid, coalesce(nullif(ply->>'name', ''), 'Player'), nullif(ply->>'number', ''));
+    end loop;
+  end loop;
+  insert into public.games (id, league_id, home_team_id, away_team_id, status, scheduled_at,
+    location, home_on_court, away_on_court, period, track_misses, track_turnovers, created_by)
+    values (gid, lid, p_setup->'teams'->0->>'id', p_setup->'teams'->1->>'id', 'live',
+      (p_setup->>'created_at')::bigint, nullif(p_setup->>'location', ''), '{}', '{}', 1,
+      (p_setup->>'track_misses')::boolean, (p_setup->>'track_turnovers')::boolean, auth.uid());
+  insert into public.rec_setup_receipts values (gid, lid, p_actor_id, p_setup);
+  return jsonb_build_object('game_id', gid);
+end $$;
+revoke all on function public.rec_setup_game_once(uuid,jsonb) from public, anon;
+grant execute on function public.rec_setup_game_once(uuid,jsonb) to authenticated;
+notify pgrst, 'reload schema';
+-- END REC SETUP RECEIPTS
 
 create or replace function public.create_league(
   p_id text, p_name text, p_season text, p_kind text,

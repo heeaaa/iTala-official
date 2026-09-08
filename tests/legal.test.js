@@ -68,6 +68,8 @@ function setup(options = {}) {
       } },
     '../sync/supabase': { SYNC_ENABLED: true, getSupabase: () => sb },
     './guestSession': load('src/store/guestSession.ts', {}), '../lib/log': { devLog() {}, warn() {} },
+    './rosterDraft': { clearAccountRosterDrafts: async () => {} },
+    '../sync/recSetup': { clearRecSetup: async () => {} },
     // Account deletion now routes Apple-linked accounts through a revoking Edge
     // Function. This suite is about the legal receipt, so the real module is
     // loaded (rather than stubbed) and its behaviour is asserted next door, in

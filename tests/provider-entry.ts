@@ -5,3 +5,5 @@ export { loadState, saveState, loadOutbox, saveOutbox, loadPrefs, savePrefs } fr
 export { outboxSnapshot, unsyncedCount, pendingCount, appliedSnapshotAt } from '../src/sync/pendingEvents';
 export { netStatus, isKnownOffline } from '../src/sync/connectivity';
 export { SYNC_ENABLED } from '../src/sync/supabase';
+export { submitRosterImport } from '../src/sync/rosterImport';
+export { loadRosterDraft, saveRosterDraft, clearRosterDraft } from '../src/store/rosterDraft';

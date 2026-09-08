@@ -149,6 +149,12 @@ try { run('node', [path.join('tests', 'legal.test.js')], { env }); }
 catch { failed++; }
 try { run('node', [path.join('tests', 'guestSession.test.js')], { env }); }
 catch { failed++; }
+try { run('node', [path.join('tests', 'rosterImport.test.js')], { env }); }
+catch { failed++; }
+try { run('node', [path.join('tests', 'rosterSetupUi.test.js')], { env }); }
+catch { failed++; }
+try { run('node', [path.join('tests', 'recSetup.test.js')], { env }); }
+catch { failed++; }
 // Apple Sign-In revocation: the client secret, both Apple requests, the
 // revoke-before-delete ordering, and which deletion path AdminProvider takes.
 // Loads the Edge Function's own modules, so the server half is covered here too.
@@ -159,6 +165,10 @@ catch { failed++; }
 try { run('node', [path.join('tests', 'contentReports.integration.test.js')], { env }); }
 catch { failed++; }
 if (process.env.ITALA_PGLITE_MODULE) {
+  try { run('node', [path.join('tests', 'recSetup.database.test.js')], { env }); }
+  catch { failed++; }
+  try { run('node', [path.join('tests', 'rosterImport.database.test.js')], { env }); }
+  catch { failed++; }
   try { run('node', [path.join('tests', 'contentReports.database.test.js')], { env }); }
   catch { failed++; }
 }
