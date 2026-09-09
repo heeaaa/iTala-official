@@ -970,7 +970,7 @@ export function ProfileSheet({ visible, onClose, user, role, busy, error, onGoog
             <View style={{ marginBottom: space(4) }}>
               <Txt k="h2">You're browsing as a guest</Txt>
               <Txt k="body" color={colors.muted} style={{ marginTop: 4 }}>
-                Sign in with Google to share stat cards. Admins are recognized automatically.
+                Sign in to share stat cards. Admins are recognized automatically.
               </Txt>
             </View>
             <GoogleButton onPress={onGoogle} busy={busy} />

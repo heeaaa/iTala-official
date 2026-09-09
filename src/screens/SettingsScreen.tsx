@@ -33,7 +33,7 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
         <View style={{ paddingTop: space(8), alignItems: 'center' }}>
           <Txt k="h1" style={{ marginBottom: space(2) }}>Sign in required</Txt>
           <Txt k="body" color={colors.muted} style={{ textAlign: 'center', marginBottom: space(6) }}>
-            Settings are tied to your account. Sign in with Google to continue.
+            Settings are tied to your account. Sign in to continue.
           </Txt>
           <GoogleButton onPress={() => { void onSignIn(signInWithGoogle); }} busy={busy || authBusy} style={{ alignSelf: 'stretch' }} />
           {appleAvailable ? <AppleButton onPress={() => { void onSignIn(signInWithApple); }} busy={busy || authBusy} style={{ alignSelf: 'stretch', marginTop: 10 }} /> : null}
@@ -191,7 +191,7 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
           <>
             <Txt k="body" color={colors.muted}>○ Local-only — data stays on this device.</Txt>
             <Txt k="body" color={colors.muted} style={{ fontSize: 12, marginTop: 4 }}>
-              To enable multi-device sync, set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY before building. See README.
+              Multi-device sync is not available in this build. Your games and stats are saved on this device.
             </Txt>
           </>
         )}
