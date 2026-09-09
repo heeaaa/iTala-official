@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, ScrollView, TextInput, Pressable } from 'react-native';
+import { View, ScrollView, TextInput, Pressable, Alert } from 'react-native';
 import { Screen, Txt, Card, Button, Field, Toggle, GoogleButton, AppleButton } from '../components/ui';
 import { reducer, useStore } from '../store/StoreProvider';
 import { clearRecSetup, loadRecSetup, readRecSetup, RecSetupDraft, saveRecSetup } from '../sync/recSetup';
@@ -65,7 +65,7 @@ function RecGameEditor({ navigation }: Pick<ScreenProps<'RecGame'>, 'navigation'
       if (!bundle) { setMessage('The game was saved, but its complete teams and players could not be loaded yet. Retry to load it safely.'); return; }
       dispatch({ t: 'REC_SETUP_CONFIRMED', bundle });
       if (!draft.bundle.isShared) void reloadMemberships();
-      await clearRecSetup(draft.actorId);
+      await clearRecSetup(draft.actorId, draft.bundle.games[0].id);
       if (mounted.current) {
         const game = bundle.games[0];
         navigation.replace(game.status === 'final' ? 'FinalScore'
@@ -75,6 +75,27 @@ function RecGameEditor({ navigation }: Pick<ScreenProps<'RecGame'>, 'navigation'
     } catch {
       if (mounted.current) setMessage('Setup could not finish. Keep this screen open, check your connection and device storage, then retry.');
     } finally { inFlight.current = false; if (mounted.current) setSaving(false); }
+  };
+
+  const discard = (draft: RecSetupDraft) => {
+    if (inFlight.current) return;
+    Alert.alert('Discard this setup draft?',
+      'This removes only the draft on this device. The game may already have been saved or may still finish saving. It will not be deleted. Check Games before creating it again.', [
+        { text: 'Keep draft', style: 'cancel' },
+        { text: 'Discard draft', style: 'destructive', onPress: async () => {
+          if (!mounted.current || inFlight.current) return;
+          inFlight.current = true; setSaving(true);
+          try {
+            await clearRecSetup(draft.actorId, draft.bundle.games[0].id);
+            if (!mounted.current) return;
+            setPending(null); setMessage(null); setLocation('');
+            setTeams([{ name: '', color: teamColors[0], players: [] }, { name: '', color: teamColors[1], players: [] }]);
+            setDraftName(['', '']); setDraftNum(['', '']);
+          } catch {
+            if (mounted.current) setMessage('The draft could not be removed. Check device storage and try again.');
+          } finally { inFlight.current = false; if (mounted.current) setSaving(false); }
+        } },
+      ]);
   };
 
   const addPlayer = (ti: 0 | 1) => {
@@ -206,6 +227,7 @@ function RecGameEditor({ navigation }: Pick<ScreenProps<'RecGame'>, 'navigation'
         {team.playerIds.map(id => <Txt k="body" key={id}>{pending.bundle.players.find(p => p.id === id)?.name}</Txt>)}
       </Card>)}
       <Button title={saving ? 'Saving...' : 'Retry setup'} disabled={saving} onPress={() => { void submit(pending); }} />
+      <Button title="Discard draft" kind="ghost" disabled={saving} style={{ marginTop: space(3) }} onPress={() => discard(pending)} />
     </Screen>
   );
 

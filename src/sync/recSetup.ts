@@ -27,8 +27,12 @@ export async function loadRecSetup(actor: string): Promise<RecSetupDraft | null>
       || d.bundle.games[0].awayTeamId !== d.bundle.teams[1].id) throw new Error('Invalid saved drop-in setup');
   return d;
 }
-export async function clearRecSetup(actor: string): Promise<void> {
+export async function clearRecSetup(actor: string, expectedGameId?: string): Promise<void> {
   await active.get(actor)?.result.catch(() => {});
+  if (expectedGameId) {
+    const saved = await loadRecSetup(actor);
+    if (saved && saved.bundle.games[0].id !== expectedGameId) throw new Error('Saved setup changed');
+  }
   await AsyncStorage.removeItem(key(actor));
 }
 const active = new Map<string, { payload: string; result: Promise<boolean> }>();
@@ -60,9 +64,18 @@ export function saveRecSetup(sb: SupabaseClient, draft: RecSetupDraft): Promise<
     const controller = new AbortController();
     let expired = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // The same deadline bounds the caller AND each await inside the queue.
+    // Aborting fetch alone cannot release a stalled session or a transport
+    // that ignores cancellation. Late replies cannot navigate or trigger retry.
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        expired = true; reject(new Error('Setup timed out')); controller.abort();
+      }, 15000);
+    });
     try {
       return await Promise.race([
         enqueuePush(async () => {
+          if (expired) return false;
           const b = draft.bundle, g = b.games[0];
           const args = { p_actor_id: draft.actorId, p_setup: {
             league_id: b.id, league_name: b.name, shared: !!b.isShared,
@@ -76,11 +89,12 @@ export function saveRecSetup(sb: SupabaseClient, draft: RecSetupDraft): Promise<
           } };
           for (let attempt = 0; attempt < 2; attempt++) {
             if (expired) return false;
-            const session = await sb.auth.getSession();
+            const session = await Promise.race([sb.auth.getSession(), deadline]);
             if (expired || session.error || session.data.session?.user.id !== draft.actorId) return false;
             try {
               devLog('[rec-setup]', { phase: 'RPC_START', request: attempt + 1 });
-              const result = await sb.rpc('rec_setup_game_once', args).abortSignal(controller.signal);
+              const result = await Promise.race([sb.rpc('rec_setup_game_once', args).abortSignal(controller.signal), deadline]);
+              if (expired) return false;
               devLog('[rec-setup]', { phase: 'RPC_RESULT', request: attempt + 1, status: result.status,
                 confirmed: !result.error && result.data?.game_id === g.id });
               if (!result.error && result.data?.game_id === g.id) return true;
@@ -91,10 +105,10 @@ export function saveRecSetup(sb: SupabaseClient, draft: RecSetupDraft): Promise<
           }
           return false;
         }),
-        new Promise<boolean>(resolve => { timer = setTimeout(() => {
-          expired = true; controller.abort(); resolve(false);
-        }, 15000); }),
+        deadline,
       ]);
+    } catch {
+      return false;
     } finally { if (timer) clearTimeout(timer); }
   })();
   active.set(draft.actorId, { payload, result: run });

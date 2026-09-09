@@ -823,7 +823,7 @@ create or replace function public.bulk_import_roster_once(
 ) returns jsonb language plpgsql security definer set search_path = public as $$
 declare receipt public.roster_import_receipts; team jsonb; ply jsonb; player_total integer := 0;
 begin
-  if not public.is_authed_user() or auth.uid() is distinct from p_actor_id then
+  if not (public.is_authed_user() or public.is_admin()) or auth.uid() is distinct from p_actor_id then
     raise exception 'Sign in with the account that started this import.';
   end if;
   if not public.can_score(p_league_id) then raise exception 'Scorekeeper access required.'; end if;

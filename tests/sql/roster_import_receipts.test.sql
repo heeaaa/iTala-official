@@ -84,6 +84,30 @@ begin
   if not denied then raise exception 'FAIL authenticated direct receipt read'; end if;
 end $$;
 reset role;
+-- Backup-password admins intentionally retain an anonymous auth session.
+do $$
+declare actor uuid := '11111111-1111-1111-1111-111111111111'; denied boolean;
+  roster jsonb := '[{"id":"admin-team","name":"Admin team","players":[{"id":"admin-player","name":"Player","number":"09"}]}]';
+begin
+  update auth_state set uid=actor, anon=true;
+  insert into profiles(id,is_admin) values(actor,true) on conflict(id) do update set is_admin=true;
+  insert into leagues(id,name,season,kind,created_at) values('admin-import','Admin','S','league',1);
+  perform public.bulk_import_roster_once('admin-op','admin-import',actor,roster);
+  perform public.bulk_import_roster_once('admin-op','admin-import',actor,roster);
+  if (select count(*) from players where league_id='admin-import') <> 1 then raise exception 'FAIL password admin replay'; end if;
+  denied := false;
+  begin perform public.bulk_import_roster_once('admin-op','admin-import','22222222-2222-2222-2222-222222222222',roster);
+  exception when raise_exception then denied := true; end;
+  if not denied then raise exception 'FAIL password admin actor mismatch'; end if;
+  update profiles set is_admin=false where id=actor;
+  insert into league_members values('admin-import',actor,'owner');
+  denied := false;
+  begin perform public.bulk_import_roster_once('admin-op','admin-import',actor,roster);
+  exception when raise_exception then denied := true; end;
+  if not denied then raise exception 'FAIL anonymous nonadmin accepted'; end if;
+  delete from leagues where id='admin-import';
+  update auth_state set anon=false;
+end $$;
 insert into t_results values (true, 'roster persistence, replay, edits, account guards, collisions, old RPC and grants');
 select case when ok then '  PASS  ' else '  FAIL  ' end || label from t_results;
 select '  ' || count(*) filter (where ok) || ' passed, '

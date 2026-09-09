@@ -12,9 +12,9 @@ function nodes(n) {
   if (Array.isArray(n)) return n.flatMap(nodes);
   return [n, ...nodes(n.props?.children)];
 }
-function harness() {
+function harness({ shortTimeout = false } = {}) {
   const h = { state: { leagues: [] }, actor: 'u1', synced: true, calls: [], actions: [], routes: [],
-    disk: new Map(), receipts: new Map(), failure: null, loseReply: false, storageFails: false };
+    disk: new Map(), receipts: new Map(), alerts: [], failure: null, loseReply: false, storageFails: false };
   const modules = new Map(); let id = 0;
   const sb = { auth: { getSession: async () => ({ data: { session: { user: { id: h.actor } } } }) },
     rpc: (_name, args) => {
@@ -40,11 +40,12 @@ function harness() {
     const exports = {}; modules.set(full, exports);
     const imports = {
       react: Hooks,
-      'react-native': Object.fromEntries(['View', 'ScrollView', 'TextInput', 'Pressable'].map(x => [x, x])),
+      'react-native': { ...Object.fromEntries(['View', 'ScrollView', 'TextInput', 'Pressable'].map(x => [x, x])),
+        Alert: { alert: (...args) => h.alerts.push(args) } },
       '@react-native-async-storage/async-storage': { default: {
         getItem: async k => h.disk.get(k) ?? null,
         setItem: async (k, v) => { if (h.storageFails) throw Error('disk full'); h.disk.set(k, v); },
-        removeItem: async k => h.disk.delete(k),
+        removeItem: async k => { if (h.removeFails) throw Error('disk failed'); h.disk.delete(k); },
       } },
     };
     const requireModule = name => {
@@ -69,11 +70,14 @@ function harness() {
     };
     vm.runInNewContext(ts.transpileModule(fs.readFileSync(full, 'utf8'), {
       compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React },
-    }).outputText, { exports, require: requireModule, setTimeout, clearTimeout, AbortController, TypeError });
+    }).outputText, { exports, require: requireModule,
+      setTimeout: (fn, ms) => setTimeout(fn, shortTimeout && ms === 15000 ? 35 : ms),
+      clearTimeout, AbortController, TypeError });
     return exports;
   }
   const Screen = load('src/screens/RecGameScreen.tsx').default;
   h.service = load('src/sync/recSetup.ts');
+  h.queue = load('src/sync/pushQueue.ts');
   h.mount = () => {
     const outer = Hooks.render(Screen, { navigation: { replace: (...args) => h.routes.push(args) } });
     const editor = outer.element; outer.unmount();
@@ -99,12 +103,89 @@ function harness() {
 }
 
 (async () => {
+  for (const mode of ['session', 'rpc']) {
+    const h = harness({ shortTimeout: true }); h.failure = 400; await h.prepare();
+    const draft = await h.service.loadRecSetup('u1');
+    let release;
+    const stalled = new Promise(r => { release = r; });
+    const session = { data: { session: { user: { id: 'u1' } } } };
+    let calls = 0;
+    const sb = { auth: { getSession: () => mode === 'session' ? stalled : Promise.resolve(session) },
+      rpc: () => { calls++; return { abortSignal: () => stalled }; } };
+    assert.equal(await h.service.saveRecSetup(sb, draft), false);
+    const later = h.queue.enqueuePush(async () => 'continued');
+    const outcome = await Promise.race([later, new Promise(r => setTimeout(() => r('blocked'), 100))]);
+    release(mode === 'session' ? session : { status: 200, data: { game_id: draft.bundle.games[0].id }, error: null });
+    await later;
+    assert.equal(outcome, 'continued', `${mode} timeout must release the shared queue`);
+    assert.equal(calls, mode === 'session' ? 0 : 1, 'late completion must not start another request');
+    assert.ok(await h.service.loadRecSetup('u1'), 'timeout keeps immutable draft');
+    h.root.unmount();
+  }
+
+  const queued = harness({ shortTimeout: true }); queued.failure = 400; await queued.prepare();
+  const queuedDraft = await queued.service.loadRecSetup('u1');
+  let releaseQueue;
+  void queued.queue.enqueuePush(() => new Promise(r => { releaseQueue = r; }));
+  let queuedRpcCalls = 0;
+  assert.equal(await queued.service.saveRecSetup({ auth: { getSession: async () => {
+    queuedRpcCalls++; throw Error('expired callback must not reach auth');
+  } } }, queuedDraft), false);
+  releaseQueue(); await queued.queue.pushQueueIdle();
+  assert.equal(queuedRpcCalls, 0, 'expired queued setup must never send a surprise request');
+  queued.root.unmount();
+
+  const abandoned = harness(); abandoned.failure = 400; await abandoned.prepare();
+  abandoned.root.unmount(); abandoned.mount(); await abandoned.settle();
+  assert.ok(abandoned.button('Discard draft'), 'a permanently refused draft must have a way out');
+  abandoned.button('Discard draft').onPress();
+  let confirmation = abandoned.alerts.at(-1);
+  assert.match(confirmation[1], /may.*saved|may.*exist/i, 'do not claim a network failure rolled back');
+  assert.equal(abandoned.disk.size, 1, 'opening or cancelling the alert must keep the draft');
+  confirmation[2].find(b => b.style === 'cancel').onPress?.();
+  assert.ok(abandoned.button('Retry'));
+  abandoned.removeFails = true;
+  await confirmation[2].find(b => b.style === 'destructive').onPress(); await abandoned.settle();
+  assert.equal(abandoned.disk.size, 1); assert.ok(abandoned.button('Retry'), 'failed removal remains recoverable');
+  abandoned.removeFails = false;
+  abandoned.button('Discard draft').onPress();
+  await abandoned.alerts.at(-1)[2].find(b => b.style === 'destructive').onPress(); await abandoned.settle();
+  assert.equal(abandoned.disk.size, 0); assert.ok(abandoned.button('Next:'));
+  assert.equal(abandoned.calls.length, 1, 'discard must not mutate the server');
+  abandoned.root.unmount(); abandoned.mount(); await abandoned.settle();
+  assert.ok(abandoned.button('Next:'), 'new setup remains available after reopen'); abandoned.root.unmount();
+
+  const savedDraft = harness(); savedDraft.readFails = true; await savedDraft.prepare();
+  assert.equal(savedDraft.receipts.size, 1, 'server saved but readback failed');
+  savedDraft.button('Discard draft').onPress();
+  await savedDraft.alerts.at(-1)[2].find(b => b.style === 'destructive').onPress(); await savedDraft.settle();
+  assert.equal(savedDraft.receipts.size, 1, 'discard must leave any saved game untouched');
+  assert.equal(savedDraft.calls.length, 1, 'discard must not replay or delete on the server');
+  assert.equal(savedDraft.routes.length, 0); assert.ok(savedDraft.button('Next:')); savedDraft.root.unmount();
+
+  const staleDiscard = harness(); staleDiscard.failure = 400; await staleDiscard.prepare();
+  staleDiscard.button('Discard draft').onPress();
+  const staleConfirm = staleDiscard.alerts.at(-1)[2].find(b => b.style === 'destructive').onPress;
+  staleDiscard.root.unmount(); staleDiscard.actor = 'u2'; staleDiscard.mount(); await staleDiscard.settle();
+  await staleConfirm(); await staleDiscard.settle();
+  assert.ok(await staleDiscard.service.loadRecSetup('u1'), 'old account callback must not remove a draft after unmount');
+  assert.ok(staleDiscard.button('Next:')); staleDiscard.root.unmount();
+
+  const changed = harness(); changed.failure = 400; await changed.prepare();
+  const originalDraft = await changed.service.loadRecSetup('u1');
+  const newerDraft = JSON.parse(JSON.stringify(originalDraft)); newerDraft.bundle.games[0].id = 'newer-game';
+  const storedKey = [...changed.disk.keys()][0]; changed.disk.set(storedKey, JSON.stringify(newerDraft));
+  await assert.rejects(changed.service.clearRecSetup('u1', originalDraft.bundle.games[0].id), /Saved setup changed/);
+  assert.equal((await changed.service.loadRecSetup('u1')).bundle.games[0].id, 'newer-game', 'stale completion cannot clear newer setup');
+  changed.root.unmount();
+
   const delayed = harness(); let release;
   delayed.wait = new Promise(r => { release = r; });
   await delayed.prepare();
   assert.equal(delayed.routes.length, 0, 'must not expose lineups before setup response');
   assert.equal(delayed.actions.length, 0, 'no optimistic game or game outbox entry');
   assert.equal(delayed.button('Saving').disabled, true);
+  assert.equal(delayed.button('Discard draft').disabled, true, 'active submission cannot be discarded');
   release(); await delayed.settle();
   assert.equal(delayed.routes[0][0], 'SelectLineup');
   assert.equal(delayed.actions[0].t, 'REC_SETUP_CONFIRMED');
