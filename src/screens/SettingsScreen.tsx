@@ -125,12 +125,6 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
         )}
       </Card>
 
-      {/* Legal documents remain available after account acknowledgement. */}
-      <Card style={{ marginBottom: space(4) }}>
-        <Txt k="label" style={{ marginBottom: space(2) }}>Legal</Txt>
-        <LegalLinks />
-      </Card>
-
       {/* Live tracking */}
       <Card style={{ marginBottom: space(4) }}>
         <Txt k="label" style={{ marginBottom: space(2) }}>Live tracking</Txt>
@@ -201,6 +195,12 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
             </Txt>
           </>
         )}
+      </Card>
+
+      {/* Legal documents remain available after account acknowledgement. */}
+      <Card style={{ paddingBottom: space(2) }}>
+        <Txt k="label" style={{ marginBottom: space(1) }}>Legal</Txt>
+        <LegalLinks compact />
       </Card>
 
       {/* Danger zone — only meaningful when an actual account exists */}
