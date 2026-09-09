@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Linking, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Linking, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { colors, font, radius, space } from '../theme';
 import { LEGAL_LINKS, LEGAL_STATEMENT } from '../lib/legal';
 
@@ -10,7 +10,7 @@ export interface LegalPrompt {
   error: string | null;
 }
 
-export function LegalLinks({ inline = false }: { inline?: boolean } = {}) {
+export function LegalLinks({ inline = false, compact = false }: { inline?: boolean; compact?: boolean } = {}) {
   const [error, setError] = useState<string | null>(null);
   const open = async (url: string) => {
     setError(null);
@@ -26,10 +26,12 @@ export function LegalLinks({ inline = false }: { inline?: boolean } = {}) {
           onPress={() => { void open(link.url); }} style={styles.inlineLink}>{part}</Text>
           : <Text key={index}>{part}</Text>;
       })}
-    </Text> : LEGAL_LINKS.map(link => <TouchableOpacity key={link.url} accessibilityRole="link"
+    </Text> : LEGAL_LINKS.map((link, index) => <TouchableOpacity key={link.url} accessibilityRole="link"
       accessibilityLabel={link.label} accessibilityHint="Opens in your browser"
-      onPress={() => { void open(link.url); }} style={styles.link}>
-      <Text style={styles.linkText}>{link.label}</Text>
+      onPress={() => { void open(link.url); }} style={[styles.link, compact && styles.compactLink,
+        compact && index > 0 && styles.divider]}>
+      <Text style={[styles.linkText, compact && styles.compactText]}>{link.label}</Text>
+      {compact ? <Text accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.externalIcon}>↗</Text> : null}
     </TouchableOpacity>)}
     {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
   </View>;
@@ -85,6 +87,10 @@ const styles = StyleSheet.create({
   detail: { fontFamily: font.body, fontSize: 12, color: colors.muted, textAlign: 'center', marginTop: 12 },
   link: { minHeight: 48, justifyContent: 'center' },
   linkText: { fontFamily: font.bodyMed, fontSize: 15, color: colors.brandTeal, textDecorationLine: 'underline' },
+  compactLink: { minHeight: Platform.OS === 'android' ? 48 : 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8, gap: 12 },
+  compactText: { flex: 1, textDecorationLine: 'none' },
+  divider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line },
+  externalIcon: { fontSize: 18, color: colors.muted },
   checkboxRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginBottom: 14 },
   checkboxTarget: { width: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center', marginLeft: -9, marginTop: -9 },
   agreementContainer: { flex: 1 },

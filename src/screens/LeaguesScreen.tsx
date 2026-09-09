@@ -550,8 +550,8 @@ Share this with the organizer. It can create exactly one league, then expires.`)
               taller than its neighbour on top of the box-model difference the
               Button primitive now handles. Plain labels also read better to a
               screen reader. */}
-          <Button title="Drop-In" kind="ghost" style={{ flex: 1 }} onPress={() => navigation.navigate('RecGame')} />
-          <Button title="New League" style={{ flex: 1 }} onPress={onNewLeague} />
+          <Button title="Drop-In" style={{ flex: 1 }} onPress={() => navigation.navigate('RecGame')} />
+          <Button title="New League" kind="ghost" style={{ flex: 1 }} onPress={onNewLeague} />
         </View>
       )}
 

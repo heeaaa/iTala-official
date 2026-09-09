@@ -405,3 +405,20 @@ suite. Startup and report recovery share one pending guest sign-in per client.
 Tests verify that a failed startup can recover on report submission, concurrent
 callers share the operation, existing accounts are preserved, and failed or stalled
 session reads never authorize creation of a replacement guest.
+
+Roster recovery is covered by `tests/rosterImport.test.js` (actual screen handlers,
+draft storage and submission service) and provider scenario P12. Run with
+`npm test`. Tests cover restart, lost acknowledgements, double taps, account
+isolation, storage failure, refresh failure and local-only imports.
+`tests/sql/roster_import_receipts.test.sql` exercises the shipped receipt RPCs in
+the PostgreSQL runner. For isolated PostgreSQL/WASM verification, set
+`ITALA_PGLITE_MODULE` as above and run `node tests/rosterImport.database.test.js`.
+This also verifies that reapplying the schema addition preserves roster data.
+It does not simulate independent concurrent PostgreSQL connections or native
+device networking.
+
+Drop-in creation recovery is covered by `tests/recSetup.test.js` (run through
+`npm test`, which builds its real reducer dependency) and provider P13. P13 also
+characterizes the original queued-lineup orphan bug. The database equivalent is
+`tests/sql/rec_setup_receipts.test.sql`; isolated PostgreSQL verification uses
+`ITALA_PGLITE_MODULE` with `node tests/recSetup.database.test.js`.

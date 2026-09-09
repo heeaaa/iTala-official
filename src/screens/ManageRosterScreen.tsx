@@ -1,19 +1,46 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { View, TextInput, Pressable, ScrollView } from 'react-native';
 import { Screen, Txt, Card, Button, Pill, TeamBadge } from '../components/ui';
 import { useStore, useLeague } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
 import { colors, space, radius, font } from '../theme';
 import { ScreenProps } from '../navigation';
+import { loadRosterDraft } from '../store/rosterDraft';
 
 export default function ManageRosterScreen({ route, navigation }: ScreenProps<'ManageRoster'>) {
   const { leagueId } = route.params;
-  const { dispatch } = useStore();
+  const { dispatch, synced } = useStore();
   const league = useLeague(leagueId);
-  const { canScore, isOwner } = useAdmin();
+  const { canScore, isOwner, user, reloadMemberships } = useAdmin();
+  const actorId = synced ? user?.id : 'local';
+  const [hasDraft, setHasDraft] = useState(false);
+  useFocusEffect(useCallback(() => {
+    let current = true;
+    setHasDraft(false);
+    if (synced && actorId) void loadRosterDraft(actorId, leagueId).then(draft => {
+      if (current) setHasDraft(!!draft);
+    }).catch(() => { if (current) setHasDraft(true); });
+    return () => { current = false; };
+  }, [actorId, leagueId, synced]));
   const [teamName, setTeamName] = useState('');
   const [opponentOnly, setOpponentOnly] = useState(false);
   const [playerDraft, setPlayerDraft] = useState<Record<string, { name: string; num: string }>>({});
+  const [accessReady, setAccessReady] = useState(false);
+  const ownerReady = !!league && isOwner(league);
+  React.useEffect(() => {
+    if (ownerReady) setAccessReady(true);
+  }, [ownerReady]);
+
+  // Only the creation transition waits for its newly inserted owner membership.
+  // Existing read-only roster routes and later permission changes keep their UI.
+  if (synced && route.params.awaitOwner && !accessReady && !ownerReady) return (
+    <Screen scroll>
+      <Txt k="h1">Preparing roster</Txt>
+      <Txt k="body" style={{ marginVertical: space(4) }}>Waiting for your new league access to finish loading.</Txt>
+      <Button title="Refresh access" kind="ghost" onPress={() => { void reloadMemberships(); }} />
+    </Screen>
+  );
 
   if (!league) return <Screen><Txt k="body">League not found.</Txt></Screen>;
   const owner = isOwner(league);
@@ -45,9 +72,9 @@ export default function ManageRosterScreen({ route, navigation }: ScreenProps<'M
         <Txt k="body" color={colors.muted} style={{ marginBottom: space(5) }}>{league.season}</Txt>
 
         {scorer && (<>
-        {owner && league.kind !== 'recreational' && league.teams.length === 0 && (
+        {owner && league.kind !== 'recreational' && (league.teams.length === 0 || hasDraft) && (
           <Button
-            title="Bulk import roster (paste teams & players)"
+            title={hasDraft ? 'Resume roster import' : 'Bulk import roster (paste teams & players)'}
             kind="ghost"
             style={{ marginBottom: space(4) }}
             onPress={() => navigation.navigate('BulkImport', { leagueId })}

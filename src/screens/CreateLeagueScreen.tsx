@@ -19,7 +19,7 @@ export default function CreateLeagueScreen({ route, navigation }: ScreenProps<'C
   const create = () => {
     const id = uid();
     dispatch({ t: 'ADD_LEAGUE', id, name, season, trackMisses, trackTurnovers, creationCode });
-    navigation.replace('ManageRoster', { leagueId: id });
+    navigation.replace('ManageRoster', { leagueId: id, awaitOwner: true });
     // create_league inserts the creator as owner server-side; pull that
     // membership so canScore/isOwner light up the team/player/game controls
     // without needing an app reload. Give the RPC a beat to land, then refresh

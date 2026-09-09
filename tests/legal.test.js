@@ -68,6 +68,8 @@ function setup(options = {}) {
       } },
     '../sync/supabase': { SYNC_ENABLED: true, getSupabase: () => sb },
     './guestSession': load('src/store/guestSession.ts', {}), '../lib/log': { devLog() {}, warn() {} },
+    './rosterDraft': { clearAccountRosterDrafts: async () => {} },
+    '../sync/recSetup': { clearRecSetup: async () => {} },
     // Account deletion now routes Apple-linked accounts through a revoking Edge
     // Function. This suite is about the legal receipt, so the real module is
     // loaded (rather than stubbed) and its behaviour is asserted next door, in
@@ -111,6 +113,12 @@ test('unchecked dialog blocks continuation, check enables it, busy and new promp
   const links = HookRuntime.render(p.component.LegalLinks, {});
   for (const n of nodes(links.element).filter(n => n.props?.accessibilityRole === 'link')) n.props.onPress();
   assert.deepEqual(p.calls.filter(c => c[0] === 'link').map(c => c[1]), Array.from(p.legal.LEGAL_LINKS, l => l.url));
+  const compact = HookRuntime.render(p.component.LegalLinks, { compact: true });
+  const compactLinks = nodes(compact.element).filter(n => n.props?.accessibilityRole === 'link');
+  assert.equal(compactLinks.length, 3, 'compact Settings rows retain all legal links');
+  assert.deepEqual(compactLinks.map(n => n.props.accessibilityLabel), Array.from(p.legal.LEGAL_LINKS, l => l.label));
+  for (const n of compactLinks) n.props.onPress();
+  assert.deepEqual(p.calls.filter(c => c[0] === 'link').slice(-3).map(c => c[1]), Array.from(p.legal.LEGAL_LINKS, l => l.url));
   const inline = HookRuntime.render(p.component.LegalLinks, { inline: true });
   const inlineNodes = nodes(inline.element);
   assert.equal(inlineNodes.flatMap(n => [n.props?.children].flat(Infinity)
@@ -122,7 +130,7 @@ test('unchecked dialog blocks continuation, check enables it, busy and new promp
   assert.deepEqual(p.calls.filter(c => c[0] === 'link').slice(-3).map(c => c[1]),
     [p.legal.LEGAL_LINKS[0].url, p.legal.LEGAL_LINKS[2].url, p.legal.LEGAL_LINKS[1].url]);
   assert.equal(checkbox().props.accessibilityState.checked, false);
-  root.unmount(); links.unmount(); inline.unmount(); p.root.unmount();
+  root.unmount(); links.unmount(); compact.unmount(); inline.unmount(); p.root.unmount();
 });
 for (const provider of ['Google', 'Apple']) {
   test(`${provider}: cancelling the provider never opens review or records acceptance`, async () => {

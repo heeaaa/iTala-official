@@ -5,6 +5,8 @@ import * as Linking from 'expo-linking';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { getSupabase, SYNC_ENABLED } from '../sync/supabase';
 import { ensureGuestSession } from './guestSession';
+import { clearAccountRosterDrafts } from './rosterDraft';
+import { clearRecSetup } from '../sync/recSetup';
 import {
   DELETE_ACCOUNT_FUNCTION, DELETE_ACCOUNT_TIMEOUT_MS, deleteAppleAccount,
   hasAppleIdentity, requestAppleAuthorizationCode,
@@ -269,12 +271,19 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   const legalResolve = useRef<((accepted: boolean) => void) | null>(null);
   const dismissed = useRef<(() => void) | null>(null);
   const legalSubmitting = useRef(false);
-  const [errors, setErrors] = useState<AuthErrors>({});
-
-  const setError = useCallback((scope: AuthScope, message: string | null) =>
-    setErrors(prev => setScopedError(prev, scope, message)), []);
-  const errorFor = (scope: AuthScope): string | null => errorForScope(errors, scope);
-  const clearError = (scope?: AuthScope) => setErrors(prev => clearScopedError(prev, scope));
+  const [, setErrors] = useState<AuthErrors>({});
+  // Async event handlers retain the errorFor function from their initial render.
+  // Keep its reads current even before React renders the new error state.
+  const errorsRef = useRef<AuthErrors>({});
+  const setError = useCallback((scope: AuthScope, message: string | null) => {
+    errorsRef.current = setScopedError(errorsRef.current, scope, message);
+    setErrors(errorsRef.current);
+  }, []);
+  const errorFor = (scope: AuthScope): string | null => errorForScope(errorsRef.current, scope);
+  const clearError = (scope?: AuthScope) => {
+    errorsRef.current = clearScopedError(errorsRef.current, scope);
+    setErrors(errorsRef.current);
+  };
   const [appleAvailable, setAppleAvailable] = useState(false);
   const [memberships, setMemberships] = useState<Record<string, 'owner' | 'scorekeeper'>>({});
 
@@ -644,6 +653,10 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     if (userId) {
       try { await forgetLegalReceipt(userId); }
       catch { warn('[auth] Could not remove the deleted account legal receipt cache.'); }
+      try { await clearAccountRosterDrafts(userId); }
+      catch { warn('[auth] Could not remove the deleted account roster drafts.'); }
+      try { await clearRecSetup(userId); }
+      catch { warn('[auth] Could not remove the deleted account drop-in setup.'); }
     }
     // scope 'local' avoids a doomed round-trip to the logout endpoint for a
     // user that no longer exists.

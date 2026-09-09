@@ -302,7 +302,7 @@ test('an unusable private key fails as configuration and never reaches Apple', a
   const server = fakeApple();
   const result = await apple.revokeAppleAuthorization({
     authorizationCode: AUTH_CODE,
-    expectedAppleSubject: APPLE_SUB,
+    expectedAppleSubjects: [APPLE_SUB],
     config: await appleConfig({ privateKeyPem: '-----BEGIN PRIVATE KEY-----\nbm90LWEta2V5\n-----END PRIVATE KEY-----' }),
     deps: { fetch: server.fetch },
   });
@@ -319,7 +319,7 @@ test('revocation exchanges the code, then revokes the REFRESH token', async () =
   const config = await appleConfig();
   const result = await apple.revokeAppleAuthorization({
     authorizationCode: AUTH_CODE,
-    expectedAppleSubject: APPLE_SUB, config, deps: { fetch: server.fetch },
+    expectedAppleSubjects: [APPLE_SUB], config, deps: { fetch: server.fetch },
   });
   assert.deepEqual(result, { ok: true, tokenType: 'refresh_token' });
   assert.deepEqual(server.requests.map(r => r.url), [TOKEN_URL, REVOKE_URL], 'exchange first, then revoke');
@@ -353,7 +353,7 @@ test('no refresh token is a refusal, NOT a fallback to the access token', async 
   const server = fakeApple({ tokens: appleTokens({ refresh_token: undefined }) });
   const result = await apple.revokeAppleAuthorization({
     authorizationCode: AUTH_CODE,
-    expectedAppleSubject: APPLE_SUB, config: await appleConfig(), deps: { fetch: server.fetch },
+    expectedAppleSubjects: [APPLE_SUB], config: await appleConfig(), deps: { fetch: server.fetch },
   });
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'revocation_rejected');
@@ -374,7 +374,7 @@ test('a code for a different Apple ID revokes nothing and is refused', async () 
   const server = fakeApple();
   const result = await apple.revokeAppleAuthorization({
     authorizationCode: AUTH_CODE,
-    expectedAppleSubject: OTHER_APPLE_SUB, // the account belongs to somebody else
+    expectedAppleSubjects: [OTHER_APPLE_SUB], // the account belongs to somebody else
     config: await appleConfig(),
     deps: { fetch: server.fetch },
   });
@@ -395,7 +395,7 @@ test('an id_token that is missing, unreadable or for another client is refused',
   ]) {
     const server = fakeApple({ tokens });
     const result = await apple.revokeAppleAuthorization({
-      authorizationCode: AUTH_CODE, expectedAppleSubject: APPLE_SUB,
+      authorizationCode: AUTH_CODE, expectedAppleSubjects: [APPLE_SUB],
       config: await appleConfig(), deps: { fetch: server.fetch },
     });
     assert.equal(result.ok, false, label);
@@ -407,7 +407,7 @@ test('an id_token that is missing, unreadable or for another client is refused',
 test('an account with no known Apple subject is refused before any network call', async () => {
   const server = fakeApple();
   const result = await apple.revokeAppleAuthorization({
-    authorizationCode: AUTH_CODE, expectedAppleSubject: '  ',
+    authorizationCode: AUTH_CODE, expectedAppleSubjects: ['  '],
     config: await appleConfig(), deps: { fetch: server.fetch },
   });
   assert.equal(result.ok, false);
@@ -420,7 +420,7 @@ test('a rejected authorization code stops before revoke, and reports Apple\'s sl
   const server = fakeApple({ tokenStatus: 400, tokenError: 'invalid_grant' });
   const result = await apple.revokeAppleAuthorization({
     authorizationCode: AUTH_CODE,
-    expectedAppleSubject: APPLE_SUB, config: await appleConfig(), deps: { fetch: server.fetch },
+    expectedAppleSubjects: [APPLE_SUB], config: await appleConfig(), deps: { fetch: server.fetch },
   });
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'authorization_rejected');
@@ -432,7 +432,7 @@ test('a rejected revocation is reported as such, not as success', async () => {
   const server = fakeApple({ revokeStatus: 400, revokeError: 'invalid_client' });
   const result = await apple.revokeAppleAuthorization({
     authorizationCode: AUTH_CODE,
-    expectedAppleSubject: APPLE_SUB, config: await appleConfig(), deps: { fetch: server.fetch },
+    expectedAppleSubjects: [APPLE_SUB], config: await appleConfig(), deps: { fetch: server.fetch },
   });
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'revocation_rejected');
@@ -448,7 +448,7 @@ test('transport failures and unreadable answers are unreachable, never success',
     ['token endpoint returns no token', { tokens: {} }],
   ]) {
     const server = fakeApple(options);
-    const result = await apple.revokeAppleAuthorization({ authorizationCode: AUTH_CODE, expectedAppleSubject: APPLE_SUB, config, deps: { fetch: server.fetch } });
+    const result = await apple.revokeAppleAuthorization({ authorizationCode: AUTH_CODE, expectedAppleSubjects: [APPLE_SUB], config, deps: { fetch: server.fetch } });
     assert.equal(result.ok, false, label);
     assert.equal(result.reason, 'unreachable', label);
   }
@@ -458,7 +458,7 @@ test('an empty authorization code is refused without touching the network', asyn
   const server = fakeApple();
   const result = await apple.revokeAppleAuthorization({
     authorizationCode: '   ',
-    expectedAppleSubject: APPLE_SUB, config: await appleConfig(), deps: { fetch: server.fetch },
+    expectedAppleSubjects: [APPLE_SUB], config: await appleConfig(), deps: { fetch: server.fetch },
   });
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'authorization_rejected');
@@ -473,7 +473,7 @@ test('no failure detail ever carries a token or an authorization code', async ()
     { revokeThrows: 'boom' }, { tokens: {} }, { tokenUnreadable: true },
   ]) {
     const server = fakeApple(options);
-    const result = await apple.revokeAppleAuthorization({ authorizationCode: AUTH_CODE, expectedAppleSubject: APPLE_SUB, config, deps: { fetch: server.fetch } });
+    const result = await apple.revokeAppleAuthorization({ authorizationCode: AUTH_CODE, expectedAppleSubjects: [APPLE_SUB], config, deps: { fetch: server.fetch } });
     surfaces.push(result.detail ?? '');
   }
   const text = leakSurface(surfaces);
@@ -562,6 +562,45 @@ test('the handler binds the revocation to the account\'s own Apple identity', as
     'and this account keeps its own, un-revoked, so it must not be deleted');
 });
 
+test('multiple linked Apple identities accept either subject regardless of order', async () => {
+  for (const subjects of [[APPLE_SUB, OTHER_APPLE_SUB], [OTHER_APPLE_SUB, APPLE_SUB]]) {
+    for (const sub of subjects) {
+      const backend = fakeBackend({
+        user: { identities: [
+          { provider: 'google', id: 'google-sub' },
+          ...subjects.map(id => ({ provider: 'apple', id, identity_data: { sub: id } })),
+        ] },
+        tokens: appleTokens({ id_token: idToken({ sub, aud: 'com.bpbl.itala' }) }),
+      });
+      assert.equal((await callHandler(backend)).status, 200);
+      assert.deepEqual(backend.appleRequests.map(r => r.url), [TOKEN_URL, REVOKE_URL]);
+      assert.ok(backend.requests.findIndex(r => r.url === REVOKE_URL)
+        < backend.requests.findIndex(r => r.url.includes('delete_own_account')));
+    }
+  }
+});
+
+test('multiple Apple identities do not permit an unrelated subject or wrong audience', async () => {
+  for (const claims of [
+    { sub: 'unlinked-sub', aud: 'com.bpbl.itala' },
+    { sub: OTHER_APPLE_SUB, aud: 'com.other.app' },
+  ]) {
+    const backend = fakeBackend({
+      user: { identities: [
+        { provider: 'apple', id: APPLE_SUB },
+        { provider: 'apple', identity_data: { sub: OTHER_APPLE_SUB } },
+        { provider: 'google', id: 'unlinked-sub' },
+      ] },
+      tokens: appleTokens({ id_token: idToken(claims) }),
+    });
+    const answer = await callHandler(backend);
+    assert.equal(answer.status, 409);
+    assert.equal(answer.body.error, 'apple_account_mismatch');
+    assert.deepEqual(backend.appleRequests.map(r => r.url), [TOKEN_URL]);
+    assert.ok(!backend.requests.some(r => r.url.includes('delete_own_account')));
+  }
+});
+
 test('an Apple account whose subject cannot be read is refused, not deleted', async () => {
   // `app_metadata` says apple but no identity row carries a subject, so there
   // is nothing to bind the revocation to. Refusing is the only safe answer.
@@ -613,6 +652,7 @@ test('an Apple identity is recognised however GoTrue spells it', async () => {
   for (const user of [
     { identities: [{ provider: 'apple', id: APPLE_SUB }], app_metadata: null },
     { identities: [{ provider: 'apple', identity_data: { sub: APPLE_SUB } }], app_metadata: null },
+    { identities: [{ provider: 'apple' }, { provider: 'apple', id: 'row-id', identity_data: { sub: APPLE_SUB } }] },
     { identities: [null, { provider: 'google', id: 'g' }, { provider: 'apple', id: APPLE_SUB }] },
   ]) {
     const backend = fakeBackend({ user });
@@ -1057,6 +1097,8 @@ function providerHarness(options = {}) {
     'expo-apple-authentication': { isAvailableAsync: async () => true, AppleAuthenticationScope: {}, signInAsync: async () => ({}) },
     '../sync/supabase': { SYNC_ENABLED: true, getSupabase: () => sb },
     './guestSession': load('src/store/guestSession.ts', {}),
+    './rosterDraft': { clearAccountRosterDrafts: async actor => { calls.push(['clearRosterDrafts', actor]); } },
+    '../sync/recSetup': { clearRecSetup: async actor => { calls.push(['clearRecSetup', actor]); } },
     '../lib/appleAccountDeletion': appleClient,
     '../lib/log': { devLog() {}, warn() {} },
     '../components/LegalAcknowledgement': component, '../lib/legal': legal,
@@ -1084,6 +1126,8 @@ test('an Apple account is deleted through the revoking function, never the bare 
   assert.equal(p.ctx.user, null);
   assert.equal(p.ctx.userId, 'guest', 'the device returns to guest browsing');
   assert.equal(p.disk.size, 0, 'the deleted account keeps no legal receipt cache');
+  assert.equal(p.count('clearRosterDrafts'), 1, 'successful deletion removes local import drafts');
+  assert.equal(p.count('clearRecSetup'), 1, 'successful deletion removes local drop-in setup');
   p.root.unmount();
 });
 
@@ -1100,6 +1144,8 @@ test('a refused revocation leaves the account alone and says so', async () => {
   assert.equal(p.count('delete_own_account'), 0, 'no revocation, no deletion');
   assert.match(p.ctx.errorFor('account'), /nothing was deleted/i);
   assert.equal(p.ctx.role, 'user', 'the account is still usable');
+  assert.equal(p.count('clearRosterDrafts'), 0, 'refused deletion preserves import drafts');
+  assert.equal(p.count('clearRecSetup'), 0, 'refused deletion preserves drop-in setup');
   assert.equal(p.ctx.authBusy, false);
   p.root.unmount();
 });
@@ -1189,10 +1235,15 @@ test('a lost database response is reconciled through the handler, client and pro
 });
 
 test('Settings stays silent when Apple confirmation is cancelled and still reports other outcomes', async () => {
+  const httpError = slug => ({
+    message: 'Edge Function returned a non-2xx status code',
+    context: { json: async () => ({ error: slug }) },
+  });
   for (const scenario of [
     { options: { cancelSheet: true }, title: null },
     { options: {}, title: 'Account deleted' },
     { options: { getUserError: { message: 'Network request failed' } }, title: 'Could not delete account' },
+    { options: { functionAnswer: { data: null, error: httpError('apple_account_mismatch') } }, title: 'Could not delete account' },
   ]) {
     const p = providerHarness(scenario.options);
     await p.settle();
@@ -1223,6 +1274,10 @@ test('Settings stays silent when Apple confirmation is cancelled and still repor
     await p.settle();
     root.flush();
     assert.deepEqual(alerts.map(alert => alert[0]), scenario.title ? [scenario.title] : []);
+    if (scenario.title === 'Could not delete account') {
+      assert.equal(alerts[0][1], p.ctx.errorFor('account'));
+      assert.notEqual(alerts[0][1], 'Something went wrong. Please try again.');
+    }
     if (!scenario.title) {
       assert.equal(p.count('invoke'), 0);
       assert.equal(findDelete(root.element).props.disabled, false, 'cancellation releases the busy state');

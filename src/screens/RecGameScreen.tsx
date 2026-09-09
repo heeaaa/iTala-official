@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
-import { View, ScrollView, TextInput, Pressable } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, ScrollView, TextInput, Pressable, Alert } from 'react-native';
 import { Screen, Txt, Card, Button, Field, Toggle, GoogleButton, AppleButton } from '../components/ui';
-import { useStore } from '../store/StoreProvider';
+import { reducer, useStore } from '../store/StoreProvider';
+import { clearRecSetup, loadRecSetup, readRecSetup, RecSetupDraft, saveRecSetup } from '../sync/recSetup';
+import { getSupabase } from '../sync/supabase';
 import { useAdmin } from '../store/AdminProvider';
 import { colors, space, radius, font, teamColors } from '../theme';
 import { uid } from '../lib/format';
@@ -17,6 +19,11 @@ export function findRecLeagueId(leagues: { id: string; kind?: string }[]): strin
 interface TeamDraft { name: string; color: string; players: { id: string; name: string; num: string }[]; }
 
 export default function RecGameScreen({ navigation }: ScreenProps<'RecGame'>) {
+  const { userId } = useAdmin();
+  return <RecGameEditor key={userId ?? 'local'} navigation={navigation} />;
+}
+
+function RecGameEditor({ navigation }: Pick<ScreenProps<'RecGame'>, 'navigation'>) {
   const { state, dispatch, synced } = useStore();
   const { role, userId, isOwner, signInWithGoogle, appleAvailable, signInWithApple, authBusy, errorFor, reloadMemberships } = useAdmin();
   const [location, setLocation] = useState('');
@@ -30,6 +37,66 @@ export default function RecGameScreen({ navigation }: ScreenProps<'RecGame'>) {
   ]);
   const [draftName, setDraftName] = useState<[string, string]>(['', '']);
   const [draftNum, setDraftNum] = useState<[string, string]>(['', '']);
+  const [pending, setPending] = useState<RecSetupDraft | null>(null);
+  const [loaded, setLoaded] = useState(!synced);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const inFlight = useRef(false), mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    if (synced && userId) void loadRecSetup(userId).then(draft => {
+      if (mounted.current) { setPending(draft); setLoaded(true); }
+    }).catch(() => { if (mounted.current) setMessage('The saved setup could not be loaded. Close this screen and try again.'); });
+    return () => { mounted.current = false; };
+  }, [synced, userId]);
+
+  const submit = async (draft: RecSetupDraft) => {
+    if (inFlight.current) return;
+    inFlight.current = true; setSaving(true); setPending(draft); setMessage(null);
+    try {
+      const sb = getSupabase();
+      if (!sb || !await saveRecSetup(sb, draft)) {
+        if (mounted.current) setMessage('We could not confirm the game was saved. Your setup is kept on this device. Check your connection and retry.');
+        return;
+      }
+      if (!mounted.current) return;
+      const bundle = await readRecSetup(sb, draft);
+      if (!mounted.current) return;
+      if (!bundle) { setMessage('The game was saved, but its complete teams and players could not be loaded yet. Retry to load it safely.'); return; }
+      dispatch({ t: 'REC_SETUP_CONFIRMED', bundle });
+      if (!draft.bundle.isShared) void reloadMemberships();
+      await clearRecSetup(draft.actorId, draft.bundle.games[0].id);
+      if (mounted.current) {
+        const game = bundle.games[0];
+        navigation.replace(game.status === 'final' ? 'FinalScore'
+          : game.homeOnCourt?.length || game.awayOnCourt?.length || bundle.events.length ? 'LiveGame' : 'SelectLineup',
+        { leagueId: bundle.id, gameId: game.id });
+      }
+    } catch {
+      if (mounted.current) setMessage('Setup could not finish. Keep this screen open, check your connection and device storage, then retry.');
+    } finally { inFlight.current = false; if (mounted.current) setSaving(false); }
+  };
+
+  const discard = (draft: RecSetupDraft) => {
+    if (inFlight.current) return;
+    Alert.alert('Discard this setup draft?',
+      'This removes only the draft on this device. The game may already have been saved or may still finish saving. It will not be deleted. Check Games before creating it again.', [
+        { text: 'Keep draft', style: 'cancel' },
+        { text: 'Discard draft', style: 'destructive', onPress: async () => {
+          if (!mounted.current || inFlight.current) return;
+          inFlight.current = true; setSaving(true);
+          try {
+            await clearRecSetup(draft.actorId, draft.bundle.games[0].id);
+            if (!mounted.current) return;
+            setPending(null); setMessage(null); setLocation('');
+            setTeams([{ name: '', color: teamColors[0], players: [] }, { name: '', color: teamColors[1], players: [] }]);
+            setDraftName(['', '']); setDraftNum(['', '']);
+          } catch {
+            if (mounted.current) setMessage('The draft could not be removed. Check device storage and try again.');
+          } finally { inFlight.current = false; if (mounted.current) setSaving(false); }
+        } },
+      ]);
+  };
 
   const addPlayer = (ti: 0 | 1) => {
     const nm = draftName[ti].trim();
@@ -70,7 +137,7 @@ export default function RecGameScreen({ navigation }: ScreenProps<'RecGame'>) {
     teams[0].players.length > 0 && teams[1].players.length > 0;
 
   const start = () => {
-    if (!ready) return;
+    if (!ready || inFlight.current) return;
 
     // Resolve the target container. Public → the single shared community space;
     // private → this user's personal space. We DON'T dispatch ADD_LEAGUE
@@ -94,7 +161,7 @@ export default function RecGameScreen({ navigation }: ScreenProps<'RecGame'>) {
     // entities — no "guess the last two teams" (which broke because pulls sort
     // teams alphabetically, losing the just-added players).
     const gameId = uid();
-    dispatch({
+    const action = {
       t: 'REC_SETUP_GAME',
       leagueId: recId,
       gameId,
@@ -106,7 +173,18 @@ export default function RecGameScreen({ navigation }: ScreenProps<'RecGame'>) {
         { id: uid(), name: teams[0].name.trim(), color: teams[0].color, players: teams[0].players.map(p => ({ id: p.id, name: p.name, number: p.num || undefined })) },
         { id: uid(), name: teams[1].name.trim(), color: teams[1].color, players: teams[1].players.map(p => ({ id: p.id, name: p.name, number: p.num || undefined })) },
       ],
-    });
+    } as const;
+
+    if (synced) {
+      if (!userId) return;
+      const existing = state.leagues.find(l => l.id === recId);
+      const bundle = reducer({ leagues: [] }, { ...action, teams: [...action.teams],
+        ensureLeague: { name: existing?.name ?? ensureLeague?.name ?? PRIVATE_REC_NAME, isShared: makePublic },
+      }).leagues[0];
+      void submit({ actorId: userId, bundle });
+      return;
+    }
+    dispatch({ ...action, teams: [...action.teams] });
 
     // The server records the creator as owner of a private space. Pull that
     // membership in, or isOwner() stays false and Home hides the space.
@@ -138,6 +216,20 @@ export default function RecGameScreen({ navigation }: ScreenProps<'RecGame'>) {
       </Screen>
     );
   }
+
+  if (!loaded) return <Screen><Txt k="body">{message ?? 'Loading saved setup...'}</Txt></Screen>;
+  if (pending) return (
+    <Screen scroll>
+      <Txt k="h1">{saving ? 'Saving drop-in game...' : 'Resume drop-in game'}</Txt>
+      <Txt k="body" style={{ marginVertical: space(4) }}>{message ?? 'Waiting for confirmation before choosing lineups.'}</Txt>
+      {pending.bundle.teams.map(team => <Card key={team.id} style={{ marginBottom: space(3) }}>
+        <Txt k="h2">{team.name}</Txt>
+        {team.playerIds.map(id => <Txt k="body" key={id}>{pending.bundle.players.find(p => p.id === id)?.name}</Txt>)}
+      </Card>)}
+      <Button title={saving ? 'Saving...' : 'Retry setup'} disabled={saving} onPress={() => { void submit(pending); }} />
+      <Button title="Discard draft" kind="ghost" disabled={saving} style={{ marginTop: space(3) }} onPress={() => discard(pending)} />
+    </Screen>
+  );
 
   return (
     <Screen>

@@ -119,7 +119,7 @@ export function MiniWordmark({ size = 30 }: { size?: number }) {
   );
 }
 
-export function Screen({ children, scroll, inset, ...rest }: { children: React.ReactNode; scroll?: boolean; inset?: boolean } & ScrollViewProps) {
+export function Screen({ children, scroll, inset, keyboardVerticalOffset = 0, ...rest }: { children: React.ReactNode; scroll?: boolean; inset?: boolean; keyboardVerticalOffset?: number } & ScrollViewProps) {
   // `inset` adds the top safe-area padding. Only screens WITHOUT a native
   // navigation header need it (currently just Home) — the nav header already
   // covers the notch, so adding it there doubled the top spacing.
@@ -127,6 +127,7 @@ export function Screen({ children, scroll, inset, ...rest }: { children: React.R
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }} edges={inset ? ['top'] : []}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
+        keyboardVerticalOffset={keyboardVerticalOffset}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         {scroll ? (
           <ScrollView
@@ -969,7 +970,7 @@ export function ProfileSheet({ visible, onClose, user, role, busy, error, onGoog
             <View style={{ marginBottom: space(4) }}>
               <Txt k="h2">You're browsing as a guest</Txt>
               <Txt k="body" color={colors.muted} style={{ marginTop: 4 }}>
-                Sign in with Google to share stat cards. Admins are recognized automatically.
+                Sign in to share stat cards. Admins are recognized automatically.
               </Txt>
             </View>
             <GoogleButton onPress={onGoogle} busy={busy} />

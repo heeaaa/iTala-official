@@ -1,25 +1,118 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { useHeaderHeight } from '@react-navigation/elements';
 import { View, ScrollView, TextInput, Pressable, Alert } from 'react-native';
 import { Screen, Txt, Button, Card } from '../components/ui';
 import { useStore, useLeague } from '../store/StoreProvider';
-import { colors, space, radius, font } from '../theme';
+import { colors, space, radius, font, teamColors } from '../theme';
 import { ScreenProps } from '../navigation';
 import { uid } from '../lib/format';
 import { parseRoster, promoteStrayToTeam, ParsedTeam } from '../lib/rosterParse';
+import { useAdmin } from '../store/AdminProvider';
+import { clearRosterDraft, loadRosterDraft, RosterDraft, saveRosterDraft } from '../store/rosterDraft';
+import { getSupabase } from '../sync/supabase';
+import { submitRosterImport, refreshImportedRoster } from '../sync/rosterImport';
 
-// Bulk roster import for a NEW (empty) league. Paste → parse → review/edit →
-// confirm. The parser is conservative: suspicious rows are flagged with an
-// amber marker + one-line reason, never silently guessed. Committing reuses
-// the existing ADD_TEAM / ADD_PLAYER actions with pre-generated ids, so it
-// plugs into sync exactly like manual entry.
 export default function BulkImportScreen({ route, navigation }: ScreenProps<'BulkImport'>) {
+  const { synced } = useStore();
+  const { user } = useAdmin();
+  const actorId = synced ? user?.id : 'local';
+  if (!actorId) return <Screen><Txt k="body">Sign in to resume your roster import.</Txt></Screen>;
+  // Changing account or league unmounts all editor state and pending callbacks.
+  return <RosterImportEditor key={`${actorId}:${route.params.leagueId}`} actorId={actorId} route={route} navigation={navigation} />;
+}
+
+function RosterImportEditor({ route, navigation, actorId }: ScreenProps<'BulkImport'> & { actorId: string }) {
+  const headerHeight = useHeaderHeight();
   const { leagueId } = route.params;
   const league = useLeague(leagueId);
-  const { dispatch } = useStore();
-  const [text, setText] = useState('');
-  const [teams, setTeams] = useState<ParsedTeam[] | null>(null); // null = paste phase
+  const { dispatch, synced, loadLeagueDetail } = useStore();
+  const [draft, setDraft] = useState<RosterDraft>({ version: 1, actorId, leagueId, text: '', teams: null, operation: null });
+  const draftRef = useRef(draft);
+  const [ready, setReady] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const submitting = useRef(false);
+  const mounted = useRef(true);
+  const text = draft.text, teams = draft.teams;
+
+  useEffect(() => {
+    mounted.current = true;
+    if (!synced) { setReady(true); return () => { mounted.current = false; }; }
+    void loadRosterDraft(actorId, leagueId).then(saved => {
+      if (!mounted.current) return;
+      if (saved) { draftRef.current = saved; setDraft(saved); }
+      setReady(true);
+    }).catch(() => {
+      if (mounted.current) setMessage('The saved draft could not be loaded. Close this screen and try again.');
+    });
+    return () => { mounted.current = false; };
+  }, [actorId, leagueId, synced]);
+
+  const updateDraft = (next: RosterDraft) => {
+    draftRef.current = next;
+    setDraft(next);
+    if (!synced) return;
+    void saveRosterDraft(next).catch(() => {
+      if (mounted.current) setMessage('Changes could not be saved on this device. Keep this screen open and free some storage.');
+    });
+  };
+  const setText = (value: string) => { if (!submitting.current && !draftRef.current.operation) updateDraft({ ...draftRef.current, text: value }); };
+  const setTeams: React.Dispatch<React.SetStateAction<ParsedTeam[] | null>> = value => {
+    if (submitting.current || draftRef.current.operation) return;
+    updateDraft({ ...draftRef.current, teams: typeof value === 'function' ? value(draftRef.current.teams) : value });
+  };
+
+  const submit = async (pending: RosterDraft) => {
+    if (submitting.current) return;
+    submitting.current = true;
+    setBusy(true);
+    setMessage(null);
+    draftRef.current = pending;
+    setDraft(pending);
+    try {
+      const sb = getSupabase();
+      if (!sb) throw new Error('Sync unavailable');
+      // The service persists this operation before sending any request.
+      const result = await submitRosterImport(sb, pending);
+      if (!mounted.current) return;
+      if (!result.saved) { setMessage(result.message); return; }
+      if (!await refreshImportedRoster(() => loadLeagueDetail(leagueId))) {
+        if (!mounted.current) return;
+        setMessage('Your roster is saved. We could not refresh this league yet. Retry to load it; the import will not be repeated.');
+        return;
+      }
+      if (!mounted.current) return;
+      await clearRosterDraft(actorId, leagueId);
+      if (mounted.current) navigation.goBack();
+    } catch {
+      if (mounted.current) setMessage('The import could not finish. Your draft is kept here. Check your connection and device storage, then retry.');
+    } finally {
+      submitting.current = false;
+      if (mounted.current) setBusy(false);
+    }
+  };
 
   if (!league) return <Screen><Txt k="body">League not found.</Txt></Screen>;
+  if (!ready) return <Screen><Txt k="body">{message ?? 'Loading your import draft…'}</Txt></Screen>;
+  if (draft.operation) return (
+    <Screen scroll>
+      <Txt k="h1">{busy ? 'Saving roster…' : 'Resume roster import'}</Txt>
+      <Txt k="body" style={{ marginTop: space(3) }}>
+        {draft.operation.teams.length} teams · {draft.operation.teams.reduce((n, t) => n + t.players.length, 0)} players
+      </Txt>
+      <Txt k="body" style={{ marginVertical: space(3) }}>
+        {message ?? (busy ? 'Waiting for confirmation. Your draft is kept on this device.' : 'Your draft is kept on this device. Retry checks the earlier import before completing it safely.')}
+      </Txt>
+      {draft.operation.teams.map(team => (
+        <Card key={team.id} style={{ marginBottom: space(3) }}>
+          <Txt k="h2">{team.name}</Txt>
+          {team.players.map(player => <Txt key={player.id} k="body">{player.number ? `#${player.number} · ` : ''}{player.name}</Txt>)}
+        </Card>
+      ))}
+      <Button title={busy ? 'Saving…' : 'Retry import'} disabled={busy} onPress={() => { void submit(draftRef.current); }} />
+      {!busy && <Button title="Back to league" kind="ghost" style={{ marginTop: space(2) }} onPress={() => navigation.goBack()} />}
+    </Screen>
+  );
 
   const playerCount = (ts: ParsedTeam[]) => ts.reduce((n, t) => n + t.players.length, 0);
 
@@ -55,23 +148,25 @@ export default function BulkImportScreen({ route, navigation }: ScreenProps<'Bul
     Alert.alert('Create roster?', `Create ${n} team${n === 1 ? '' : 's'} and ${m} player${m === 1 ? '' : 's'} in ${league.name}?`, [
       { text: 'Cancel', style: 'cancel' },
       { text: `Create`, onPress: () => {
-        // One atomic dispatch — team+player ids are pre-generated here so the
-        // reducer and the server insert reference the exact same rows. This
-        // is deliberately NOT a loop of per-team/per-player dispatches: that
-        // fires one independent network write per action with no ordering
-        // guarantee, and a player's write can reach the server before its
-        // own team's write lands, silently dropping players. See
-        // bulk_import_roster in schema.sql.
-        dispatch({
-          t: 'BULK_IMPORT_ROSTER',
-          leagueId,
-          teams: clean.map(t => ({
+        if (!mounted.current || submitting.current || draftRef.current.operation) return;
+        if (!synced) {
+          submitting.current = true;
+          dispatch({ t: 'BULK_IMPORT_ROSTER', leagueId, teams: clean.map(t => ({
+            id: uid(), name: t.name.trim(),
+            players: t.players.map(p => ({ id: uid(), name: p.name.trim(), number: p.number.trim() })),
+          })) });
+          navigation.goBack();
+          return;
+        }
+        void submit({ ...draftRef.current, operation: {
+          id: uid(),
+          teams: clean.map((t, index) => ({
             id: uid(),
             name: t.name.trim(),
-            players: t.players.map(p => ({ id: uid(), name: p.name.trim(), number: p.number.trim() || undefined })),
+            color: teamColors[index % teamColors.length],
+            players: t.players.map(p => ({ id: uid(), name: p.name.trim(), number: p.number.trim() })),
           })),
-        });
-        navigation.goBack();
+        } });
       } },
     ]);
   };
@@ -79,9 +174,10 @@ export default function BulkImportScreen({ route, navigation }: ScreenProps<'Bul
   // ============================== PASTE PHASE ==============================
   if (teams === null) {
     return (
-      <Screen>
-        <ScrollView contentContainerStyle={{ padding: space(4), paddingBottom: space(10) }} keyboardShouldPersistTaps="handled">
+      <Screen keyboardVerticalOffset={headerHeight}>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: space(4), paddingBottom: space(4) }} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
           <Txt k="h1">Bulk import roster</Txt>
+          {message && <Txt k="body" color={colors.red}>{message}</Txt>}
           <Txt k="body" color={colors.muted} style={{ marginTop: 4, marginBottom: space(3), fontSize: 13 }}>
             Paste your teams and players — each team name on its own line, players below it. Numbers can be written any way: "Juan-17", "Juan 22", "#24", "Juan#14". Nicknames inside ( ) are dropped.
           </Txt>
@@ -92,7 +188,9 @@ export default function BulkImportScreen({ route, navigation }: ScreenProps<'Bul
             textAlignVertical="top"
             style={{ minHeight: 280, backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, color: colors.text, padding: 14, fontFamily: font.body, fontSize: 14, lineHeight: 20 }}
           />
-          <Button title="Preview" style={{ marginTop: space(3) }} onPress={() => {
+        </ScrollView>
+        <View style={{ padding: space(4), backgroundColor: colors.bg }}>
+          <Button title="Preview" onPress={() => {
             const parsed = parseRoster(text);
             if (parsed.length === 0 || playerCount(parsed) === 0) {
               Alert.alert('Nothing recognized', 'Could not find any teams or players in that text. Check the format and try again.');
@@ -100,7 +198,7 @@ export default function BulkImportScreen({ route, navigation }: ScreenProps<'Bul
             }
             setTeams(parsed);
           }} />
-        </ScrollView>
+        </View>
       </Screen>
     );
   }
@@ -113,6 +211,7 @@ export default function BulkImportScreen({ route, navigation }: ScreenProps<'Bul
     <Screen>
       <ScrollView contentContainerStyle={{ padding: space(4), paddingBottom: space(12) }} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
         <Txt k="h1">Review roster</Txt>
+        {message && <Txt k="body" color={colors.red}>{message}</Txt>}
         <Txt k="body" color={colors.muted} style={{ marginTop: 4, marginBottom: space(2), fontSize: 13 }}>
           {nTeams} team{nTeams === 1 ? '' : 's'} · {nPlayers} player{nPlayers === 1 ? '' : 's'} — everything is editable. Amber rows need a look before you create.
         </Txt>

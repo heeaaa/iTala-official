@@ -28,10 +28,10 @@ Authorization: Bearer <the caller's own access token>
   1. verify the caller by asking GoTrue (/auth/v1/user), refuse anonymous sessions
   2. refuse an account with no Apple identity  -> 409 no_apple_identity
                                                   (the client then uses the RPC)
-  3. read the Apple `sub` THIS ACCOUNT is linked to from the GoTrue identity
+  3. collect all Apple subjects (`sub`) linked to THIS ACCOUNT from GoTrue identities
      -> 502 apple_identity_unreadable if there isn't one
   4. exchange the authorization code at https://appleid.apple.com/auth/token
-  5. check the returned id_token's `sub` against step 3
+  5. require the returned id_token's `sub` to match any subject from step 3
      -> 409 apple_account_mismatch, revoking nothing
   6. revoke the refresh token at https://appleid.apple.com/auth/revoke
   7. ONLY THEN call delete_own_account, as the caller

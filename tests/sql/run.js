@@ -158,6 +158,8 @@ const SECTIONS = {
     'create or replace function public.bulk_import_roster(p_league_id text, p_teams jsonb)',
     'grant execute on function public.bulk_import_roster(text,jsonb) to authenticated;',
   ),
+  rec_receipts: () => slice('-- BEGIN REC SETUP RECEIPTS', '-- END REC SETUP RECEIPTS'),
+  roster_receipts: () => slice('-- BEGIN ROSTER IMPORT RECEIPTS', '-- END ROSTER IMPORT RECEIPTS'),
 
   // add_player: the late-sub path. The third SECURITY DEFINER RPC that upserts a
   // caller-supplied row id, so it belongs in the same cross-league coverage as
