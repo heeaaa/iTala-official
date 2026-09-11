@@ -2041,6 +2041,78 @@ for (const f of srcFiles) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// CHECK 30 - one scoring rule, three places that state it.
+//
+// Nothing stores a final score, so "what is 3 points" is written out wherever
+// something needs a total: apply() builds the box score the app renders,
+// pointsOfType() drives the per-period line, and event_points() in schema.sql is
+// what public.final_game_scores publishes to anything outside the app.
+//
+// They cannot be collapsed into one - two are TypeScript shipped in the binary
+// and one is SQL running in Postgres - so the only defence against them drifting
+// is to assert they still agree. That matters most for the SQL: a client is
+// corrected by the next release, while a view that quietly calls a three 2
+// points keeps publishing a wrong number that still looks exactly like a score.
+//
+// Deliberately parsed rather than hard-coded. A literal table here would be a
+// FOURTH statement of the rule, free to be wrong in its own way.
+// ---------------------------------------------------------------------------
+{
+  const stats = read('src/lib/stats.ts');
+  const schemaSql = read('supabase/schema.sql');
+
+  // apply(): `case 'fg3_make': line.pts += 3; ...`
+  const applyStart = stats.indexOf('function apply(line: StatLine, type: EventType)');
+  const applyBody = applyStart >= 0 ? stats.slice(applyStart, stats.indexOf('\n}', applyStart)) : '';
+  const fromApply = new Map();
+  for (const m of applyBody.matchAll(/case '(\w+)':[^\n]*?line\.pts \+= (\d+)/g))
+    fromApply.set(m[1], Number(m[2]));
+
+  // pointsOfType(): `if (type === 'fg3_make') return 3;`
+  const potStart = stats.indexOf('export function pointsOfType(');
+  const potBody = potStart >= 0 ? stats.slice(potStart, stats.indexOf('\n}', potStart)) : '';
+  const fromPointsOfType = new Map();
+  for (const m of potBody.matchAll(/type === '(\w+)'\)\s*return (\d+)/g))
+    fromPointsOfType.set(m[1], Number(m[2]));
+
+  // event_points(): `when 'fg3_make' then 3`
+  const epStart = schemaSql.indexOf('create or replace function public.event_points(');
+  const epBody = epStart >= 0 ? schemaSql.slice(epStart, schemaSql.indexOf('$$;', epStart)) : '';
+  const fromSql = new Map();
+  for (const m of epBody.matchAll(/when '(\w+)'\s+then (\d+)/g)) fromSql.set(m[1], Number(m[2]));
+
+  ok('the three scoring rules were all locatable',
+     fromApply.size > 0 && fromPointsOfType.size > 0 && fromSql.size > 0,
+     `apply=${fromApply.size} pointsOfType=${fromPointsOfType.size} event_points=${fromSql.size}`
+       + ' - a zero means this check parsed nothing and is asserting nothing');
+
+  const describe = m => [...m.entries()].sort().map(([k, v]) => `${k}=${v}`).join(' ');
+  ok('pointsOfType() agrees with the box-score rule in apply()',
+     describe(fromApply) === describe(fromPointsOfType),
+     `apply: ${describe(fromApply)} | pointsOfType: ${describe(fromPointsOfType)}`);
+  ok('event_points() in schema.sql agrees with apply() in src/lib/stats.ts',
+     describe(fromApply) === describe(fromSql),
+     `apply: ${describe(fromApply)} | event_points: ${describe(fromSql)}`
+       + ' - final_game_scores would publish a score the app does not show');
+
+  // The view is read-only and additive on purpose: it exists so an app binary
+  // already submitted to review can gain server-side scores with no new build.
+  // Anything that turns it into a write path, or hands it to anon, is a change
+  // of kind and should not slip in unnoticed.
+  ok('final_game_scores is a view, not a stored score column',
+     /create or replace view public\.final_game_scores/.test(schemaSql)
+       && !/alter table public\.games add column if not exists home_pts/.test(schemaSql),
+     'storing the score would make the event log no longer the single source of truth');
+  ok('final_game_scores runs with the caller permissions',
+     /create or replace view public\.final_game_scores[\s\S]{0,600}?with \(security_invoker = on\)/.test(schemaSql),
+     'without security_invoker the view runs as its owner and bypasses row-level security');
+  ok('final_game_scores is not granted to anon',
+     /grant select on public\.final_game_scores to authenticated, service_role;/.test(schemaSql)
+       && !/grant select on public\.final_game_scores[^\n]*anon/.test(schemaSql),
+     'an unauthenticated caller cannot read games or events, and the view must not be the way around it');
+}
+
 console.log('='.repeat(64));
 console.log(`STATIC CHECKS:  ${pass} passed,  ${fail} failed,  ${warn} warnings`);
 if (problems.length) {
