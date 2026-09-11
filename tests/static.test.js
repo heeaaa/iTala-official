@@ -2109,8 +2109,16 @@ for (const f of srcFiles) {
      'without security_invoker the view runs as its owner and bypasses row-level security');
   ok('final_game_scores is not granted to anon',
      /grant select on public\.final_game_scores to authenticated, service_role;/.test(schemaSql)
-       && !/grant select on public\.final_game_scores[^\n]*anon/.test(schemaSql),
+       && !/grant select on public\.final_game_scores[^\n]*to[^\n]*anon/.test(schemaSql),
      'an unauthenticated caller cannot read games or events, and the view must not be the way around it');
+  // Omitting anon from the grant does not withhold it. A Supabase project grants
+  // anon SELECT on new tables through `alter default privileges`, so a view
+  // created by running this file through the SQL editor can arrive with it
+  // anyway - and a throwaway test database, which has no such defaults, would
+  // never see the difference. Only the explicit revoke makes the intent true.
+  ok('final_game_scores explicitly revokes anon',
+     /revoke select on public\.final_game_scores from anon;/.test(schemaSql),
+     'Supabase default privileges would hand anon the grant back');
 }
 
 console.log('='.repeat(64));

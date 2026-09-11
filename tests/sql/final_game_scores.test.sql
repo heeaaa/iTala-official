@@ -126,6 +126,20 @@ begin
                    r.finished_at_ts = to_timestamp(1720003600000 / 1000.0),
                    'finished_at_ts = ' || coalesce(r.finished_at_ts::text,'null')
                      || ' - a seconds/milliseconds mix-up lands this in the year 56000');
+  -- The completeness signals. A game can read final here while an offline
+  -- scorekeeper's last baskets are still replaying from the outbox, so a
+  -- consumer needs something that moves when events are still arriving. Counted
+  -- over EVERY event row of the game, including the third team's, because the
+  -- question is what the server holds, not what the score is.
+  perform t_report('A14 event_count reports every event row the server holds',
+                   r.event_count = 18,
+                   'event_count = ' || coalesce(r.event_count::text,'null') || ', expected 18 - '
+                     || 'a consumer cannot tell a complete game from a half-synced one without it');
+  perform t_report('A15 last_event_at is the newest server insert time',
+                   r.last_event_at is not null
+                     and r.last_event_at = (select max(created_at) from public.events where game_id = 'gFinal'),
+                   'last_event_at = ' || coalesce(r.last_event_at::text,'null')
+                     || ' - a late replayed tap must move this, which is the whole signal');
 end $$;
 
 do $$
@@ -139,6 +153,12 @@ begin
                      || 'drop this game entirely and the scheduler would never learn it finished');
   perform t_report('A10 ...and has no winner', r.winner_team_id is null,
                    'winner_team_id = ' || coalesce(r.winner_team_id,'null'));
+  perform t_report('A10b ...and says plainly that it holds no events',
+                   r.event_count = 0 and r.last_event_at is null,
+                   'event_count = ' || coalesce(r.event_count::text,'null')
+                     || ', last_event_at = ' || coalesce(r.last_event_at::text,'null')
+                     || ' - 0-0 with no signal is indistinguishable from a game whose events '
+                     || 'have not arrived yet');
 
   select * into r from public.final_game_scores where game_id = 'gTie';
   perform t_report('A11 a level score resolves to NO winner, never the home side',
@@ -217,6 +237,31 @@ begin
                    'anon can select the view - an unauthenticated caller cannot read games or '
                      || 'events today, and this must not become the way around that');
 end $$;
+
+-- B5: the case B4 cannot see. A real Supabase project carries `alter default
+-- privileges ... grant all on tables to anon`, so a view created by running
+-- schema.sql through the SQL editor may well arrive WITH anon select, whatever
+-- the grant list says - and this harness database, which has no such default
+-- privileges, would never notice. So hand anon everything a Supabase project
+-- would and check what actually protects the data: security_invoker plus the
+-- read_all_* policies, which give an anon-key caller (auth.uid() null) an empty
+-- result even when every privilege is in place.
+grant usage on schema auth to anon;
+grant select on auth_state to anon;
+grant select on public.leagues, public.teams, public.players, public.games, public.events
+  to anon;
+grant select on public.final_game_scores to anon;
+update auth_state set uid = null, anon = false;
+set role anon;
+select count(*)::text as c from public.final_game_scores \gset granted_anon_
+reset role;
+revoke select on public.final_game_scores from anon;
+update auth_state set uid = '11111111-1111-1111-1111-111111111111', anon = false;
+select t_report('B5 anon reads nothing even when it HAS been granted the view',
+                :'granted_anon_c' = '0',
+                'got ' || :'granted_anon_c' || ' rows - the grant list was the only thing '
+                  || 'protecting these scores, and on a real project Supabase default privileges '
+                  || 'hand anon that grant back');
 
 -- ---------------------------------------------------------------------------
 -- C. Re-running schema.sql is the documented upgrade path (docs/DEPLOYMENT.md),

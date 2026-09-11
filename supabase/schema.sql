@@ -1761,10 +1761,32 @@ grant execute on function public.ping() to anon, authenticated;
 -- implementation is free to disagree with src/lib/stats.ts - quietly, and only
 -- for the events it gets wrong.
 --
--- So the aggregation lives here once, server-side, and every external reader
--- gets the same numbers the app renders.
+-- So the aggregation lives here once, server-side, applying the same rule
+-- src/lib/stats.ts applies to the same rows.
 --
 --   select * from final_game_scores where finished_at > 1757000000000;
+--
+-- WHAT A ROW ACTUALLY PROMISES
+--
+-- "The score of this game according to the events the SERVER currently holds" -
+-- which is not the same sentence as "the score on the scorekeeper's device".
+-- Live scoring deliberately survives a connection loss: a tap that fails to push
+-- is pinned locally and replayed from the outbox later (src/sync/pendingEvents.ts),
+-- while the finish itself is an ordinary games row update. So a game can be
+-- status = 'final' here seconds before the last few baskets arrive, and a reader
+-- that polls the instant finished_at appears can catch a short score with the
+-- wrong winner. It converges on its own, but nothing in a row would tell you
+-- that you were inside that window - hence event_count and last_event_at below.
+-- A consumer that publishes results should lag its poll, or re-read and require
+-- the numbers to be stable, rather than treating the first read as the result.
+--
+-- WHO CAN READ IT
+--
+-- Any session with a real uid, and service_role. NOT the bare anon key: reads
+-- of games and events already require auth.uid() is not null, so a caller
+-- holding only the anon key (as .github/workflows/supabase-keepalive.yml does)
+-- gets zero rows here by design. A scheduler needs either a signed-in session or
+-- the service-role key.
 --
 -- READ-ONLY AND ADDITIVE. No table, column, policy or RPC the shipped app uses
 -- is touched, so an app binary already in review keeps working unchanged and
@@ -1801,7 +1823,7 @@ select
   g.home_team_id                as home_team_id,
   ht.name                       as home_name,
   g.away_team_id                as away_team_id,
-  at.name                       as away_name,
+  aw.name                       as away_name,
   coalesce(s.home_pts, 0)::int  as home_pts,
   coalesce(s.away_pts, 0)::int  as away_pts,
   -- BASKETBALL HAS NO DRAWS, but a level score still reaches here: a game
@@ -1818,32 +1840,53 @@ select
   g.finished_at                 as finished_at,
   -- finished_at is the client's Date.now(), i.e. epoch MILLISECONDS. Offered as
   -- a real timestamp too so a consumer never has to guess the unit.
-  to_timestamp(g.finished_at / 1000.0) as finished_at_ts
+  to_timestamp(g.finished_at / 1000.0) as finished_at_ts,
+  -- Completeness signals, not decoration. See WHAT A ROW ACTUALLY PROMISES
+  -- above: a replayed offline tap is INSERTed late, so last_event_at (the
+  -- server's own clock, not the device's) moves when events are still arriving
+  -- for a game that already reads final. A consumer that wants to be sure it has
+  -- the whole game waits for these two to stop changing before it publishes.
+  coalesce(s.event_count, 0)::int as event_count,
+  s.last_event_at               as last_event_at
 from public.games g
 join public.leagues l on l.id = g.league_id
 -- LEFT joins: games.home_team_id/away_team_id carry no foreign key to teams, so
 -- a game whose team row is gone must still report its score with a null name,
 -- not vanish from the view.
 left join public.teams ht on ht.id = g.home_team_id
-left join public.teams at on at.id = g.away_team_id
+left join public.teams aw on aw.id = g.away_team_id
 left join lateral (
   select
+    -- Credited by EXACT team_id match, which is the rule teamBoxScore() applies
+    -- in src/lib/stats.ts: an event stamped with any other team is credited to
+    -- neither side there, so these filters must not credit it to one here.
     sum(public.event_points(e.type)) filter (where e.team_id = g.home_team_id) as home_pts,
-    sum(public.event_points(e.type)) filter (where e.team_id = g.away_team_id) as away_pts
+    sum(public.event_points(e.type)) filter (where e.team_id = g.away_team_id) as away_pts,
+    -- Deliberately unfiltered: these describe what the server HOLDS for this
+    -- game, which is the question a consumer checking for late arrivals is
+    -- asking. They are not part of the score.
+    count(*)                                                                   as event_count,
+    max(e.created_at)                                                          as last_event_at
   from public.events e
   where e.game_id = g.id
-    -- Only the two sides of THIS game. teamBoxScore() in src/lib/stats.ts sums
-    -- events by exact team_id match, so an event stamped with any other team is
-    -- credited to neither side there and must not be credited to one here.
-    and e.team_id in (g.home_team_id, g.away_team_id)
 ) s on true
 where g.status = 'final';
 
 -- Same audience as the underlying tables: any signed-in session (RLS then
 -- decides which rows), plus service_role for a trusted server-side scheduler.
--- Deliberately NOT granted to anon - an unauthenticated caller cannot read
--- games or events today, and a view must not become the way around that.
 grant select on public.final_game_scores to authenticated, service_role;
+
+-- The REVOKE is the load-bearing half, not the grant list. A Supabase project
+-- carries `alter default privileges ... grant all on tables to anon,
+-- authenticated, service_role`, so a view created by running this file through
+-- the SQL editor can pick up anon SELECT on its own - omitting anon above does
+-- not withhold it. Saying so explicitly is what makes the intent true rather
+-- than merely stated.
+--
+-- Even so, the real protection is `security_invoker = on` plus the read_all_*
+-- policies: they are why an anon-key caller reads zero rows through this view
+-- whatever the grants say. This revoke is defence in depth on top of that.
+revoke select on public.final_game_scores from anon;
 
 -- A scheduler polls "finals since the last run". Without this it scans every
 -- game row to find them. Partial, so it indexes only the final games and costs
