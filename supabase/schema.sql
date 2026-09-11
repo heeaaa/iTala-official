@@ -1741,3 +1741,157 @@ as $$
 $$;
 
 grant execute on function public.ping() to anon, authenticated;
+
+-- =============================================================================
+-- 8) FINAL SCORES - the one server-side answer to "what did this game end?"
+-- =============================================================================
+-- BEGIN FINAL GAME SCORES
+--
+-- WHY THIS EXISTS
+--
+-- Nothing stores a final score. There is no score column on games and no
+-- player_game_stats table: box scores, standings and leaders are all derived
+-- from the public.events log, one row per stat tap (docs/ARCHITECTURE.md, and
+-- src/lib/stats.ts). That is deliberate - editing or deleting one event has to
+-- correct every dependent view, which only works if nothing is stored twice.
+--
+-- The cost lands on anything OUTSIDE the app that wants a score: the keep-alive
+-- scheduler, a results feed, a share bot. Without this view each of them must
+-- pull the whole event log and re-implement the scoring rules, and the second
+-- implementation is free to disagree with src/lib/stats.ts - quietly, and only
+-- for the events it gets wrong.
+--
+-- So the aggregation lives here once, server-side, applying the same rule
+-- src/lib/stats.ts applies to the same rows.
+--
+--   select * from final_game_scores where finished_at > 1757000000000;
+--
+-- WHAT A ROW ACTUALLY PROMISES
+--
+-- "The score of this game according to the events the SERVER currently holds" -
+-- which is not the same sentence as "the score on the scorekeeper's device".
+-- Live scoring deliberately survives a connection loss: a tap that fails to push
+-- is pinned locally and replayed from the outbox later (src/sync/pendingEvents.ts),
+-- while the finish itself is an ordinary games row update. So a game can be
+-- status = 'final' here seconds before the last few baskets arrive, and a reader
+-- that polls the instant finished_at appears can catch a short score with the
+-- wrong winner. It converges on its own, but nothing in a row would tell you
+-- that you were inside that window - hence event_count and last_event_at below.
+-- A consumer that publishes results should lag its poll, or re-read and require
+-- the numbers to be stable, rather than treating the first read as the result.
+--
+-- WHO CAN READ IT
+--
+-- Any session with a real uid, and service_role. NOT the bare anon key: reads
+-- of games and events already require auth.uid() is not null, so a caller
+-- holding only the anon key (as .github/workflows/supabase-keepalive.yml does)
+-- gets zero rows here by design. A scheduler needs either a signed-in session or
+-- the service-role key.
+--
+-- READ-ONLY AND ADDITIVE. No table, column, policy or RPC the shipped app uses
+-- is touched, so an app binary already in review keeps working unchanged and
+-- needs no update to benefit from this.
+
+-- The scoring rule, in one place. Mirrors pointsOfType() in src/lib/stats.ts;
+-- tests/static.test.js asserts the two agree, because a silent disagreement is
+-- exactly the drift this view exists to prevent.
+create or replace function public.event_points(p_type text)
+returns int
+language sql
+immutable
+as $$
+  select case p_type
+           when 'fg2_make' then 2
+           when 'fg3_make' then 3
+           when 'ft_make'  then 1
+           else 0
+         end;
+$$;
+
+create or replace view public.final_game_scores
+-- security_invoker: the view runs with the CALLER's permissions, so the existing
+-- row-level security on games/events/teams still applies and this exposes
+-- nothing that a signed-in session could not already read row by row. Without
+-- it the view would run as its owner and silently bypass RLS - a private
+-- league's scores would leak to anyone granted select here.
+with (security_invoker = on) as
+select
+  g.id                          as game_id,
+  g.league_id                   as league_id,
+  l.name                        as league_name,
+  l.season                      as season,
+  g.home_team_id                as home_team_id,
+  ht.name                       as home_name,
+  g.away_team_id                as away_team_id,
+  aw.name                       as away_name,
+  coalesce(s.home_pts, 0)::int  as home_pts,
+  coalesce(s.away_pts, 0)::int  as away_pts,
+  -- BASKETBALL HAS NO DRAWS, but a level score still reaches here: a game
+  -- finished with no events at all is 0-0, and the tracker lets a scorekeeper
+  -- finish one after a warning (see standings() in src/lib/stats.ts). Such a
+  -- game has NO result and must never resolve as a home win - that was the F-11
+  -- `home >= away` bug. Exposing the winner rather than leaving each consumer to
+  -- compare the two columns is what stops that bug being rewritten downstream.
+  case
+    when coalesce(s.home_pts, 0) > coalesce(s.away_pts, 0) then g.home_team_id
+    when coalesce(s.away_pts, 0) > coalesce(s.home_pts, 0) then g.away_team_id
+    else null
+  end                           as winner_team_id,
+  g.finished_at                 as finished_at,
+  -- finished_at is the client's Date.now(), i.e. epoch MILLISECONDS. Offered as
+  -- a real timestamp too so a consumer never has to guess the unit.
+  to_timestamp(g.finished_at / 1000.0) as finished_at_ts,
+  -- Completeness signals, not decoration. See WHAT A ROW ACTUALLY PROMISES
+  -- above: a replayed offline tap is INSERTed late, so last_event_at (the
+  -- server's own clock, not the device's) moves when events are still arriving
+  -- for a game that already reads final. A consumer that wants to be sure it has
+  -- the whole game waits for these two to stop changing before it publishes.
+  coalesce(s.event_count, 0)::int as event_count,
+  s.last_event_at               as last_event_at
+from public.games g
+join public.leagues l on l.id = g.league_id
+-- LEFT joins: games.home_team_id/away_team_id carry no foreign key to teams, so
+-- a game whose team row is gone must still report its score with a null name,
+-- not vanish from the view.
+left join public.teams ht on ht.id = g.home_team_id
+left join public.teams aw on aw.id = g.away_team_id
+left join lateral (
+  select
+    -- Credited by EXACT team_id match, which is the rule teamBoxScore() applies
+    -- in src/lib/stats.ts: an event stamped with any other team is credited to
+    -- neither side there, so these filters must not credit it to one here.
+    sum(public.event_points(e.type)) filter (where e.team_id = g.home_team_id) as home_pts,
+    sum(public.event_points(e.type)) filter (where e.team_id = g.away_team_id) as away_pts,
+    -- Deliberately unfiltered: these describe what the server HOLDS for this
+    -- game, which is the question a consumer checking for late arrivals is
+    -- asking. They are not part of the score.
+    count(*)                                                                   as event_count,
+    max(e.created_at)                                                          as last_event_at
+  from public.events e
+  where e.game_id = g.id
+) s on true
+where g.status = 'final';
+
+-- Same audience as the underlying tables: any signed-in session (RLS then
+-- decides which rows), plus service_role for a trusted server-side scheduler.
+grant select on public.final_game_scores to authenticated, service_role;
+
+-- The REVOKE is the load-bearing half, not the grant list. A Supabase project
+-- carries `alter default privileges ... grant all on tables to anon,
+-- authenticated, service_role`, so a view created by running this file through
+-- the SQL editor can pick up anon SELECT on its own - omitting anon above does
+-- not withhold it. Saying so explicitly is what makes the intent true rather
+-- than merely stated.
+--
+-- Even so, the real protection is `security_invoker = on` plus the read_all_*
+-- policies: they are why an anon-key caller reads zero rows through this view
+-- whatever the grants say. This revoke is defence in depth on top of that.
+revoke select on public.final_game_scores from anon;
+
+-- A scheduler polls "finals since the last run". Without this it scans every
+-- game row to find them. Partial, so it indexes only the final games and costs
+-- nothing on the live-scoring write path.
+create index if not exists games_final_finished_idx
+  on public.games (finished_at)
+  where status = 'final';
+-- END FINAL GAME SCORES

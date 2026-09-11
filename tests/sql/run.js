@@ -247,6 +247,12 @@ const SECTIONS = {
     'create or replace function public.delete_own_account()',
     'grant execute on function public.delete_own_account() to authenticated;',
   ),
+
+  // event_points() + the final_game_scores view + its grant and index. Sliced,
+  // not copied: the view is a second implementation of the scoring rule in
+  // src/lib/stats.ts, so the one thing a test of it must never do is assert
+  // against its own private copy of that rule.
+  final_scores: () => slice('-- BEGIN FINAL GAME SCORES', '-- END FINAL GAME SCORES'),
 };
 
 function havePsql() {
