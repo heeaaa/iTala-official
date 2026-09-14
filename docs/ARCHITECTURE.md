@@ -32,6 +32,16 @@ event log rather than stored as independent source-of-truth totals. Editing or d
 an event therefore recalculates every dependent view through the functions in
 `src/lib/stats.ts`.
 
+There is consequently no final score stored anywhere: no score column on `games`, no
+per-player totals table. A reader OUTSIDE the app - a scheduler, a results feed - would
+otherwise have to pull the whole event log and re-implement the scoring rules, so the
+`public.final_game_scores` view in `supabase/schema.sql` performs that aggregation
+server-side and publishes one row per finished game. It is read-only and additive: the
+app neither queries nor depends on it, and the event log stays the only source of truth.
+`tests/sql/final_game_scores.test.sql` covers the aggregation and its exposure, and
+CHECK 30 in `tests/static.test.js` fails the build if the view's scoring rule and
+`src/lib/stats.ts` ever disagree.
+
 Identifiers used by a dispatch are stamped before the reducer runs. This keeps the
 state mirrored to Supabase consistent with the state rendered by React, even when the
 same reducer action is evaluated more than once.
