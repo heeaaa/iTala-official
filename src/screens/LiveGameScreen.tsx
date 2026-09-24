@@ -608,7 +608,7 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
             teamFouls={teamPeriodFouls(league, gameId, sideTeam(leftSide).id, period)}
             timeouts={teamPeriodTimeouts(league, gameId, sideTeam(leftSide).id, period)}
             onPress={() => setActiveSide(leftSide)} />
-          <View style={{ alignItems: 'center', paddingHorizontal: 6 }}>
+          <View style={{ alignItems: 'center', paddingHorizontal: 6, flexShrink: 0 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
               <LivePip size={5} />
               <Txt k="label" color={colors.brandLime} style={{ fontSize: 9, letterSpacing: 1 }}>LIVE</Txt>
@@ -908,12 +908,14 @@ function SideScore({ team, score, active, onPress, right, teamFouls, timeouts }:
       accessibilityLabel={`${team.name}, ${score} points, ${teamFouls} team fouls, ${timeouts} timeouts used`}
       accessibilityState={{ selected: active }}
       accessibilityHint="Activate to make this the tracked team."
-      style={{ flex: 1, alignItems: right ? 'flex-end' : 'flex-start' }}>
+      style={{ flex: 1, minWidth: 0, alignItems: right ? 'flex-end' : 'flex-start' }}>
       <Txt k="label" color={colors.muted} style={{ fontSize: 10 }}>Team Fouls: {teamFouls}</Txt>
       <Txt k="label" color={colors.muted} style={{ fontSize: 10 }}>Timeout used: {timeouts}</Txt>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2, width: '100%', minHeight: 48 }}>
         {!right && <TeamBadge logo={team.logo} color={team.color} size={18} />}
-        <Txt k="h2" numberOfLines={1} color={active ? colors.text : colors.muted}>{team.name}</Txt>
+        <Txt k="h2" numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.75}
+          color={active ? colors.text : colors.muted}
+          style={{ flex: 1, minWidth: 0, fontSize: 20, lineHeight: 24, textAlign: right ? 'right' : 'left' }}>{team.name}</Txt>
         {right && <TeamBadge logo={team.logo} color={team.color} size={18} />}
       </View>
       <Txt k="display" color={active ? colors.text : colors.muted} style={{ fontSize: 52 }}>{score}</Txt>

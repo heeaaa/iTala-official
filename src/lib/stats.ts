@@ -78,6 +78,18 @@ export type GameOutcome = 'home' | 'away' | 'tie';
 export const outcomeOf = (home: number, away: number): GameOutcome =>
   home === away ? 'tie' : home > away ? 'home' : 'away';
 
+// One selection for the final screen, box-score share and achievement cards.
+// Preserve the existing level-game fallback: both sides qualify without a winner.
+export function playerOfTheGame(league: League, game: Game): { l: StatLine; teamId: string } | undefined {
+  const score = gameScore(league, game);
+  const outcome = outcomeOf(score.home, score.away);
+  const teamIds = outcome === 'tie' ? [game.homeTeamId, game.awayTeamId]
+    : [outcome === 'home' ? game.homeTeamId : game.awayTeamId];
+  return teamIds.flatMap(teamId => teamBoxScore(league, game.id, teamId).lines.map(l => ({ l, teamId })))
+    .filter(({ l }) => l.playerId && perfRating(l) > 0)
+    .sort((a, b) => perfRating(b.l) - perfRating(a.l))[0];
+}
+
 export interface StandingRow {
   team: Team; wins: number; losses: number;
   pf: number; pa: number; diff: number; streak: string;
