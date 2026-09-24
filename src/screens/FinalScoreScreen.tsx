@@ -4,7 +4,7 @@ import { Screen, Txt, Button, TeamBadge, PromoStrip } from '../components/ui';
 import { useLeague } from '../store/StoreProvider';
 import { colors, space, radius, font } from '../theme';
 import { ScreenProps } from '../navigation';
-import { gameScore, teamBoxScore, perfRating, outcomeOf } from '../lib/stats';
+import { gameScore, playerOfTheGame, outcomeOf } from '../lib/stats';
 import { usePromos, onPromoTap } from '../lib/usePromos';
 
 // The emotional payoff at the buzzer. A brief, celebratory FINAL card —
@@ -57,15 +57,8 @@ export default function FinalScoreScreen({ route, navigation }: ScreenProps<'Fin
   // Player of the Game: best composite line on the winning team, or across both
   // teams when the game is drawn.
   const potg = (() => {
-    // On a tie there is no winning team, so both are eligible. Going through
-    // `winner` here would quietly restrict Player of the Game to the home side,
-    // since `winner` falls back to home when the scores are level.
-    const teamIds = tie ? [game.homeTeamId, game.awayTeamId] : [winner?.id ?? ''];
-    const pool = teamIds
-      .flatMap(tid => teamBoxScore(league, gameId, tid).lines)
-      .filter(l => l.playerId && perfRating(l) > 0);
-    if (pool.length === 0) return null;
-    const best = pool.sort((a, b) => perfRating(b) - perfRating(a))[0];
+    const best = playerOfTheGame(league, game)?.l;
+    if (!best) return null;
     const p = league.players.find(x => x.id === best.playerId);
     return p ? { name: p.name, line: best } : null;
   })();

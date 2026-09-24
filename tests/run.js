@@ -153,6 +153,10 @@ try { run('node', [path.join('tests', 'rosterImport.test.js')], { env }); }
 catch { failed++; }
 try { run('node', [path.join('tests', 'rosterSetupUi.test.js')], { env }); }
 catch { failed++; }
+try { run('node', [path.join('tests', 'substitution.test.js')], { env }); }
+catch { failed++; }
+try { run('node', [path.join('tests', 'gamePresentation.test.js')], { env }); }
+catch { failed++; }
 try { run('node', [path.join('tests', 'recSetup.test.js')], { env }); }
 catch { failed++; }
 // Apple Sign-In revocation: the client secret, both Apple requests, the
