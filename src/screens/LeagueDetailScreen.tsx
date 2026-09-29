@@ -7,6 +7,7 @@ import { colors, space, font, radius } from '../theme';
 import { ScreenProps } from '../navigation';
 import { standings, leaderboards, leagueAwards, winPctOf, gameScore, gamesPlayedMap } from '../lib/stats';
 import { dayKey, dayLabel, uid } from '../lib/format';
+import ScheduleTab from './ScheduleTab';
 
 export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'LeagueDetail'>) {
   const { leagueId } = route.params;
@@ -83,9 +84,9 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
   const isRec = league.kind === 'recreational'; // drop-in space, not a league
   const seasonOver = !isRec && !!league.isClosed; // completed league season
   // Tab labels differ (rec has no Standings/Leaders), so map the numeric tab
-  // index to a stable NAME and switch on that — keeps the four league blocks
+  // index to a stable NAME and switch on that — keeps the five league blocks
   // and two rec blocks working without renumbering.
-  const tabNames = isRec ? ['Games', 'Roster'] : ['Standings', 'Leaders', 'Games', 'Roster'];
+  const tabNames = isRec ? ['Games', 'Roster'] : ['Standings', 'Leaders', 'Games', 'Schedule', 'Roster'];
   const activeTab = tabNames[tab] ?? tabNames[0];
 
   // Favorite teams float to the top of the roster and the games filter chips;
@@ -151,7 +152,7 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
         )}
         {!showSettings && (
           <View style={{ marginTop: space(3) }}>
-            <Segmented options={isRec ? ['Games', 'Roster'] : ['Standings', 'Leaders', 'Games', 'Roster']} value={tab} onChange={setTab} />
+            <Segmented options={tabNames} value={tab} onChange={setTab} />
           </View>
         )}
       </View>
@@ -537,6 +538,10 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
               </>
             );
           })()
+        )}
+
+        {!showSettings && activeTab === 'Schedule' && (
+          <ScheduleTab league={league} canScore={scorer && !seasonOver} navigation={navigation} />
         )}
 
         {!showSettings && activeTab === 'Roster' && (
