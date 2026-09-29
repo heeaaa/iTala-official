@@ -8,7 +8,7 @@ import { useStore, useLeague } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
 import { colors, space, font, wordmarkGradient } from '../theme';
 import { ScreenProps } from '../navigation';
-import { teamBoxScore, gameScore, lineScore, statPlayersOfGame } from '../lib/stats';
+import { teamBoxScore, gameScore, lineScore, statPlayersOfGame, playerOfTheGame } from '../lib/stats';
 import { pct } from '../lib/format';
 import { StatLine } from '../types';
 import { PlayLogRow } from '../components/PlayLog';
@@ -50,12 +50,12 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
 
   const playerName = (id: string | null) => id ? (league.players.find(p => p.id === id)?.name ?? 'Player') : 'Team';
 
-  // top performer across both teams for the share card
+  // Both rosters remain available for individual achievement cards.
   const allLines = [
     ...teamBoxScore(league, gameId, homeTeam.id).lines.map(l => ({ l, teamId: homeTeam.id })),
     ...teamBoxScore(league, gameId, awayTeam.id).lines.map(l => ({ l, teamId: awayTeam.id })),
   ].filter(x => x.l.playerId);
-  const star = allLines.sort((a, b) => b.l.pts - a.l.pts)[0];
+  const star = playerOfTheGame(league, game);
 
   const events = league.events.filter(e => e.gameId === gameId).slice().reverse();
   // Highest period seen — shown on the LIVE share-card pill.
@@ -130,24 +130,18 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
               <Txt k="label" color={colors.brandLime}>LIVE</Txt>
             </View>
           )}
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: space(2) }}>
-            <View style={{ flex: 1, gap: 6 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <TeamBadge logo={homeTeam.logo} color={homeTeam.color} size={20} />
-                <Txt k="h2" color={score.home >= score.away ? colors.text : colors.muted}>{homeTeam.name}</Txt>
+          <View style={{ marginTop: space(2), gap: 6 }}>
+            {[
+              { team: homeTeam, points: score.home, leading: score.home >= score.away },
+              { team: awayTeam, points: score.away, leading: score.away >= score.home },
+            ].map(({ team, points, leading }) => (
+              <View key={team.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <TeamBadge logo={team.logo} color={team.color} size={20} />
+                <Txt k="h2" numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.8}
+                  color={leading ? colors.text : colors.muted} style={{ flex: 1, minWidth: 0 }}>{team.name}</Txt>
+                <Txt k="statBig" color={leading ? colors.text : colors.muted} style={{ flexShrink: 0 }}>{points}</Txt>
               </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <TeamBadge logo={awayTeam.logo} color={awayTeam.color} size={20} />
-                {/* `>=` on both sides, not `>` on one: a tied game highlights both
-                    teams, because neither of them lost. The away side used to be
-                    muted on a tie, which read as a home win. */}
-                <Txt k="h2" color={score.away >= score.home ? colors.text : colors.muted}>{awayTeam.name}</Txt>
-              </View>
-            </View>
-            <View style={{ alignItems: 'flex-end', gap: 6 }}>
-              <Txt k="statBig" color={score.home >= score.away ? colors.text : colors.muted}>{score.home}</Txt>
-              <Txt k="statBig" color={score.away >= score.home ? colors.text : colors.muted}>{score.away}</Txt>
-            </View>
+            ))}
           </View>
 
           {/* End-of-quarter line score */}
@@ -410,7 +404,7 @@ function ScoreRow({ team, score, winner }: { team: { name: string; color: string
     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, flex: 1 }}>
         <TeamBadge logo={team.logo} color={team.color} size={28} />
-        <Txt k="h1" color={winner ? colors.text : colors.muted} numberOfLines={1} style={{ flex: 1, fontSize: 28, lineHeight: 34 }}>
+        <Txt k="h1" color={winner ? colors.text : colors.muted} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.8} style={{ flex: 1, minWidth: 0, fontSize: 28, lineHeight: 34 }}>
           {team.name}
         </Txt>
       </View>

@@ -331,10 +331,11 @@ export function Segmented({ options, value, onChange }:
       {options.map((o, i) => {
         const active = i === value;
         const inner = (
-          <Text style={{ fontFamily: font.bodyMed, fontSize: 13, color: active ? colors.bg : colors.muted, letterSpacing: 0.2 }}>{o}</Text>
+          <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.85}
+            style={{ fontFamily: font.bodyMed, fontSize: 13, color: active ? colors.bg : colors.muted, letterSpacing: 0.2, textAlign: 'center' }}>{o}</Text>
         );
         return (
-          <Pressable key={o} onPress={() => onChange(i)} style={{ flex: 1 }}
+          <Pressable key={o} onPress={() => onChange(i)} style={{ flex: 1, minWidth: 0 }}
             accessibilityRole="tab"
             accessibilityLabel={o}
             // Selection is conveyed visually by a gradient fill only, so without
@@ -342,11 +343,11 @@ export function Segmented({ options, value, onChange }:
             accessibilityState={{ selected: active }}>
             {active ? (
               <LinearGradient colors={brandGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                style={{ paddingVertical: 8, borderRadius: radius.sm, alignItems: 'center' }}>
+                style={{ flex: 1, minHeight: 44, paddingHorizontal: 6, paddingVertical: 8, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' }}>
                 {inner}
               </LinearGradient>
             ) : (
-              <View style={{ paddingVertical: 8, borderRadius: radius.sm, alignItems: 'center' }}>{inner}</View>
+              <View style={{ flex: 1, minHeight: 44, paddingHorizontal: 6, paddingVertical: 8, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' }}>{inner}</View>
             )}
           </Pressable>
         );
