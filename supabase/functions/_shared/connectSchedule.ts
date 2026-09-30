@@ -48,18 +48,45 @@ async function table(
   url: string, key: string, name: string, query: Record<string, string>,
   deps: BridgeDependencies, bearer = key,
 ): Promise<Row[]> {
+  const order: Record<string, string> = {
+    leagues: 'id.asc', division_mobile_links: 'division_id.asc', divisions: 'id.asc',
+    events: 'id.asc', teams: 'sort_order.asc,created_at.asc,id.asc',
+    games: 'position.asc,id.asc', game_scores: 'game_id.asc',
+    division_mobile_team_links: 'team_id.asc', score_sources: 'game_id.asc',
+  };
+  const pageSize = 500;
+  const all: Row[] = [];
   let total: number | null = null;
-  const result = await api(url, key, `/rest/v1/${name}?${new URLSearchParams(query)}`, deps, bearer,
-    undefined, { prefer: 'count=exact' }, response => {
-      const tail = response.headers.get('content-range')?.split('/').pop();
-      if (tail && /^\d+$/.test(tail)) total = Number(tail);
-    });
-  if (!Array.isArray(result)) throw new BridgeError(502, 'The schedule service returned an unexpected response.');
-  // PostgREST caps replies at its configured max rows. Failing is safer than
-  // treating a silently truncated schedule as complete and starting the wrong game.
-  if (result.length >= 1000 || (total !== null && result.length < total))
-    throw new BridgeError(502, 'This schedule is too large to read safely.');
-  return rows(result);
+  do {
+    const offset = all.length;
+    let pageTotal: number | null = null;
+    const params = new URLSearchParams({ ...query, order: query.order ?? order[name], limit: String(pageSize), offset: String(offset) });
+    const result = await api(url, key, `/rest/v1/${name}?${params}`, deps, bearer,
+      undefined, { prefer: 'count=exact' }, response => {
+        const match = /^(?:\d+-\d+|\*)\/(\d+)$/.exec(response.headers.get('content-range') ?? '');
+        if (match) pageTotal = Number(match[1]);
+      });
+    if (!Array.isArray(result) || pageTotal === null || (total !== null && total !== pageTotal))
+      throw new BridgeError(502, 'The schedule service returned an incomplete response.');
+    total = pageTotal;
+    const expected = Math.min(pageSize, total - offset);
+    const page = rows(result);
+    if (page.length !== expected || page.length !== result.length)
+      throw new BridgeError(502, 'The schedule service returned an incomplete page.');
+    all.push(...page);
+  } while (all.length < total);
+  return all;
+}
+
+// Keep PostgREST IN filters short even when an event has thousands of fixtures.
+async function tableByIds(
+  url: string, key: string, name: string, query: Record<string, string>, column: string,
+  ids: string[], deps: BridgeDependencies,
+): Promise<Row[]> {
+  const all: Row[] = [];
+  for (let i = 0; i < ids.length; i += 80)
+    all.push(...await table(url, key, name, { ...query, [column]: inList(ids.slice(i, i + 80)) }, deps));
+  return all;
 }
 
 type PlayoffSource = { type: 'seed'; rank: number } | { type: 'winner'; bracketGameId: string };
@@ -106,7 +133,7 @@ export function resolvePlayoffs<G extends ConnectFixture>(games: G[], divisions:
     if (!prior || prior.score1 === null || prior.score2 === null) return null;
     return prior.score1 > prior.score2 ? prior.homeTeamId : prior.score2 > prior.score1 ? prior.awayTeamId : null;
   };
-  for (const g of out) if (g.playoff) {
+  for (const g of out) if (g.playoff && g.bracketGameId && g.team1Source && g.team2Source) {
     const ranks = seeds.get(g.divisionId) ?? [];
     g.homeTeamId = resolve(g.team1Source, ranks);
     g.awayTeamId = resolve(g.team2Source, ranks);
@@ -120,13 +147,13 @@ async function linksForLeague(leagueId: string, connect: string, secret: string,
   }, deps);
   const ids = links.map(l => string(l.division_id)).filter(Boolean);
   if (!ids.length) return { divisions: [], events: [] };
-  const divisions = await table(connect, secret, 'divisions', {
-    select: 'id,event_id,name,sort_order', id: inList(ids),
-  }, deps);
+  const divisions = await tableByIds(connect, secret, 'divisions', {
+    select: 'id,event_id,name,sort_order',
+  }, 'id', ids, deps);
   const eventIds = [...new Set(divisions.map(d => string(d.event_id)).filter(Boolean))];
-  const events = eventIds.length ? await table(connect, secret, 'events', {
-    select: 'id,name,status,timezone,court_names', id: inList(eventIds), status: 'eq.published',
-  }, deps) : [];
+  const events = await tableByIds(connect, secret, 'events', {
+    select: 'id,name,status,timezone,court_names', status: 'eq.published',
+  }, 'id', eventIds, deps);
   const published = new Set(events.map(e => string(e.id)));
   return { divisions: divisions.filter(d => published.has(string(d.event_id))), events };
 }
@@ -139,18 +166,18 @@ async function schedule(leagueId: string, eventId: string, connect: string, secr
   const divisionIds = divisions.map(d => string(d.id));
   if (!divisionIds.length) throw new BridgeError(404, 'No linked division was found.');
   const [teams, games, scores, teamLinks] = await Promise.all([
-    table(connect, secret, 'teams', { select: 'id,division_id,name,sort_order', division_id: inList(divisionIds), order: 'sort_order.asc' }, deps),
-    table(connect, secret, 'games', {
+    tableByIds(connect, secret, 'teams', { select: 'id,division_id,name,sort_order', order: 'sort_order.asc,created_at.asc,id.asc' }, 'division_id', divisionIds, deps),
+    tableByIds(connect, secret, 'games', {
       select: 'id,division_id,day,start_time,court,team1_id,team2_id,label,type,is_playoff,bracket_game_id,team1_source,team2_source,position',
-      event_id: `eq.${eventId}`, division_id: inList(divisionIds), order: 'position.asc',
-    }, deps),
+      event_id: `eq.${eventId}`, order: 'position.asc,id.asc',
+    }, 'division_id', divisionIds, deps),
     table(connect, secret, 'game_scores', { select: 'game_id,s1,s2', event_id: `eq.${eventId}` }, deps),
-    table(connect, secret, 'division_mobile_team_links', { select: 'division_id,team_id,mobile_team_id', division_id: inList(divisionIds) }, deps),
+    tableByIds(connect, secret, 'division_mobile_team_links', { select: 'division_id,team_id,mobile_team_id' }, 'division_id', divisionIds, deps),
   ]);
   const gameIds = games.map(g => string(g.id));
-  const sources = gameIds.length ? await table(connect, secret, 'score_sources', {
-    select: 'game_id,mobile_game_id,league_id', game_id: inList(gameIds), league_id: `eq.${leagueId}`,
-  }, deps) : [];
+  const sources = await tableByIds(connect, secret, 'score_sources', {
+    select: 'game_id,mobile_game_id,league_id', league_id: `eq.${leagueId}`,
+  }, 'game_id', gameIds, deps);
   const byScore = new Map(scores.map(s => [string(s.game_id), s]));
   const bySource = new Map(sources.map(s => [string(s.game_id), string(s.mobile_game_id)]));
   const fixtures: ConnectFixture[] = games.map(g => {
