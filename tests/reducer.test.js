@@ -1,5 +1,5 @@
 const M = require(process.env.ITALA_BUNDLE || '../.test-bundle.js');
-const { reducer, stampActionIds, teamBoxScore, gameScore, standings, careerStats, leagueAwards,
+const { reducer, stampActionIds, teamBoxScore, gameScore, standings, gameLogs, playerOfTheGame, careerStats, leagueAwards,
         perfRating, lineScore, parseRoster, leaderboards, gamesPlayedMap,
         effectiveFoulLimit, fouledOutSet, playerFouls, winPctOf, outcomeOf,
         promoteStrayToTeam, claimOnce, courtKeyOf, reconcileLineup,
@@ -738,6 +738,42 @@ eq('M22 outcomeOf still reports a level score, so no consumer invents a winner',
 eq('M23 outcomeOf treats 0-0 as level, not a home win', outcomeOf(0, 0), 'tie');
 eq('M24 outcomeOf never reports a winner on equal scores',
    [outcomeOf(1, 1), outcomeOf(99, 99)], ['tie', 'tie']);
+
+// GROUP M-D — a default is an official team result, never a player basket.
+let def = d(S0, { t: 'ADD_LEAGUE', id: 'lgDef', name: 'Defaults', season: 'S1' });
+def = d(def, { t: 'ADD_TEAM', leagueId: 'lgDef', name: 'Present', id: 'defH' });
+def = d(def, { t: 'ADD_TEAM', leagueId: 'lgDef', name: 'Absent', teamOnly: true, id: 'defA' });
+def = d(def, { t: 'ADD_PLAYER', leagueId: 'lgDef', teamId: 'defH', name: 'Starter', id: 'defP' });
+def = d(def, { t: 'CREATE_GAME', id: 'def1', leagueId: 'lgDef', homeTeamId: 'defH', awayTeamId: 'defA',
+  defaultResult: { winnerTeamId: 'defH', score: 30 } });
+let dg = L(def, 'lgDef').games[0];
+eq('MD1 default creation finishes without a lineup', [dg.status, dg.homeOnCourt, dg.awayOnCourt], ['final', [], []]);
+eq('MD2 official score is 30-0', gameScore(L(def, 'lgDef'), dg), { home: 30, away: 0 });
+eq('MD3 player box and period scores remain zero',
+  [teamBoxScore(L(def, 'lgDef'), dg.id, 'defH').total.pts, lineScore(L(def, 'lgDef'), dg).home], [0, [0]]);
+eq('MD4 standings receive W-L and PF-PA',
+  standings(L(def, 'lgDef')).map(r => [r.team.id, r.wins, r.losses, r.pf, r.pa, r.diff]),
+  [['defH', 1, 0, 30, 0, 30], ['defA', 0, 1, 0, 30, -30]]);
+eq('MD5 default does not produce player logs or games played',
+  [gameLogs(L(def, 'lgDef')).length, gamesPlayedMap(L(def, 'lgDef')).size], [0, 0]);
+eq('MD6 default has no player of the game', playerOfTheGame(L(def, 'lgDef'), dg), undefined);
+def = d(def, { t: 'CREATE_GAME', id: 'def2', leagueId: 'lgDef', homeTeamId: 'defH', awayTeamId: 'defA' });
+def = d(def, { t: 'SET_GAME_STATUS', leagueId: 'lgDef', gameId: 'def2', status: 'final',
+  defaultResult: { winnerTeamId: 'defA', score: 42 } });
+dg = L(def, 'lgDef').games.find(g => g.id === 'def2');
+eq('MD7 live game can finish as an away default with edited score', gameScore(L(def, 'lgDef'), dg), { home: 0, away: 42 });
+let invalidDefault = d(def, { t: 'CREATE_GAME', id: 'invalidDef', leagueId: 'lgDef',
+  homeTeamId: 'defH', awayTeamId: 'defA', defaultResult: { winnerTeamId: 'third', score: 30 } });
+ok('MD8 an invalid winner cannot create a default', !L(invalidDefault, 'lgDef').games.some(g => g.id === 'invalidDef'));
+invalidDefault = d(def, { t: 'CREATE_GAME', id: 'scoredDef', leagueId: 'lgDef', homeTeamId: 'defH', awayTeamId: 'defA' });
+invalidDefault = d(invalidDefault, { t: 'ADD_EVENT', leagueId: 'lgDef', gameId: 'scoredDef',
+  teamId: 'defH', playerId: 'defP', type: 'fg2_make', period: 1 });
+invalidDefault = d(invalidDefault, { t: 'SET_GAME_STATUS', leagueId: 'lgDef', gameId: 'scoredDef', status: 'final',
+  defaultResult: { winnerTeamId: 'defA', score: 30 } });
+eq('MD9 a game with scored points cannot become a default',
+  [L(invalidDefault, 'lgDef').games.find(g => g.id === 'scoredDef').status,
+   gameScore(L(invalidDefault, 'lgDef'), L(invalidDefault, 'lgDef').games.find(g => g.id === 'scoredDef'))],
+  ['live', { home: 2, away: 0 }]);
 
 // ===========================================================================
 // GROUP O — roster parser: team names that contain digits (F-12)

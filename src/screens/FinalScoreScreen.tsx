@@ -67,7 +67,9 @@ export default function FinalScoreScreen({ route, navigation }: ScreenProps<'Fin
     <Screen>
       <Animated.View style={{ flex: 1, opacity: fade, justifyContent: 'center', paddingHorizontal: space(5) }}>
         <Animated.View style={{ transform: [{ scale: pop }], alignItems: 'center' }}>
-          <Txt k="label" color={colors.brandLime} style={{ letterSpacing: 3, fontSize: 13 }}>FINAL</Txt>
+          <Txt k="label" color={colors.brandLime} style={{ letterSpacing: 3, fontSize: 13 }}>
+            {game.defaultWinnerTeamId ? 'FINAL · DEFAULT' : 'FINAL'}
+          </Txt>
 
           {/* Score line */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: space(4) }}>
@@ -86,9 +88,15 @@ export default function FinalScoreScreen({ route, navigation }: ScreenProps<'Fin
 
           {/* Winner line */}
           {!tie && winner ? (
-            <Txt k="h2" style={{ marginTop: space(4), textAlign: 'center' }}>
-              🏆 {winner.name} win{winnerScore - loserScore > 0 ? ` by ${winnerScore - loserScore}` : ''}
-            </Txt>
+            <View style={{ marginTop: space(4), alignItems: 'center' }}>
+              <Txt k="h2" style={{ textAlign: 'center' }}>
+                🏆 {winner.name} win{winnerScore - loserScore > 0 ? ` by ${winnerScore - loserScore}` : ''}
+              </Txt>
+              {game.defaultWinnerTeamId && <Txt k="body" color={colors.muted}
+                style={{ fontSize: 13, marginTop: 4, textAlign: 'center' }}>
+                Default result. Points count for standings only; no player receives them.
+              </Txt>}
+            </View>
           ) : (
             // Not "It's a tie!" - basketball has no draws, and the standings do
             // not record one. A game finished level has no result, so say that

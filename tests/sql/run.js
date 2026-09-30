@@ -123,6 +123,10 @@ const SECTIONS = {
     'alter table public.games add column if not exists created_by uuid',
     'on delete set null;',
   ),
+  default_result: () => slice(
+    'alter table public.games add column if not exists default_winner_team_id text;',
+    'end $$;',
+  ),
 
   // Row-level security itself: the enable switches plus the whole shipped policy
   // block. Everything else here loads the FUNCTIONS behind a policy; this loads

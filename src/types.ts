@@ -67,6 +67,10 @@ export interface Game {
   scheduledAt?: number;
   location?: string;
   finishedAt?: number;
+  // Official default result. This score counts for the team record only; it is
+  // never represented by scoring events or credited to a player.
+  defaultWinnerTeamId?: string;
+  defaultScore?: number;
   homeOnCourt?: string[]; // player ids currently on the floor (max 5)
   awayOnCourt?: string[];
   period?: number;

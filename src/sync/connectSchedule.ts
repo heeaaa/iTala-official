@@ -126,3 +126,13 @@ export async function startConnectGame(
   });
   return result.game;
 }
+
+/** Finish a published fixture by default without requiring a lineup or player events. */
+export async function recordConnectDefaultGame(
+  leagueId: string, eventId: string, gameId: string, winnerTeamId: string, score: number,
+): Promise<{ id: string; status: 'final' }> {
+  const result = await call<{ game: { id: string; status: 'final' } }>({
+    action: 'recordDefault', leagueId, eventId, gameId, winnerTeamId, score,
+  });
+  return result.game;
+}

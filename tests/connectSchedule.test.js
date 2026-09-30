@@ -45,6 +45,7 @@ const data = {
 
 const calls = [];
 let rpcCalls = 0;
+let defaultRpcCalls = 0;
 let stored;
 let truncateGames = false;
 let omitCount = false;
@@ -72,6 +73,16 @@ async function fakeFetch(input, options) {
     assert.equal(body.p_away_team_id, 'm4');
     stored ??= { id: connectMobileGameId(G[2]), status: 'live' };
     return Response.json(stored);
+  }
+  if (url.pathname === '/rest/v1/rpc/record_connect_default_game') {
+    defaultRpcCalls++;
+    const body = JSON.parse(options.body);
+    assert.equal(body.p_league_id, 'mobile-1');
+    assert.equal(body.p_home_team_id, 'm3');
+    assert.equal(body.p_away_team_id, 'm4');
+    assert.equal(body.p_winner_team_id, 'm4');
+    assert.equal(body.p_default_score, 30);
+    return Response.json({ id: connectMobileGameId(G[2]), status: 'final' });
   }
   const table = url.pathname.split('/').pop();
   if (table in data) {
@@ -125,6 +136,18 @@ async function ask(body) {
     assert.equal(result.status, 409, `game ${gameId} must not start`);
   }
   assert.equal(rpcCalls, 0);
+  for (const invalid of [{ winnerTeamId: 'other', score: 30 }, { winnerTeamId: 'm4', score: 0 },
+    { winnerTeamId: 'm4', score: 30.5 }]) {
+    const refused = await ask({ action: 'recordDefault', leagueId: 'mobile-1', eventId: E,
+      gameId: G[2], ...invalid });
+    assert.equal(refused.status, 400);
+  }
+  assert.equal(defaultRpcCalls, 0);
+  const defaulted = await ask({ action: 'recordDefault', leagueId: 'mobile-1', eventId: E,
+    gameId: G[2], winnerTeamId: 'm4', score: 30 });
+  assert.equal(defaulted.status, 200);
+  assert.deepEqual(defaulted.body.game, { id: connectMobileGameId(G[2]), status: 'final' });
+  assert.equal(defaultRpcCalls, 1);
   for (let n = 0; n < 2; n++) {
     const started = await ask({ action: 'startGame', leagueId: 'mobile-1', eventId: E, gameId: G[2],
       homeOnCourt: ['p1'], awayOnCourt: ['p2'] });

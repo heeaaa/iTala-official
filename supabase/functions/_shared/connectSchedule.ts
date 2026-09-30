@@ -238,7 +238,7 @@ export async function handleConnectSchedule(req: Request, deps: BridgeDependenci
     const eventId = string(body.eventId);
     if (!isUuid(eventId)) throw new BridgeError(400, 'Choose an event.');
     if (action === 'getDivisionSchedule') return respond(await schedule(leagueId, eventId, connect, secret, deps));
-    if (action === 'startGame') {
+    if (action === 'startGame' || action === 'recordDefault') {
       const gameId = string(body.gameId);
       if (!isUuid(gameId)) throw new BridgeError(400, 'Choose a fixture.');
       const current = await schedule(leagueId, eventId, connect, secret, deps);
@@ -250,11 +250,23 @@ export async function handleConnectSchedule(req: Request, deps: BridgeDependenci
       const home = current.teams.find(t => t.id === fixture.homeTeamId)?.mobileTeamId;
       const away = current.teams.find(t => t.id === fixture.awayTeamId)?.mobileTeamId;
       if (!home || !away || home === away) throw new BridgeError(409, 'Both Connect teams must be linked to different mobile teams.');
-      const result = await api(mobile, mobileKey, '/rest/v1/rpc/start_connect_game', deps, bearer, {
-        p_league_id: leagueId, p_connect_game_id: gameId, p_home_team_id: home, p_away_team_id: away,
-        p_home_on_court: body.homeOnCourt, p_away_on_court: body.awayOnCourt,
-        p_location: fixture.court ? string(current.event.courtNames[fixture.court - 1]) || `Court ${fixture.court}` : null,
-      });
+      const location = fixture.court ? string(current.event.courtNames[fixture.court - 1]) || `Court ${fixture.court}` : null;
+      const defaultScore = typeof body.score === 'number' ? body.score : NaN;
+      const defaultWinner = string(body.winnerTeamId);
+      if (action === 'recordDefault' &&
+          (!Number.isInteger(defaultScore) || defaultScore < 1 || defaultScore > 999 ||
+            (defaultWinner !== home && defaultWinner !== away))) {
+        throw new BridgeError(400, 'Choose a winner and a default score from 1 to 999.');
+      }
+      const result = action === 'recordDefault'
+        ? await api(mobile, mobileKey, '/rest/v1/rpc/record_connect_default_game', deps, bearer, {
+            p_league_id: leagueId, p_connect_game_id: gameId, p_home_team_id: home, p_away_team_id: away,
+            p_winner_team_id: defaultWinner, p_default_score: defaultScore, p_location: location,
+          })
+        : await api(mobile, mobileKey, '/rest/v1/rpc/start_connect_game', deps, bearer, {
+            p_league_id: leagueId, p_connect_game_id: gameId, p_home_team_id: home, p_away_team_id: away,
+            p_home_on_court: body.homeOnCourt, p_away_on_court: body.awayOnCourt, p_location: location,
+          });
       return respond({ game: result });
     }
     throw new BridgeError(400, 'Unknown schedule action.');

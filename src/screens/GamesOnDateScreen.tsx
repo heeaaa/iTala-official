@@ -83,7 +83,7 @@ export default function GamesOnDateScreen({ route, navigation }: ScreenProps<'Ga
           const homeAhead = s.home >= s.away;
           const awayAhead = s.away >= s.home;
           const label = `${teamName(g.homeTeamId)} vs ${teamName(g.awayTeamId)}`;
-          const statusWord = g.status === 'final' ? 'final' : g.status === 'live' ? 'live' : 'scheduled';
+          const statusWord = g.defaultWinnerTeamId ? 'final by default' : g.status === 'final' ? 'final' : g.status === 'live' ? 'live' : 'scheduled';
           const card = (
             <Card
               onPress={() => openGame(g.id, g.status)}
@@ -106,7 +106,7 @@ export default function GamesOnDateScreen({ route, navigation }: ScreenProps<'Ga
                     <Txt k="label" color={colors.brandLime}>LIVE</Txt>
                   </View>
                 ) : (
-                  <Pill label={g.status === 'final' ? 'FINAL' : 'SCHEDULED'} color={colors.surfaceHi} textColor={colors.muted} />
+                  <Pill label={g.defaultWinnerTeamId ? 'DEFAULT' : g.status === 'final' ? 'FINAL' : 'SCHEDULED'} color={colors.surfaceHi} textColor={colors.muted} />
                 )}
                 <View style={{ alignItems: 'flex-end', flex: 1, marginLeft: 8 }}>
                   <Txt k="body" color={colors.muted} style={{ fontSize: 12 }}>

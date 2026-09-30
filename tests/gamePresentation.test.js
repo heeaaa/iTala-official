@@ -32,7 +32,7 @@ const imports = {
   '../store/StoreProvider': { useStore: () => ({ dispatch() {} }), useLeague: () => league },
   '../store/AdminProvider': { useAdmin: () => ({ role: 'owner', errorFor: () => null, canScore: () => true, canScoreGame: () => true }) },
   'react-native-view-shot': {}, 'expo-linear-gradient': { LinearGradient: 'LinearGradient' },
-  'expo-sharing': {}, '../components/PlayLog': {},
+  'expo-sharing': {}, '../components/PlayLog': {}, '../components/DefaultResultModal': {},
 };
 const Box = load('src/screens/BoxScoreScreen.tsx', imports).default;
 const Final = load('src/screens/FinalScoreScreen.tsx', {
@@ -97,6 +97,23 @@ for (const mode of [{ kind: 'league' }, { kind: 'recreational', isShared: true }
     });
   }
 }
+check('default final shows the official result without a player award or period scoring', () => {
+  const game = { id: 'default', homeTeamId: 'h', awayTeamId: 'a', status: 'final',
+    defaultWinnerTeamId: 'a', defaultScore: 30 };
+  league = { kind: 'league', id: 'l', name: 'Test', season: 'S1', games: [game],
+    teams: [{ id: 'h', name: 'Home', playerIds: [] }, { id: 'a', name: 'Away', playerIds: [] }],
+    players: [], events: [] };
+  const box = Hooks.render(Box, { route: { params: { leagueId: 'l', gameId: 'default' } }, navigation: {} });
+  assert.equal(JSON.stringify(stats.gameScore(league, game)), '{"home":0,"away":30}');
+  assert.ok(nodes(box.element).some(n => n.props?.label === 'FINAL · DEFAULT'));
+  assert.ok(!nodes(box.element).some(n => n.props?.children === 'By period'));
+  assert.ok(!nodes(box.element).some(n => n.props?.children === '★ PLAYER OF THE GAME'));
+  box.unmount();
+  const final = Hooks.render(Final, { route: { params: { leagueId: 'l', gameId: 'default' } }, navigation: {} });
+  assert.ok(nodes(final.element).some(n => n.props?.children === 'FINAL · DEFAULT'));
+  assert.ok(!nodes(final.element).some(n => n.props?.children === '🏅 PLAYER OF THE GAME'));
+  final.unmount();
+});
 // Export private component only in the test VM; production API stays unchanged.
 const SideScore = load('src/screens/LiveGameScreen.tsx', {
   ...imports, 'expo-keep-awake': {}, '../lib/liveInput': {}, '../lib/haptics': {}, '../lib/usePromos': {},
