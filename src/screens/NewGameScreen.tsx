@@ -5,6 +5,7 @@ import { useLeague } from '../store/StoreProvider';
 import { colors, space } from '../theme';
 import { uid } from '../lib/format';
 import { ScreenProps } from '../navigation';
+import { canStartFreeformGame } from '../sync/connectSchedule';
 
 export default function NewGameScreen({ route, navigation }: ScreenProps<'NewGame'>) {
   const { leagueId } = route.params;
@@ -12,6 +13,8 @@ export default function NewGameScreen({ route, navigation }: ScreenProps<'NewGam
   const [home, setHome] = useState<string | null>(null);
   const [away, setAway] = useState<string | null>(null);
   const [location, setLocation] = useState('');
+  const [checkingStart, setCheckingStart] = useState(false);
+  const [startError, setStartError] = useState('');
 
   if (!league) return <Screen><Txt k="body">League not found.</Txt></Screen>;
 
@@ -23,20 +26,32 @@ export default function NewGameScreen({ route, navigation }: ScreenProps<'NewGam
   };
   const stage = (id: string) => (id === home ? 'HOME' : id === away ? 'AWAY' : null);
 
-  const start = () => {
-    if (!home || !away) return;
-    // The game row is deliberately NOT created here. Creating it on the way to
-    // the lineup screen meant a game that was never tipped off - because the
-    // user backed out, or because one side had no players and Tip off was
-    // correctly disabled - was already live on the League page, in the calendar
-    // and, once pushed, on every other device reading `status = 'live'`.
-    // The id is minted now so the lineup screen and the live screen agree on
-    // it; SelectLineup creates the row when Tip off is actually pressed.
-    const gameId = uid();
-    navigation.replace('SelectLineup', {
-      leagueId, gameId,
-      pending: { homeTeamId: home, awayTeamId: away, location: location || undefined },
-    });
+  const start = async () => {
+    if (!home || !away || checkingStart) return;
+    setCheckingStart(true);
+    setStartError('');
+    try {
+      if (!await canStartFreeformGame(league)) {
+        setStartError('This league now has a published iTala Connect schedule. Go back and choose a fixture on the Schedule tab.');
+        return;
+      }
+      // The game row is deliberately NOT created here. Creating it on the way to
+      // the lineup screen meant a game that was never tipped off - because the
+      // user backed out, or because one side had no players and Tip off was
+      // correctly disabled - was already live on the League page, in the calendar
+      // and, once pushed, on every other device reading `status = 'live'`.
+      // The id is minted now so the lineup screen and the live screen agree on
+      // it; SelectLineup creates the row when Tip off is actually pressed.
+      const gameId = uid();
+      navigation.replace('SelectLineup', {
+        leagueId, gameId,
+        pending: { homeTeamId: home, awayTeamId: away, location: location || undefined },
+      });
+    } catch (e) {
+      setStartError((e as Error).message || 'Could not check the schedule. Try again.');
+    } finally {
+      setCheckingStart(false);
+    }
   };
   return (
     <Screen>
@@ -62,7 +77,9 @@ export default function NewGameScreen({ route, navigation }: ScreenProps<'NewGam
       </ScrollView>
 
       <View style={{ position: 'absolute', left: space(4), right: space(4), bottom: space(6) }}>
-        <Button title="Next: lineups  ▶" onPress={start} disabled={!home || !away} />
+        {startError ? <Txt k="body" color={colors.red} style={{ marginBottom: space(2), textAlign: 'center' }}>{startError}</Txt> : null}
+        <Button title={checkingStart ? 'Checking schedule…' : 'Next: lineups  ▶'} onPress={() => void start()}
+          disabled={!home || !away || checkingStart} />
       </View>
     </Screen>
   );

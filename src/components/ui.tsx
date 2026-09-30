@@ -332,7 +332,7 @@ export function Segmented({ options, value, onChange }:
         const active = i === value;
         const inner = (
           <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.85}
-            style={{ fontFamily: font.bodyMed, fontSize: 13, color: active ? colors.bg : colors.muted, letterSpacing: 0.2, textAlign: 'center' }}>{o}</Text>
+            style={{ fontFamily: font.bodyMed, fontSize: options.length >= 5 ? 11 : 13, color: active ? colors.bg : colors.muted, letterSpacing: 0.2, textAlign: 'center' }}>{o}</Text>
         );
         return (
           <Pressable key={o} onPress={() => onChange(i)} style={{ flex: 1, minWidth: 0 }}
@@ -343,11 +343,11 @@ export function Segmented({ options, value, onChange }:
             accessibilityState={{ selected: active }}>
             {active ? (
               <LinearGradient colors={brandGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                style={{ flex: 1, minHeight: 44, paddingHorizontal: 6, paddingVertical: 8, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' }}>
+                style={{ flex: 1, minHeight: 44, paddingHorizontal: options.length >= 5 ? 2 : 6, paddingVertical: 8, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' }}>
                 {inner}
               </LinearGradient>
             ) : (
-              <View style={{ flex: 1, minHeight: 44, paddingHorizontal: 6, paddingVertical: 8, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' }}>{inner}</View>
+              <View style={{ flex: 1, minHeight: 44, paddingHorizontal: options.length >= 5 ? 2 : 6, paddingVertical: 8, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' }}>{inner}</View>
             )}
           </Pressable>
         );

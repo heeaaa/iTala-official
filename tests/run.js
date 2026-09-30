@@ -58,6 +58,11 @@ function resolveNpx() {
 }
 const NPX = resolveNpx();
 function npx(args, opts = {}) {
+  // CI/offline machines may already have the exact esbuild binary but not
+  // npm's package metadata. Let them use it without any registry request.
+  if (process.env.ITALA_ESBUILD_BIN && args[0] === '--yes' && args[1] === 'esbuild@0.24.0') {
+    return run(process.env.ITALA_ESBUILD_BIN, args.slice(2), opts);
+  }
   return run(NPX.cmd, [...NPX.prefix, ...args], { ...NPX.opts, ...opts });
 }
 
@@ -168,7 +173,11 @@ try { run('node', [path.join('tests', 'contentReports.test.js')], { env }); }
 catch { failed++; }
 try { run('node', [path.join('tests', 'contentReports.integration.test.js')], { env }); }
 catch { failed++; }
+try { run('node', [path.join('tests', 'connectSchedule.test.js')], { env }); }
+catch { failed++; }
 if (process.env.ITALA_PGLITE_MODULE) {
+  try { run('node', [path.join('tests', 'connectSchedule.database.test.js')], { env }); }
+  catch { failed++; }
   try { run('node', [path.join('tests', 'recSetup.database.test.js')], { env }); }
   catch { failed++; }
   try { run('node', [path.join('tests', 'rosterImport.database.test.js')], { env }); }
