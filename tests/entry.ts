@@ -30,7 +30,7 @@ export {
 } from '../src/store/authErrors';
 export { uid } from '../src/lib/format';
 export { isTabletSync } from '../src/lib/deviceClass';
-export { isConnectResult, nextScheduleDay, nowInZone, connectMobileGameId } from '../src/sync/connectSchedule';
+export { isConnectResult, nextScheduleDay, nowInZone, connectMobileGameId, canStartFreeformGame, connectAdminImportUrl, CONNECT_SITE_URL } from '../src/sync/connectSchedule';
 export { handleConnectSchedule, resolvePlayoffs } from '../supabase/functions/_shared/connectSchedule';
 
 // Test-only device controls. They live on the harness react-native stub

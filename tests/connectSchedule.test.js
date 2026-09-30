@@ -2,6 +2,7 @@
 const assert = require('node:assert/strict');
 const {
   handleConnectSchedule, isConnectResult, nextScheduleDay, nowInZone, connectMobileGameId,
+  canStartFreeformGame, connectAdminImportUrl, CONNECT_SITE_URL, resolvePlayoffs,
 } = require(process.env.ITALA_BUNDLE);
 
 const E = '11111111-1111-4111-8111-111111111111';
@@ -46,9 +47,10 @@ const calls = [];
 let rpcCalls = 0;
 let stored;
 let truncateGames = false;
+let omitCount = false;
 function filtered(list, search) {
   return list.filter(row => [...search.entries()].every(([key, condition]) => {
-    if (key === 'select' || key === 'order') return true;
+    if (['select', 'order', 'limit', 'offset'].includes(key)) return true;
     if (condition.startsWith('eq.')) return String(row[key]) === condition.slice(3);
     if (condition.startsWith('in.(')) return condition.slice(4, -1).replaceAll('"', '').split(',').includes(String(row[key]));
     throw Error(`Unhandled filter ${key}: ${condition}`);
@@ -58,7 +60,10 @@ async function fakeFetch(input, options) {
   const url = new URL(input);
   calls.push({ url, options });
   if (url.pathname === '/auth/v1/user') return Response.json({ id: 'user-1' });
-  if (url.pathname === '/rest/v1/leagues') return Response.json(filtered([{ id: 'mobile-1', kind: 'league' }], url.searchParams));
+  if (url.pathname === '/rest/v1/leagues') {
+    return Response.json(filtered([{ id: 'mobile-1', kind: 'league' }], url.searchParams),
+      { headers: { 'content-range': '0-0/1' } });
+  }
   if (url.pathname === '/rest/v1/rpc/start_connect_game') {
     rpcCalls++;
     const body = JSON.parse(options.body);
@@ -69,9 +74,15 @@ async function fakeFetch(input, options) {
     return Response.json(stored);
   }
   const table = url.pathname.split('/').pop();
-  if (table === 'games' && truncateGames)
-    return Response.json(filtered(data.games, url.searchParams).slice(0, 1), { headers: { 'content-range': '0-0/5' } });
-  if (table in data) return Response.json(filtered(data[table], url.searchParams));
+  if (table in data) {
+    const full = filtered(data[table], url.searchParams);
+    const offset = Number(url.searchParams.get('offset') || 0);
+    const limit = Number(url.searchParams.get('limit') || 500);
+    const page = full.slice(offset, offset + limit);
+    const result = table === 'games' && truncateGames && page.length ? page.slice(0, 1) : page;
+    const range = result.length ? `${offset}-${offset + result.length - 1}/${full.length}` : `*/${full.length}`;
+    return Response.json(result, { headers: omitCount ? {} : { 'content-range': range } });
+  }
   throw Error(`Unexpected request ${url}`);
 }
 const deps = {
@@ -127,8 +138,65 @@ async function ask(body) {
   assert.equal(nowInZone('America/Vancouver', new Date('2026-09-29T05:00:00Z')).slice(0, 10), '2026-09-28');
   assert.equal(nowInZone('Pacific/Auckland', new Date('2026-09-29T05:00:00Z')).slice(0, 10), '2026-09-29');
   assert.ok(!JSON.stringify(schedule.body).includes('connect-service'));
+  assert.equal(CONNECT_SITE_URL, 'https://itala-connect.netlify.app');
+  assert.equal(connectAdminImportUrl('mobile 1'), `${CONNECT_SITE_URL}/admin/import/mobile%201`);
+  let checked = 0;
+  const listNone = async () => { checked++; return []; };
+  const listLinked = async () => { checked++; return [{ id: E }]; };
+  assert.equal(await canStartFreeformGame({ id: 'rec-1', kind: 'recreational' }, listLinked, true), true);
+  assert.equal(checked, 0, 'drop-in games must never require Connect or network access');
+  assert.equal(await canStartFreeformGame({ id: 'mobile-1', kind: 'league' }, listLinked, false), true);
+  assert.equal(checked, 0, 'local-only leagues must keep their existing start flow');
+  assert.equal(await canStartFreeformGame({ id: 'mobile-1', kind: 'league' }, listNone, true), true);
+  assert.equal(await canStartFreeformGame({ id: 'mobile-1', kind: 'league' }, listLinked, true), false);
+  await assert.rejects(canStartFreeformGame({ id: 'mobile-1', kind: 'league' }, async () => {
+    throw Error('offline');
+  }, true), /offline/, 'an unknown link status cannot enable freeform Tip off');
+
+  const playoff = {
+    id: G[4], divisionId: D1, type: 'final', playoff: true, bracketGameId: G[4],
+    homeTeamId: T[0], awayTeamId: T[1], team1Source: null, team2Source: { type: 'seed', rank: 2 },
+    score1: null, score2: null,
+  };
+  assert.deepEqual(resolvePlayoffs([playoff], [{ id: D1, teamIds: [T[0], T[1]] }])
+    .map(g => [g.homeTeamId, g.awayTeamId]), [[T[0], T[1]]],
+  'a playoff with incomplete source metadata retains its stored teams');
+  const seeded = resolvePlayoffs([
+    { ...playoff, id: G[1], type: 'group', playoff: false, score1: 12, score2: 10 },
+    { ...playoff, homeTeamId: null, awayTeamId: null,
+      team1Source: { type: 'seed', rank: 1 }, team2Source: { type: 'seed', rank: 2 } },
+  ], [{ id: D1, teamIds: [T[0], T[1]] }]);
+  assert.deepEqual([seeded[1].homeTeamId, seeded[1].awayTeamId], [T[0], T[1]],
+    'complete seeded playoff metadata still resolves from round-robin scores');
+
   truncateGames = true;
   assert.equal((await ask({ action: 'getDivisionSchedule', leagueId: 'mobile-1', eventId: E })).status, 502);
   truncateGames = false;
-  console.log('✓ Connect schedule bridge: published links, multi-division, scores, default, partial, timezone, guarded Start');
+  omitCount = true;
+  assert.equal((await ask({ action: 'getDivisionSchedule', leagueId: 'mobile-1', eventId: E })).status, 502);
+  omitCount = false;
+
+  const originalGames = data.games;
+  const originalScores = data.game_scores;
+  for (const count of [999, 1000, 1001]) {
+    data.games = Array.from({ length: count }, (_, i) => ({
+      ...originalGames[2], id: `88888888-8888-4888-8888-${String(i).padStart(12, '0')}`, position: i,
+    }));
+    data.game_scores = data.games.map(g => ({ game_id: g.id, event_id: E, s1: 10, s2: 8 }));
+    const firstCall = calls.length;
+    const large = await ask({ action: 'getDivisionSchedule', leagueId: 'mobile-1', eventId: E });
+    assert.equal(large.status, 200, `schedule with ${count} fixtures must load`);
+    assert.equal(large.body.games.length, count);
+    assert.equal(large.body.games[count - 1].score1, 10);
+    const gameReads = calls.slice(firstCall).filter(c => c.url.pathname.endsWith('/games'));
+    assert.equal(gameReads.length, Math.ceil(count / 500));
+    const scoreReads = calls.slice(firstCall).filter(c => c.url.pathname.endsWith('/game_scores'));
+    assert.equal(scoreReads.length, Math.ceil(count / 500));
+    const sourceReads = calls.slice(firstCall).filter(c => c.url.pathname.endsWith('/score_sources'));
+    assert.ok(sourceReads.length > 1, 'source filters must be chunked');
+    assert.ok(sourceReads.every(c => c.url.searchParams.get('game_id').split(',').length <= 80));
+  }
+  data.games = originalGames;
+  data.game_scores = originalScores;
+  console.log('✓ Connect schedule bridge: published links, guarded starts, drop-in isolation, playoff parity, complete pagination at 999/1000/1001');
 })().catch(e => { console.error(e); process.exitCode = 1; });
