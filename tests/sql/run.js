@@ -34,7 +34,7 @@ const SCHEMA = fs.readFileSync(path.join(ROOT, 'supabase', 'schema.sql'), 'utf8'
 // end of `to`.
 function slice(from, to) {
   const a = SCHEMA.indexOf(from);
-  const b = SCHEMA.indexOf(to);
+  const b = a < 0 ? -1 : SCHEMA.indexOf(to, a);
   if (a < 0 || b < 0) throw new Error(`schema.sql: could not find anchors\n  from: ${from}\n  to:   ${to}`);
   return SCHEMA.slice(a, b + to.length);
 }
