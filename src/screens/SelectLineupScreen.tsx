@@ -5,7 +5,7 @@ import { useStore, useLeague } from '../store/StoreProvider';
 import { colors, space, radius, LINEUP_SIZE } from '../theme';
 import { ScreenProps } from '../navigation';
 import { Team, Player } from '../types';
-import { startConnectGame } from '../sync/connectSchedule';
+import { canStartFreeformGame, startConnectGame } from '../sync/connectSchedule';
 
 export default function SelectLineupScreen({ route, navigation }: ScreenProps<'SelectLineup'>) {
   const { leagueId, gameId, pending } = route.params;
@@ -128,6 +128,21 @@ export default function SelectLineupScreen({ route, navigation }: ScreenProps<'S
         setStarting(false);
       }
       return;
+    }
+    if (!game && league.kind === 'league') {
+      setStarting(true);
+      setStartError('');
+      try {
+        if (!await canStartFreeformGame(league)) {
+          setStartError('This league has a published iTala Connect schedule. Go back and start its scheduled fixture.');
+          return;
+        }
+      } catch (e) {
+        setStartError((e as Error).message || 'Could not check the schedule. Try again.');
+        return;
+      } finally {
+        setStarting(false);
+      }
     }
     if (game) {
       // One combined write so a realtime echo can't land between two separate

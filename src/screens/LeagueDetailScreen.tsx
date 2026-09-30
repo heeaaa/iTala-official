@@ -8,6 +8,7 @@ import { ScreenProps } from '../navigation';
 import { standings, leaderboards, leagueAwards, winPctOf, gameScore, gamesPlayedMap } from '../lib/stats';
 import { dayKey, dayLabel, uid } from '../lib/format';
 import ScheduleTab from './ScheduleTab';
+import { canStartFreeformGame } from '../sync/connectSchedule';
 
 export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'LeagueDetail'>) {
   const { leagueId } = route.params;
@@ -21,6 +22,9 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
   const [showSettings, setShowSettings] = useState(false);
   const [dupOpen, setDupOpen] = useState(false);
   const [dupSeason, setDupSeason] = useState('');
+  const [checkingStart, setCheckingStart] = useState(false);
+  const [hasPublishedSchedule, setHasPublishedSchedule] = useState(false);
+  const [scheduleRefreshKey, setScheduleRefreshKey] = useState(0);
 
   // This league's games and stats may not be on the device: the catalogue
   // carries every league's name, but the heavy tables are only fetched for the
@@ -88,6 +92,27 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
   // and two rec blocks working without renumbering.
   const tabNames = isRec ? ['Games', 'Roster'] : ['Standings', 'Leaders', 'Games', 'Schedule', 'Roster'];
   const activeTab = tabNames[tab] ?? tabNames[0];
+
+  const startLeagueGame = async () => {
+    if (checkingStart) return;
+    setCheckingStart(true);
+    try {
+      if (await canStartFreeformGame(league)) {
+        setHasPublishedSchedule(false);
+        navigation.navigate('NewGame', { leagueId });
+      } else {
+        setHasPublishedSchedule(true);
+        setScheduleRefreshKey(key => key + 1);
+        setTab(tabNames.indexOf('Schedule'));
+      }
+    } catch (e) {
+      Alert.alert('Could not check the schedule',
+        `${(e as Error).message || 'Check your connection and try again.'} New games are paused until the schedule can be checked.`,
+        [{ text: 'Try again', onPress: () => void startLeagueGame() }, { text: 'Cancel', style: 'cancel' }]);
+    } finally {
+      setCheckingStart(false);
+    }
+  };
 
   // Favorite teams float to the top of the roster and the games filter chips;
   // within each group the order is alphabetical so it never shifts under the
@@ -541,7 +566,8 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
         )}
 
         {!showSettings && activeTab === 'Schedule' && (
-          <ScheduleTab league={league} canScore={scorer && !seasonOver} navigation={navigation} />
+          <ScheduleTab league={league} canScore={scorer && !seasonOver} canManageConnect={owner}
+            refreshKey={scheduleRefreshKey} navigation={navigation} />
         )}
 
         {!showSettings && activeTab === 'Roster' && (
@@ -673,8 +699,8 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
           paddingHorizontal: space(4), paddingTop: space(3), paddingBottom: space(6),
           backgroundColor: colors.bg, borderTopWidth: 1, borderTopColor: colors.line,
         }}>
-          <Button title="▶  Start Game" onPress={() => navigation.navigate('NewGame', { leagueId })}
-            disabled={league.teams.length < 2} />
+          <Button title={checkingStart ? 'Checking schedule…' : hasPublishedSchedule ? 'Choose a scheduled game' : '▶  Start Game'}
+            onPress={() => void startLeagueGame()} disabled={league.teams.length < 2 || checkingStart} />
         </View>
       )}
     </Screen>

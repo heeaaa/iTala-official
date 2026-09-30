@@ -1,17 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, View } from 'react-native';
+import { ActivityIndicator, AppState, Linking, Pressable, ScrollView, View } from 'react-native';
 import { Button, Card, Empty, Txt } from '../components/ui';
 import { ScreenProps } from '../navigation';
 import { colors, radius, space } from '../theme';
 import { League } from '../types';
 import {
-  ConnectEventRef, ConnectSchedule, connectMobileGameId,
+  CONNECT_SITE_URL, ConnectEventRef, ConnectSchedule, connectAdminImportUrl, connectMobileGameId,
   getConnectSchedule, isConnectResult, listConnectEvents, nextScheduleDay, nowInZone,
 } from '../sync/connectSchedule';
 
 type Props = {
   league: League;
   canScore: boolean;
+  canManageConnect: boolean;
+  refreshKey: number;
   navigation: ScreenProps<'LeagueDetail'>['navigation'];
 };
 
@@ -37,7 +39,7 @@ function Chip({ label, selected, onPress }: { label: string; selected: boolean; 
   </Pressable>;
 }
 
-export default function ScheduleTab({ league, canScore, navigation }: Props) {
+export default function ScheduleTab({ league, canScore, canManageConnect, refreshKey, navigation }: Props) {
   const [events, setEvents] = useState<ConnectEventRef[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<string | null>(null);
   const [schedule, setSchedule] = useState<ConnectSchedule | null>(null);
@@ -45,7 +47,15 @@ export default function ScheduleTab({ league, canScore, navigation }: Props) {
   const [division, setDivision] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [linkError, setLinkError] = useState('');
   const sequence = useRef(0);
+  const loadRef = useRef<(eventId?: string) => Promise<void>>(async () => {});
+
+  const openConnect = async (url: string) => {
+    setLinkError('');
+    try { await Linking.openURL(url); }
+    catch { setLinkError('Could not open iTala Connect. Check your browser and try again.'); }
+  };
 
   const load = async (eventId?: string) => {
     const request = ++sequence.current;
@@ -72,13 +82,18 @@ export default function ScheduleTab({ league, canScore, navigation }: Props) {
       if (request === sequence.current) setLoading(false);
     }
   };
+  loadRef.current = load;
 
   useEffect(() => {
-    void load();
-    // This component mounts only while its tab is open. A manual refresh keeps
-    // filters in place without polling Connect on every league render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [league.id]);
+    void loadRef.current();
+    const requests = sequence;
+    let previous = AppState.currentState;
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'active' && previous !== 'active') void loadRef.current();
+      previous = state;
+    });
+    return () => { requests.current++; subscription.remove(); };
+  }, [league.id, refreshKey]);
 
   if (loading && (!schedule || selectedEvent !== schedule.event.id)) return <View style={{ padding: space(5), alignItems: 'center' }}>
     <ActivityIndicator color={colors.brandTeal} accessibilityLabel="Loading Connect schedule" />
@@ -90,7 +105,24 @@ export default function ScheduleTab({ league, canScore, navigation }: Props) {
     <Button title="Try again" onPress={() => void load()} style={{ marginTop: space(3) }} />
   </Card>;
 
-  if (!events.length) return <Empty title="No linked Connect event" subtitle="Published events linked to this league will appear here." />;
+  if (!events.length) return <Card>
+    <Txt k="h2">Plan your league on iTala Connect</Txt>
+    <Txt k="body" color={colors.muted} style={{ marginTop: space(2) }}>
+      Build round robins and seeded playoffs. Share one link for fixtures, scores and standings. Organisers approve final scores from the iTala scorekeeper app.
+    </Txt>
+    <Txt k="body" color={colors.muted} style={{ marginTop: space(3), fontSize: 13 }}>
+      This league has no published iTala Connect schedule yet. You can still start games as usual.
+    </Txt>
+    <Button title="Open iTala Connect website" kind="ghost" onPress={() => void openConnect(CONNECT_SITE_URL)}
+      style={{ marginTop: space(3) }} />
+    {canManageConnect && <Button title="Link this league in Connect" onPress={() => void openConnect(connectAdminImportUrl(league.id))}
+      style={{ marginTop: space(2) }} />}
+    {canManageConnect && <Txt k="body" color={colors.muted} style={{ marginTop: space(2), fontSize: 12 }}>
+      Connect organiser access is required. Publish the event, then return here.
+    </Txt>}
+    {linkError ? <Txt k="body" color={colors.red} style={{ marginTop: space(2) }}>{linkError}</Txt> : null}
+    <Button title="Refresh schedule" kind="ghost" onPress={() => void load()} style={{ marginTop: space(2) }} />
+  </Card>;
 
   if (!schedule) return null;
   const days = [...new Set(schedule.games.map(g => g.day).filter((d): d is string => !!d))].sort();
@@ -170,21 +202,19 @@ export default function ScheduleTab({ league, canScore, navigation }: Props) {
                 : <Txt k="body" color={colors.muted}>vs</Txt>}
               <Txt k="h2" numberOfLines={2} style={{ flex: 1, textAlign: 'right' }}>{away?.name ?? 'TBD'}</Txt>
             </View>
-            {final ? <>
-                <Txt k="body" color={colors.muted} style={{ marginTop: space(2), fontSize: 12 }}>
-                  {game.mobileGameId ? 'Approved mobile result' : 'Final in Connect'}
-                </Txt>
-                {mobileGame?.status === 'final' && <Button title="View mobile box score" onPress={openMobile}
-                  kind="ghost" style={{ marginTop: space(2) }} />}
-              </> : scored ? <Txt k="body" color={colors.muted} style={{ marginTop: space(2), fontSize: 12 }}>Score entry in Connect</Txt>
-              : mobileGame ? <Button title={mobileGame.status === 'final' ? 'View box score' : 'Open game'}
-                  onPress={openMobile} kind="ghost" style={{ marginTop: space(3) }} />
+            {final ? <Txt k="body" color={colors.muted} style={{ marginTop: space(2), fontSize: 12 }}>
+              {game.mobileGameId ? 'Approved mobile result' : 'Final in Connect'}
+            </Txt> : scored ? <Txt k="body" color={colors.muted} style={{ marginTop: space(2), fontSize: 12 }}>
+              {mobileGame ? 'Connect also has a score entry. Review both results.' : 'Score entry in Connect'}
+            </Txt> : null}
+            {mobileGame ? <Button title={mobileGame.status === 'final' ? 'View mobile box score' : 'Open mobile game'}
+                onPress={openMobile} kind="ghost" style={{ marginTop: space(3) }} />
               : canStart ? <Button title="Start game" onPress={() => navigation.navigate('SelectLineup', {
                   leagueId: league.id, gameId: connectMobileGameId(game.id),
                   pending: { homeTeamId: mobileHome!.id, awayTeamId: mobileAway!.id, location: courtName,
                     connect: { eventId: schedule.event.id, gameId: game.id } },
                 })} style={{ marginTop: space(3) }} />
-              : !canScore ? null : <Txt k="body" color={colors.muted} style={{ marginTop: space(2), fontSize: 12 }}>
+              : scored || !canScore ? null : <Txt k="body" color={colors.muted} style={{ marginTop: space(2), fontSize: 12 }}>
                 {!game.day || !game.time ? 'Awaiting a time in Connect.'
                   : !home || !away ? 'Teams will appear when this fixture is set.'
                   : 'Both teams must be linked to this mobile league before Start is available.'}
