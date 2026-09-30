@@ -1,4 +1,5 @@
 import { getSupabase, SYNC_ENABLED } from './supabase';
+import type { League } from '../types';
 
 export interface ConnectEventRef {
   id: string;
@@ -29,6 +30,9 @@ export interface ConnectSchedule {
 }
 
 export const connectMobileGameId = (connectGameId: string) => `cg_${connectGameId}`;
+export const CONNECT_SITE_URL = 'https://itala-connect.netlify.app';
+export const connectAdminImportUrl = (leagueId: string) =>
+  `${CONNECT_SITE_URL}/admin/import/${encodeURIComponent(leagueId)}`;
 
 export function isConnectResult(g: Pick<ConnectFixture, 'score1' | 'score2' | 'mobileGameId'>): boolean {
   // One entered side is not a final, but it is still somebody's score entry.
@@ -95,6 +99,18 @@ async function call<T>(body: Record<string, unknown>): Promise<T> {
 export async function listConnectEvents(leagueId: string): Promise<ConnectEventRef[]> {
   const result = await call<{ events: ConnectEventRef[] }>({ action: 'listEvents', leagueId });
   return result.events;
+}
+
+/** A published Connect link makes its fixtures the only way to start a synced league game.
+ * Drop-in spaces and local-only leagues never consult Connect, preserving offline play.
+ * A failed lookup must propagate: guessing "unlinked" would create duplicate games.
+ */
+export async function canStartFreeformGame(
+  league: Pick<League, 'id' | 'kind'>,
+  listEvents: (leagueId: string) => Promise<ConnectEventRef[]> = listConnectEvents,
+  syncEnabled = SYNC_ENABLED,
+): Promise<boolean> {
+  return league.kind === 'recreational' || !syncEnabled || (await listEvents(league.id)).length === 0;
 }
 
 export async function getConnectSchedule(leagueId: string, eventId: string): Promise<ConnectSchedule> {
