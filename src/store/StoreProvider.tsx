@@ -198,7 +198,7 @@ export type Action =
   | { t: 'ADD_PLAYER'; leagueId: string; teamId: string; name: string; number?: string; id?: string }
   | { t: 'UPDATE_PLAYER'; leagueId: string; playerId: string; name?: string; number?: string | null }
   | { t: 'DELETE_PLAYER'; leagueId: string; teamId: string; playerId: string }
-  | { t: 'CREATE_GAME'; id: string; leagueId: string; homeTeamId: string; awayTeamId: string; location?: string; homeOnCourt?: string[]; awayOnCourt?: string[] }
+  | { t: 'CREATE_GAME'; id: string; leagueId: string; homeTeamId: string; awayTeamId: string; location?: string; homeOnCourt?: string[]; awayOnCourt?: string[]; defaultResult?: { winnerTeamId: string; score: number } }
   | { t: 'SET_LINEUP'; leagueId: string; gameId: string; side: 'home' | 'away'; playerIds: string[] }
   | { t: 'SET_LINEUPS'; leagueId: string; gameId: string; home: string[]; away: string[] }
   | { t: 'SUBSTITUTE'; leagueId: string; gameId: string; side: 'home' | 'away'; outId: string; inId: string }
@@ -212,7 +212,7 @@ export type Action =
   | { t: 'DELETE_EVENT'; leagueId: string; gameId: string; eventId: string }
   | { t: 'DELETE_GAME'; leagueId: string; gameId: string }
   | { t: 'CLEANUP_REC_GAMES'; leagueId: string; gameIds: string[] }
-  | { t: 'SET_GAME_STATUS'; leagueId: string; gameId: string; status: Game['status'] }
+  | { t: 'SET_GAME_STATUS'; leagueId: string; gameId: string; status: Game['status']; defaultResult?: { winnerTeamId: string; score: number } }
   | { t: 'SET_ATTENDANCE'; leagueId: string; gameId: string; playerIds: string[] }
   | { t: 'SET_PERIOD'; leagueId: string; gameId: string; period: number }
   // `newTeamIds`/`newPlayerIds` map a source row's id to the fresh id its copy
@@ -238,6 +238,13 @@ function mapLeague(state: AppState, id: string, fn: (l: League) => League): AppS
 function foulLimitOf(l: League): number {
   const stored = l.foulOutLimit;
   return (!stored || stored > DEFAULT_FOUL_OUT) ? DEFAULT_FOUL_OUT : stored;
+}
+
+function validDefaultResult(homeTeamId: string, awayTeamId: string,
+  result: { winnerTeamId: string; score: number }): boolean {
+  return homeTeamId !== awayTeamId &&
+    (result.winnerTeamId === homeTeamId || result.winnerTeamId === awayTeamId) &&
+    Number.isInteger(result.score) && result.score > 0 && result.score <= 999;
 }
 
 /**
@@ -626,10 +633,14 @@ export function reducer(state: AppState, a: Action): AppState {
         // more than once for one action, so this belongs here and not in a
         // screen-level guard.
         if (l.games.some(g => g.id === a.id)) return l;
+        if (a.defaultResult && (!validDefaultResult(a.homeTeamId, a.awayTeamId, a.defaultResult) || l.kind === 'recreational')) return l;
         const game: Game = {
           id: a.id, leagueId: a.leagueId,
           homeTeamId: a.homeTeamId, awayTeamId: a.awayTeamId,
-          status: 'live', scheduledAt: Date.now(), location: a.location,
+          status: a.defaultResult ? 'final' : 'live', scheduledAt: Date.now(), location: a.location,
+          finishedAt: a.defaultResult ? Date.now() : undefined,
+          defaultWinnerTeamId: a.defaultResult?.winnerTeamId,
+          defaultScore: a.defaultResult?.score,
           homeOnCourt: a.homeOnCourt ?? [], awayOnCourt: a.awayOnCourt ?? [],
         };
         return { ...l, games: [game, ...l.games] };
@@ -868,7 +879,14 @@ export function reducer(state: AppState, a: Action): AppState {
         ...l,
         games: l.games.map(g =>
           g.id === a.gameId
-            ? { ...g, status: a.status, finishedAt: a.status === 'final' ? Date.now() : g.finishedAt }
+            ? a.defaultResult && (a.status !== 'final' || g.status !== 'live' || l.kind === 'recreational' ||
+                !validDefaultResult(g.homeTeamId, g.awayTeamId, a.defaultResult) ||
+                l.events.some(e => e.gameId === g.id && (e.teamId === g.homeTeamId || e.teamId === g.awayTeamId) &&
+                  (e.type === 'fg2_make' || e.type === 'fg3_make' || e.type === 'ft_make')))
+              ? g
+              : { ...g, status: a.status, finishedAt: a.status === 'final' ? Date.now() : g.finishedAt,
+                  defaultWinnerTeamId: a.defaultResult?.winnerTeamId,
+                  defaultScore: a.defaultResult?.score }
             : g
         ),
       }));

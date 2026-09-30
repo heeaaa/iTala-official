@@ -64,6 +64,12 @@ export function teamBoxScore(
 }
 
 export function gameScore(league: League, game: Game): { home: number; away: number } {
+  if (game.status === 'final' && game.defaultScore &&
+      (game.defaultWinnerTeamId === game.homeTeamId || game.defaultWinnerTeamId === game.awayTeamId)) {
+    return game.defaultWinnerTeamId === game.homeTeamId
+      ? { home: game.defaultScore, away: 0 }
+      : { home: 0, away: game.defaultScore };
+  }
   return {
     home: teamBoxScore(league, game.id, game.homeTeamId).total.pts,
     away: teamBoxScore(league, game.id, game.awayTeamId).total.pts,
@@ -81,6 +87,7 @@ export const outcomeOf = (home: number, away: number): GameOutcome =>
 // One selection for the final screen, box-score share and achievement cards.
 // Preserve the existing level-game fallback: both sides qualify without a winner.
 export function playerOfTheGame(league: League, game: Game): { l: StatLine; teamId: string } | undefined {
+  if (game.defaultWinnerTeamId) return undefined;
   const score = gameScore(league, game);
   const outcome = outcomeOf(score.home, score.away);
   const teamIds = outcome === 'tie' ? [game.homeTeamId, game.awayTeamId]
@@ -191,6 +198,7 @@ export function gameLogs(league: League): GameLog[] {
   const out: GameLog[] = [];
   const finals = league.games.filter(g => g.status === 'final');
   for (const g of finals) {
+    if (g.defaultWinnerTeamId) continue;
     for (const teamId of [g.homeTeamId, g.awayTeamId]) {
       const { lines } = teamBoxScore(league, g.id, teamId);
       for (const l of lines) {
@@ -471,6 +479,7 @@ export function gamesPlayedMap(league: League): Map<string, number> {
   const bump = (pid: string) => gp.set(pid, (gp.get(pid) ?? 0) + 1);
   for (const g of league.games) {
     if (g.status !== 'final') continue;
+    if (g.defaultWinnerTeamId) continue;
     if (g.attendance) {
       for (const pid of g.attendance) bump(pid);
     } else {

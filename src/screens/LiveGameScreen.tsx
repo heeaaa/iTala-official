@@ -14,6 +14,7 @@ import {
 } from '../lib/stats';
 import { claimOnce, reconcileLineup, courtKeyOf } from '../lib/liveInput';
 import { PlayLogRow, PlayLogTeam } from '../components/PlayLog';
+import DefaultResultModal from '../components/DefaultResultModal';
 import { tapFeedback, undoFeedback, successFeedback } from '../lib/haptics';
 import { usePromos, onPromoTap } from '../lib/usePromos';
 
@@ -121,6 +122,7 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   const [subOpen, setSubOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [timeoutOpen, setTimeoutOpen] = useState(false);
+  const [defaultOpen, setDefaultOpen] = useState(false);
   // The chip in the Exit row is the whole indicator; this is the explanation
   // behind it. A modal rather than an Alert so the count, the reassurance and
   // the dev-only detail can be laid out and read, not crammed into one string.
@@ -501,6 +503,24 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
     navigation.replace('FinalScore', { leagueId, gameId });
   };
 
+  const finishDefault = (winnerTeamId: string, defaultScore: number) => {
+    const latest = leagueRef.current;
+    const current = latest?.games.find(g => g.id === gameId);
+    if (!latest || !current || current.status !== 'live' || latest.kind === 'recreational') return;
+    const currentScore = gameScore(latest, current);
+    if (currentScore.home !== 0 || currentScore.away !== 0) {
+      setDefaultOpen(false);
+      Alert.alert('Score changed', 'A team has scored since you opened this form. Review the game before finishing.');
+      return;
+    }
+    setDefaultOpen(false);
+    successFeedback();
+    leavingRef.current = true;
+    dispatch({ t: 'SET_GAME_STATUS', leagueId, gameId, status: 'final',
+      defaultResult: { winnerTeamId, score: defaultScore } });
+    navigation.replace('FinalScore', { leagueId, gameId });
+  };
+
   const finish = () => {
     // Basketball has no draws: a level score at the end of regulation goes to
     // overtime, which here means adding a period. Finishing level leaves a game
@@ -733,6 +753,10 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
               </View>
             ))}
             <Button title="FINISH GAME" onPress={finish} />
+            {league.kind !== 'recreational' && game.status === 'live' && score.home === 0 && score.away === 0 && (
+              <Button title="Record default (0–0)" kind="ghost" onPress={() => setDefaultOpen(true)}
+                style={{ marginTop: space(2) }} />
+            )}
           </View>
         )}
       </View>
@@ -776,6 +800,9 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
           onSubmit={logTimeout}
         />
       )}
+
+      {defaultOpen && <DefaultResultModal home={homeTeam} away={awayTeam}
+        onCancel={() => setDefaultOpen(false)} onConfirm={finishDefault} />}
 
       {/* What the chip in the Exit row means, on demand. */}
       {syncDetailOpen && (

@@ -19,7 +19,7 @@ const M = require(process.env.ITALA_BUNDLE || '../.test-bundle.js');
 const { FakeServer, makeClient } = require('./harness/fakeSupabase.js');
 
 const {
-  reducer, pushAction, fetchAllState,
+  reducer, pushAction, fetchAllState, gameScore, standings,
   // The dispatch-side sync primitives. Imported, not reimplemented: if one of
   // these is removed the suite fails to load rather than quietly testing a copy
   // of behaviour the app no longer has.
@@ -45,7 +45,7 @@ for (const [name, fn] of Object.entries({
   beginPush, drainableEntries, outboxSnapshot, pruneOutbox, restoreOutbox, unsyncedCount,
   pushPendingEntry, pingServer,
   isKnownOffline, netStatus, noteReachable, noteUnreachable, probeDelay, describeSync,
-  isNetworkFailure,
+  isNetworkFailure, gameScore, standings,
 })) {
   if (typeof fn !== 'function') {
     console.error(`✗ sync suite cannot run: '${name}' is not exported by the app bundle`);
@@ -2903,7 +2903,28 @@ async function x5_a_transport_failure_throws_and_a_refusal_returns_null() {
   ok('X5.2 a transport failure throws', threw !== null, 'did not throw');
 }
 
+async function y1_default_result_round_trips_without_events() {
+  const server = new FakeServer();
+  const A = await seed(server);
+  A.dispatch({ t: 'SET_GAME_STATUS', leagueId: 'lg1', gameId: 'g1', status: 'final',
+    defaultResult: { winnerTeamId: 'tA', score: 30 } });
+  await A.settle();
+  const row = server.find('games', 'g1');
+  eq('Y1.1 game row stores the official default',
+    [row.status, row.default_winner_team_id, row.default_score], ['final', 'tA', 30]);
+  eq('Y1.2 no player scoring event was written', server.count('events'), 0);
+  const B = new Device('B', server);
+  await B.pull();
+  const league = B.state.leagues.find(l => l.id === 'lg1');
+  const game = league.games.find(g => g.id === 'g1');
+  eq('Y1.3 another device reads the 0-30 result', gameScore(league, game), { home: 0, away: 30 });
+  eq('Y1.4 standings converge on the same W-L and points',
+    standings(league).map(r => [r.team.id, r.wins, r.losses, r.pf, r.pa]),
+    [['tA', 1, 0, 30, 0], ['tH', 0, 1, 0, 30]]);
+}
+
 const TESTS = [
+  ['Y1 default result round-trips without events', y1_default_result_round_trips_without_events],
   ['S1 resurrection is real', s1_resurrection_is_real],
   ['S2 undo deletes server-side', s2_head_deletes_the_row],
   ['S3 redo round-trips', s3_redo_round_trips],

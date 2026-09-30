@@ -34,6 +34,7 @@ create table games (id text primary key, league_id text not null references leag
   home_team_id text not null, away_team_id text not null, status text not null check (status in ('scheduled','live','final')),
   scheduled_at bigint, location text, finished_at bigint, home_on_court text[] not null default '{}',
   away_on_court text[] not null default '{}', period int default 1, attendance text[],
+  default_winner_team_id text, default_score int,
   track_misses boolean, track_turnovers boolean, updated_at timestamptz not null default now());
 -- events exists here only so the shipped RLS block (which creates read_all_events
 -- and events_write_scorer) can be loaded whole. A suite that never @requires the

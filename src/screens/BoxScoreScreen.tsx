@@ -66,7 +66,7 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
     const starLine = star && star.l.playerId
       ? ` — ${playerName(star.l.playerId)} went ${star.l.pts}/${star.l.reb}/${star.l.ast}`
       : '';
-    return `${game.status === 'final' ? 'Final: ' : ''}${lead}${starLine} (tracked with iTala 🏀)`;
+    return `${game.defaultWinnerTeamId ? 'Final by default: ' : game.status === 'final' ? 'Final: ' : ''}${lead}${starLine} (tracked with iTala 🏀)`;
   };
 
   const share = async () => {
@@ -123,7 +123,7 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
         {/* Final score header */}
         <Card style={{ marginBottom: space(3) }}>
           {game.status === 'final' ? (
-            <Pill label="FINAL" color={colors.surfaceHi} textColor={colors.muted} />
+            <Pill label={game.defaultWinnerTeamId ? 'FINAL · DEFAULT' : 'FINAL'} color={colors.surfaceHi} textColor={colors.muted} />
           ) : (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
               <LivePip size={7} />
@@ -144,8 +144,13 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
             ))}
           </View>
 
+          {game.defaultWinnerTeamId && <Txt k="body" color={colors.muted}
+            style={{ fontSize: 12, marginTop: space(2) }}>
+            Official default result. These points affect standings only; player box scores remain separate.
+          </Txt>}
+
           {/* End-of-quarter line score */}
-          <View style={{ marginTop: space(3), borderTopWidth: 1, borderTopColor: colors.line, paddingTop: space(2) }}>
+          {!game.defaultWinnerTeamId && <View style={{ marginTop: space(3), borderTopWidth: 1, borderTopColor: colors.line, paddingTop: space(2) }}>
             <View style={{ flexDirection: 'row' }}>
               <Txt k="label" style={{ flex: 1 }}>By period</Txt>
               {ls.periods.map(p => <Txt key={p} k="label" style={{ width: 34, textAlign: 'center' }}>Q{p}</Txt>)}
@@ -161,11 +166,11 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
               {ls.away.map((v, i) => <Txt key={i} k="stat" style={{ width: 34, textAlign: 'center' }}>{v}</Txt>)}
               <Txt k="stat" color={colors.accent} style={{ width: 38, textAlign: 'center' }}>{score.away}</Txt>
             </View>
-          </View>
+          </View>}
         </Card>
 
         <Button title="Share box-score card" onPress={onSharePress} kind="ghost" style={{ marginBottom: space(2) }} />
-        {game.status === 'final' && (
+        {game.status === 'final' && !game.defaultWinnerTeamId && (
           <Button
             title="Player achievement cards"
             kind="ghost"
@@ -193,7 +198,7 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
         {game.status === 'final' && (
           <Button title="⇩ Export box score (CSV)" onPress={() => { void exportCsv(); }} kind="ghost" style={{ marginBottom: space(2) }} />
         )}
-        {game.status === 'final' && league && canScore(league) && (
+        {game.status === 'final' && !game.defaultWinnerTeamId && league && canScore(league) && (
           <Button
             title={game.attendance ? `Attendance (${game.attendance.length} present)` : 'Record attendance'}
             kind="ghost"
@@ -335,7 +340,7 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
                 backgroundColor: 'rgba(18,215,208,0.12)', borderWidth: 1, borderColor: colors.brandTeal,
               }}>
                 <Txt k="label" color={colors.brandTeal} style={{ fontSize: 10 }}>
-                  {game.status === 'final' ? 'FINAL' : `LIVE · P${period}`}
+                  {game.defaultWinnerTeamId ? 'FINAL · DEFAULT' : game.status === 'final' ? 'FINAL' : `LIVE · P${period}`}
                 </Txt>
               </View>
             </View>
