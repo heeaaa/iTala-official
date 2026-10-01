@@ -69,6 +69,14 @@ Highest probability of defects. Each of these was a real bug at some point.
 - [ ] **UI5** The empty state says "No schedules for this date"; the Connect
       description says "Share one link for schedules, scores and standings."
       Starting a game from a stale schedule still respects the server's checks.
+- [ ] **UI6** Open Schedule for an unlinked league as its owner, then as a guest.
+      The first message says the league has no published iTala Connect schedule
+      yet and games can still be started as usual. The planning card follows,
+      with an underlined website link. Only the owner sees the primary link-league
+      action. Refresh is a quiet footnote below the card and fetches a newly
+      published schedule immediately. Check phone/iPad portrait, landscape,
+      Split View, and larger text: all text wraps, links remain easy to tap,
+      and the tablet content stays in a centered column.
 
 ### Drop-in games (most fragile area historically)
 

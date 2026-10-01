@@ -29,14 +29,19 @@ function nodes(node) {
   if (!node || typeof node !== 'object') return [];
   return Array.isArray(node) ? node.flatMap(nodes) : [node, ...nodes(node.props?.children)];
 }
-function screenModule(cache, transport) {
+function textContent(node) {
+  if (typeof node === 'string') return node;
+  if (!node || typeof node !== 'object') return '';
+  return Array.isArray(node) ? node.map(textContent).join('') : textContent(node.props?.children);
+}
+function screenModule(cache, transport, linking = {}) {
   const listeners = new Set();
   const appState = { currentState: 'active', addEventListener: (_, listener) => {
     listeners.add(listener); return { remove: () => listeners.delete(listener) };
   } };
   const imports = {
     react: Hooks,
-    'react-native': { AppState: appState, Linking: {}, ...Object.fromEntries(
+    'react-native': { AppState: appState, Linking: linking, ...Object.fromEntries(
       ['ActivityIndicator', 'Pressable', 'ScrollView', 'View'].map(name => [name, name])) },
     '../components/ui': Object.fromEntries(['Button', 'Card', 'Empty', 'Txt'].map(name => [name, name])),
     '../theme': { colors: {}, radius: {}, space: value => value * 4 },
@@ -164,5 +169,72 @@ function screenModule(cache, transport) {
   assert.ok(nodes(root.element).some(node => node.props?.children === 'Offline refresh'), 'the failed refresh remains visible');
   root.unmount();
 
-  console.log('✓ schedule cache and tab: first load, remount, disk restore, event switching, refresh, expiry, offline fallback, and league isolation');
+  const unlinkedCache = load();
+  const unlinkedId = 'unlinked / league';
+  unlinkedCache.saveConnectScheduleCache(unlinkedId, []);
+  let emptyLists = 0, published = false, failLink = false;
+  const opened = [];
+  const siteUrl = 'https://itala-connect.example';
+  const unlinked = screenModule(unlinkedCache, {
+    CONNECT_SITE_URL: siteUrl,
+    connectAdminImportUrl: id => `${siteUrl}/admin/import/${encodeURIComponent(id)}`,
+    listConnectEvents: async () => { emptyLists++; return published ? [eventA] : []; },
+    getConnectSchedule: async () => displayedSchedule,
+  }, { openURL: async url => { if (failLink) throw Error('Browser unavailable'); opened.push(url); } });
+  const unlinkedProps = { ...props, league: { ...props.league, id: unlinkedId } };
+  const message = 'This league has no published iTala Connect schedule yet. You can still start games as usual.';
+  function checkUnlinked(root, owner) {
+    const all = nodes(root.element);
+    assert.equal(textContent(root.element.props.children[0]), message, 'the league status is the first message');
+    assert.ok(textContent(root.element).indexOf(message) < textContent(root.element).indexOf('Plan your league'),
+      'the Connect CTA follows the status');
+    assert.ok(!/fixture/i.test(textContent(root.element)), 'the empty state uses schedule terminology');
+    const buttons = all.filter(node => node.type === 'Button');
+    assert.deepEqual(buttons.map(node => node.props.title), owner ? ['Link this league in Connect'] : [],
+      'website and refresh actions never appear as large buttons');
+    const website = all.find(node => node.props?.accessibilityLabel === 'Open iTala Connect website');
+    const refresh = all.find(node => node.props?.accessibilityLabel === 'Refresh schedule');
+    assert.equal(website.props.accessibilityRole, 'link');
+    assert.equal(refresh.props.accessibilityRole, 'button');
+    assert.ok(root.element.props.style.maxWidth >= 320, 'the tablet column allows a phone width');
+    assert.equal(root.element.props.style.width, '100%', 'the column adapts to its available width');
+    for (const action of [website, refresh]) {
+      assert.ok(action.props.style({ pressed: false }).minHeight >= 44, 'quiet actions keep accessible touch targets');
+      const label = nodes(action).find(node => node.type === 'Txt');
+      assert.equal(label.props.style.textDecorationLine, 'underline', 'text actions remain visibly discoverable');
+      assert.equal(label.props.numberOfLines, undefined, 'link text can wrap on compact screens and with larger text');
+    }
+    return { website, refresh, buttons };
+  }
+  root = Hooks.render(unlinked.Screen, unlinkedProps);
+  await settle(); root.flush();
+  assert.equal(emptyLists, 0, 'a fresh empty cache avoids a redundant request');
+  let actions = checkUnlinked(root, false);
+  actions.website.props.onPress(); await settle(); root.flush();
+  assert.equal(opened.at(-1), siteUrl, 'the website link opens Connect');
+  failLink = true;
+  actions.website.props.onPress(); await settle(); root.flush();
+  assert.ok(textContent(root.element).includes('Could not open iTala Connect'), 'browser errors are shown');
+  failLink = false;
+  actions.website.props.onPress(); await settle(); root.flush();
+  assert.ok(!textContent(root.element).includes('Could not open iTala Connect'), 'retry clears the browser error');
+  actions.refresh.props.onPress(); await settle(); root.flush();
+  assert.equal(emptyLists, 1, 'the footnote refresh bypasses a fresh empty cache');
+  checkUnlinked(root, false);
+  root.unmount();
+
+  root = Hooks.render(unlinked.Screen, { ...unlinkedProps, canManageConnect: true });
+  await settle(); root.flush();
+  actions = checkUnlinked(root, true);
+  actions.buttons[0].props.onPress(); await settle(); root.flush();
+  assert.equal(opened.at(-1), `${siteUrl}/admin/import/${encodeURIComponent(unlinkedId)}`,
+    'the owner CTA opens the import page for this league');
+  published = true;
+  actions.refresh.props.onPress(); await settle(); root.flush();
+  assert.equal(emptyLists, 2);
+  assert.ok(!textContent(root.element).includes(message), 'refresh replaces the empty state when a schedule is published');
+  assert.ok(textContent(root.element).includes('Times in Pacific/Auckland'));
+  root.unmount();
+
+  console.log('✓ schedule cache and tab: fetch, remount, disk restore, event switching, refresh, expiry, offline fallback, league isolation, and unlinked owner/guest actions');
 })().catch(error => { console.error(error); process.exitCode = 1; });

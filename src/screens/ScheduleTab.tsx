@@ -139,24 +139,35 @@ export default function ScheduleTab({ league, canScore, canManageConnect, refres
     <Button title="Try again" onPress={() => void load(undefined, true)} style={{ marginTop: space(3) }} />
   </Card>;
 
-  if (!events.length) return <Card>
-    <Txt k="h2">Plan your league on iTala Connect</Txt>
-    <Txt k="body" color={colors.muted} style={{ marginTop: space(2) }}>
-      Build round robins and seeded playoffs. Share one link for schedules, scores and standings. Organisers approve final scores from the iTala scorekeeper app.
-    </Txt>
-    <Txt k="body" color={colors.muted} style={{ marginTop: space(3), fontSize: 13 }}>
+  if (!events.length) return <View style={{ width: '100%', maxWidth: 600, alignSelf: 'center' }}>
+    <Txt k="body" style={{ lineHeight: 22 }}>
       This league has no published iTala Connect schedule yet. You can still start games as usual.
     </Txt>
-    <Button title="Open iTala Connect website" kind="ghost" onPress={() => void openConnect(CONNECT_SITE_URL)}
-      style={{ marginTop: space(3) }} />
-    {canManageConnect && <Button title="Link this league in Connect" onPress={() => void openConnect(connectAdminImportUrl(league.id))}
-      style={{ marginTop: space(2) }} />}
-    {canManageConnect && <Txt k="body" color={colors.muted} style={{ marginTop: space(2), fontSize: 12 }}>
-      Connect organiser access is required. Publish the event, then return here.
-    </Txt>}
-    {linkError ? <Txt k="body" color={colors.red} style={{ marginTop: space(2) }}>{linkError}</Txt> : null}
-    <Button title="Refresh schedule" kind="ghost" onPress={() => void load(undefined, true)} style={{ marginTop: space(2) }} />
-  </Card>;
+    <Card style={{ marginTop: space(4) }}>
+      <Txt k="h2">Plan your league on iTala Connect</Txt>
+      <Txt k="body" color={colors.muted} style={{ marginTop: space(2), lineHeight: 22 }}>
+        Plan leagues, create schedules, and run playoffs. Share one link for schedules, scores and standings.
+      </Txt>
+      <Pressable onPress={() => void openConnect(CONNECT_SITE_URL)} accessibilityRole="link"
+        accessibilityLabel="Open iTala Connect website" accessibilityHint="Opens iTala Connect in your browser"
+        style={({ pressed }) => ({ marginTop: space(2), minHeight: 44, paddingVertical: space(2),
+          alignSelf: 'flex-start', maxWidth: '100%', justifyContent: 'center', opacity: pressed ? 0.65 : 1 })}>
+        <Txt k="body" color={colors.brandTeal} style={{ textDecorationLine: 'underline' }}>Open iTala Connect website</Txt>
+      </Pressable>
+      {canManageConnect && <Button title="Link this league in Connect" onPress={() => void openConnect(connectAdminImportUrl(league.id))}
+        style={{ marginTop: space(2) }} />}
+      {canManageConnect && <Txt k="body" color={colors.muted} style={{ marginTop: space(2), fontSize: 12, lineHeight: 18 }}>
+        Connect organiser access is required. Publish your schedule, then return here.
+      </Txt>}
+      {linkError ? <Txt k="body" color={colors.red} style={{ marginTop: space(2) }}>{linkError}</Txt> : null}
+    </Card>
+    <Pressable onPress={() => void load(undefined, true)} accessibilityRole="button" accessibilityLabel="Refresh schedule"
+      accessibilityHint="Checks for a published iTala Connect schedule"
+      style={({ pressed }) => ({ marginTop: space(2), minHeight: 44, paddingVertical: space(2),
+        alignSelf: 'flex-start', maxWidth: '100%', justifyContent: 'center', opacity: pressed ? 0.65 : 1 })}>
+      <Txt k="body" color={colors.muted} style={{ fontSize: 13, textDecorationLine: 'underline' }}>Refresh schedule</Txt>
+    </Pressable>
+  </View>;
 
   if (!schedule) return null;
   const days = [...new Set(schedule.games.map(g => g.day).filter((d): d is string => !!d))].sort();
