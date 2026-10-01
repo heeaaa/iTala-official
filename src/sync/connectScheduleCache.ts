@@ -7,6 +7,7 @@ const FRESH_FOR_MS = 5 * 60 * 1000;
 export type CachedConnectSchedule = {
   events: ConnectEventRef[];
   eventsUpdatedAt: number;
+  linkRevision?: number;
   schedules: Record<string, { value: ConnectSchedule; updatedAt: number }>;
 };
 
@@ -31,6 +32,7 @@ export async function readConnectScheduleCache(leagueId: string): Promise<Cached
       if (!raw) return null;
       const parsed = JSON.parse(raw) as CachedConnectSchedule;
       if (!Array.isArray(parsed.events) || !Number.isFinite(parsed.eventsUpdatedAt)
+        || (parsed.linkRevision !== undefined && (!Number.isSafeInteger(parsed.linkRevision) || parsed.linkRevision < 0))
         || !parsed.events.every(event => typeof event?.id === 'string')
         || !parsed.schedules || typeof parsed.schedules !== 'object' || Array.isArray(parsed.schedules)) return null;
       if (Object.entries(parsed.schedules).some(([id, entry]) => {
@@ -59,14 +61,14 @@ export function isConnectScheduleCacheFresh(cache: CachedConnectSchedule, eventI
   return scheduleAge >= 0 && scheduleAge < FRESH_FOR_MS;
 }
 
-export function saveConnectScheduleCache(leagueId: string, events: ConnectEventRef[], schedule?: ConnectSchedule): void {
+export function saveConnectScheduleCache(leagueId: string, events: ConnectEventRef[], schedule?: ConnectSchedule, linkRevision?: number): void {
   const previous = memory.get(leagueId);
   const now = Date.now();
   const linkedIds = new Set(events.map(event => event.id));
   const schedules = Object.fromEntries(Object.entries(previous?.schedules ?? {})
     .filter(([eventId]) => linkedIds.has(eventId)));
   if (schedule) schedules[schedule.event.id] = { value: schedule, updatedAt: now };
-  const entry = { events, eventsUpdatedAt: now, schedules };
+  const entry = { events, eventsUpdatedAt: now, schedules, linkRevision: linkRevision ?? previous?.linkRevision };
   memory.set(leagueId, entry);
   const preceding = writes.get(leagueId) ?? Promise.resolve();
   const write = preceding.catch(() => {}).then(() => AsyncStorage.setItem(keyFor(leagueId), JSON.stringify(entry)));

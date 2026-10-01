@@ -43,7 +43,7 @@ const imports = {
   '../components/DefaultResultModal': { default: 'DefaultResultModal' },
   '../lib/haptics': { successFeedback() {} },
   '../lib/usePromos': { usePromos: () => ({ activePromos: [] }) },
-  '../sync/connectSchedule': { canStartFreeformGame: async () => true },
+  '../sync/connectSchedule': { canStartFreeformGame: () => true },
 };
 const Live = load('src/screens/LiveGameScreen.tsx', imports).default;
 const Lineup = load('src/screens/SelectLineupScreen.tsx', imports).default;
@@ -137,7 +137,7 @@ root.unmount();
 let confirmed;
 root = Hooks.render(DefaultResultForm, { home: league.teams[0], away: league.teams[1], onCancel() {},
   onConfirm: (...args) => { confirmed = args; } });
-const confirm = () => nodes(root.element).find(node => node.props?.title === 'Confirm default');
+const confirm = () => nodes(root.element).find(node => node.props?.title === 'Confirm');
 assert.equal(confirm().props.disabled, true);
 nodes(root.element).find(node => node.props?.accessibilityRole === 'radio').props.onPress(); root.flush();
 nodes(root.element).find(node => node.type === 'TextInput').props.onChangeText('0'); root.flush();

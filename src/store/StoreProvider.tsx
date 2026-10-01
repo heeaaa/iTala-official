@@ -3,7 +3,7 @@
 // rather than renaming a type used across thirty files.
 import { Alert, AppState as RNAppState } from 'react-native';
 import React, { createContext, useContext, useEffect, useReducer, useRef, useCallback } from 'react';
-import { AppState, League, Team, Player, Game, GameEvent, EventType, LocalPrefs, LegacyPersistedSettings } from '../types';
+import { AppState, League, Team, Player, Game, GameEvent, EventType, LocalPrefs, LegacyPersistedSettings, ConnectLinkState } from '../types';
 import { setHapticsEnabled } from '../lib/haptics';
 import { ensureNotifPermission } from '../lib/notify';
 import { uid } from '../lib/format';
@@ -78,6 +78,9 @@ async function waitForSession(sb: NonNullable<ReturnType<typeof getSupabase>>, m
  */
 function describeSyncFailure(e: unknown): string {
   const msg = (e as Error)?.message ?? String(e ?? '');
+  if (/published iTala Connect schedule/i.test(msg)) {
+    return 'This league now uses an iTala Connect schedule. Open Schedule to choose its game. Your local game has been kept on this device.';
+  }
   if (isNetworkFailure(msg)) {
     return "The app couldn't reach the server. Check this device's connection and try again.";
   }
@@ -226,6 +229,7 @@ export type Action =
   // nothing to delete there and nothing to push. See the dispatch wrapper.
   | { t: 'ROLLBACK_BUNDLE'; leagueId: string; gameIds: string[]; teamIds: string[]; playerIds: string[]; removeLeague?: boolean }
   | { t: 'REC_SETUP_CONFIRMED'; bundle: League }
+  | { t: 'CONNECT_LINK_REFRESHED'; leagueId: string; state: ConnectLinkState }
 
 const initial: AppState = { leagues: [] };
 
@@ -364,6 +368,9 @@ export function __resetSyncPrimitives(): void {
 
 export function reducer(state: AppState, a: Action): AppState {
   switch (a.t) {
+    case 'CONNECT_LINK_REFRESHED':
+      return mapLeague(state, a.leagueId, l => !l.connectLink || a.state.revision >= l.connectLink.revision
+        ? { ...l, connectLink: a.state } : l);
     case 'HYDRATE': {
       // LEGACY MIGRATION. Saved states written before leagues.track_misses
       // existed carry an app-wide toggle instead. Read it once here to seed any
@@ -383,7 +390,10 @@ export function reducer(state: AppState, a: Action): AppState {
       const coveredSet = covered === null ? null : new Set(covered);
       const speaksFor = (id: string) => coveredSet === null || coveredSet.has(id);
 
-      const leagues = a.state.leagues.map(l => {
+      const leagues = a.state.leagues.map(incoming => {
+        const localLink = localLeagues.get(incoming.id)?.connectLink;
+        const l = localLink && (!incoming.connectLink || localLink.revision > incoming.connectLink.revision)
+          ? { ...incoming, connectLink: localLink } : incoming;
         // OUT OF SCOPE: take the catalogue fields, keep the children. The
         // snapshot carried this league's name and season but was never asked
         // for its games, so replacing them with the empty arrays it happens to
@@ -1764,6 +1774,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // future caller reaching for the public dispatch - which would otherwise
     // push a whole league's tables back at the server that just sent them.
     if (incoming.t === 'HYDRATE' || incoming.t === 'HYDRATE_LEAGUE') { baseDispatch(incoming); return; }
+    if (incoming.t === 'CONNECT_LINK_REFRESHED') {
+      // Discovery returns server-owned metadata; keep it locally without echoing a write.
+      stateRef.current = reducer(stateRef.current, incoming);
+      baseDispatch(incoming);
+      return;
+    }
 
     // Name the exact event row this action is about, from the PRE-dispatch
     // state, before anything else looks at it. The reducer, the server push and

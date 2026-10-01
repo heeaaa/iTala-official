@@ -3,10 +3,10 @@ import { ActivityIndicator, AppState, Linking, Pressable, ScrollView, View } fro
 import { Button, Card, Empty, Txt } from '../components/ui';
 import { ScreenProps } from '../navigation';
 import { colors, radius, space } from '../theme';
-import { League } from '../types';
+import { League, ConnectLinkState } from '../types';
 import {
   CONNECT_SITE_URL, ConnectEventRef, ConnectSchedule, connectAdminImportUrl, connectMobileGameId,
-  getConnectSchedule, isConnectResult, listConnectEvents, nextScheduleDay, nowInZone,
+  fetchConnectLinkState, getConnectSchedule, isConnectResult, refreshConnectLinkState, nextScheduleDay, nowInZone,
 } from '../sync/connectSchedule';
 import {
   isConnectScheduleCacheFresh, peekConnectScheduleCache, readConnectScheduleCache, saveConnectScheduleCache,
@@ -18,6 +18,7 @@ type Props = {
   canManageConnect: boolean;
   refreshKey: number;
   navigation: ScreenProps<'LeagueDetail'>['navigation'];
+  onLinkUpdate?: (state: ConnectLinkState) => void;
 };
 
 const dateLabel = (day: string) => {
@@ -42,17 +43,19 @@ function Chip({ label, selected, onPress }: { label: string; selected: boolean; 
   </Pressable>;
 }
 
-export default function ScheduleTab({ league, canScore, canManageConnect, refreshKey, navigation }: Props) {
+export default function ScheduleTab({ league, canScore, canManageConnect, refreshKey, navigation, onLinkUpdate }: Props) {
   const initialCache = peekConnectScheduleCache(league.id);
-  const initialEvent = initialCache?.events[0]?.id ?? null;
+  const initialEvents = league.connectLink?.events ?? initialCache?.events ?? [];
+  const initialEvent = initialEvents[0]?.id ?? null;
   const initialSchedule = initialEvent ? initialCache?.schedules[initialEvent]?.value ?? null : null;
-  const [events, setEvents] = useState<ConnectEventRef[]>(initialCache?.events ?? []);
+  const [events, setEvents] = useState<ConnectEventRef[]>(initialEvents);
   const [selectedEvent, setSelectedEvent] = useState<string | null>(initialEvent);
   const [schedule, setSchedule] = useState<ConnectSchedule | null>(initialSchedule);
   const [day, setDay] = useState<string | null>(initialSchedule
     ? nextScheduleDay(initialSchedule.games, nowInZone(initialSchedule.event.timezone)) : null);
   const [division, setDivision] = useState<string | null>(null);
-  const [loading, setLoading] = useState(!initialCache || (!!initialEvent && !initialSchedule));
+  const [loading, setLoading] = useState(!!initialEvent && !initialSchedule);
+  const [checked, setChecked] = useState(!!league.connectLink || !!initialCache);
   const [error, setError] = useState('');
   const [linkError, setLinkError] = useState('');
   const sequence = useRef(0);
@@ -71,11 +74,13 @@ export default function ScheduleTab({ league, canScore, canManageConnect, refres
     try {
       const cached = await readConnectScheduleCache(league.id);
       if (request !== sequence.current) return;
-      const cachedChoice = cached && (eventId && cached.events.some(e => e.id === eventId) ? eventId
-        : selectedEvent && cached.events.some(e => e.id === selectedEvent) ? selectedEvent : cached.events[0]?.id);
+      const savedEvents = league.connectLink?.events ?? cached?.events;
+      const cachedChoice = savedEvents && (eventId && savedEvents.some(e => e.id === eventId) ? eventId
+        : selectedEvent && savedEvents.some(e => e.id === selectedEvent) ? selectedEvent : savedEvents[0]?.id);
       const cachedSchedule = cachedChoice ? cached?.schedules[cachedChoice]?.value ?? null : null;
-      if (cached) {
-        setEvents(cached.events);
+      if (savedEvents) {
+        setChecked(true);
+        setEvents(savedEvents);
         setSelectedEvent(cachedChoice ?? null);
         setSchedule(cachedSchedule);
         if (cachedSchedule) {
@@ -83,27 +88,62 @@ export default function ScheduleTab({ league, canScore, canManageConnect, refres
             ? previous : nextScheduleDay(cachedSchedule.games, nowInZone(cachedSchedule.event.timezone)));
           setDivision(previous => cachedChoice === selectedEvent && cachedSchedule.divisions.some(d => d.id === previous) ? previous : null);
         } else { setDay(null); setDivision(null); }
-        if (!force && isConnectScheduleCacheFresh(cached, cachedChoice ?? undefined)) {
+        if (!force && cached && (!league.connectLink || (cached.linkRevision ?? 0) === league.connectLink.revision)
+          && isConnectScheduleCacheFresh(cached, cachedChoice ?? undefined)) {
+          if (!league.connectLink) onLinkUpdate?.({ events: savedEvents,
+            revision: cached.linkRevision ?? 0, checkedAt: cached.eventsUpdatedAt });
           setLoading(false);
           return;
         }
       }
       setLoading(true);
-      const linked = await listConnectEvents(league.id);
+      let linkState = league.connectLink;
+      if (canManageConnect) {
+        try {
+          const refreshed = await refreshConnectLinkState(league.id, force);
+          if (request !== sequence.current) return;
+          if (!linkState || refreshed.revision >= linkState.revision) {
+            linkState = refreshed;
+            onLinkUpdate?.(refreshed);
+          }
+          setChecked(true);
+        } catch {
+          if (request !== sequence.current) return;
+          setError('Couldn’t refresh the Connect link. The previous status is unchanged.');
+          // Link failure never turns a league off or hides its saved schedule.
+          // The known event can still serve its schedule while discovery is unavailable.
+          if (!linkState?.events.length && !savedEvents?.length) return;
+        }
+      } else if (force) {
+        try {
+          const refreshed = await fetchConnectLinkState(league.id);
+          if (request !== sequence.current) return;
+          if (refreshed && (!linkState || refreshed.revision >= linkState.revision)) {
+            linkState = refreshed;
+            onLinkUpdate?.(refreshed);
+            setChecked(true);
+          }
+        } catch {
+          if (request !== sequence.current) return;
+          setError('Couldn’t refresh the Connect link. The previous status is unchanged.');
+        }
+      }
+      const linked = linkState?.events ?? savedEvents ?? [];
       if (request !== sequence.current) return;
       setEvents(linked);
+      if (linkState) saveConnectScheduleCache(league.id, linked, undefined, linkState.revision);
       const chosen = eventId && linked.some(e => e.id === eventId) ? eventId
         : selectedEvent && linked.some(e => e.id === selectedEvent) ? selectedEvent : linked[0]?.id;
       setSelectedEvent(chosen ?? null);
       if (!chosen) {
         setSchedule(null); setDay(null); setDivision(null);
-        saveConnectScheduleCache(league.id, linked);
+        if (linkState) saveConnectScheduleCache(league.id, linked, undefined, linkState.revision);
         return;
       }
       if (chosen !== cachedSchedule?.event.id && chosen !== schedule?.event.id) setSchedule(null);
       const result = await getConnectSchedule(league.id, chosen);
       if (request !== sequence.current) return;
-      saveConnectScheduleCache(league.id, linked, result);
+      saveConnectScheduleCache(league.id, linked, result, linkState?.revision);
       setSchedule(result);
       setDay(previous => chosen === selectedEvent && previous && result.games.some(g => g.day === previous)
         ? previous : nextScheduleDay(result.games, nowInZone(result.event.timezone)));
@@ -127,21 +167,22 @@ export default function ScheduleTab({ league, canScore, canManageConnect, refres
       previous = state;
     });
     return () => { requests.current++; subscription.remove(); };
-  }, [league.id, refreshKey]);
+  }, [league.id, league.connectLink?.revision, refreshKey]);
 
-  if (loading && (!schedule || selectedEvent !== schedule.event.id)) return <View style={{ padding: space(5), alignItems: 'center' }}>
+  if (loading && events.length > 0 && (!schedule || selectedEvent !== schedule.event.id)) return <View style={{ padding: space(5), alignItems: 'center' }}>
     <ActivityIndicator color={colors.brandTeal} accessibilityLabel="Loading Connect schedule" />
     <Txt k="body" color={colors.muted} style={{ marginTop: 12 }}>Fetching schedule from iTala Connect</Txt>
   </View>;
 
-  if (error && !schedule) return <Card>
+  if (error && events.length > 0 && !schedule) return <Card>
     <Txt k="body">{error}</Txt>
     <Button title="Try again" onPress={() => void load(undefined, true)} style={{ marginTop: space(3) }} />
   </Card>;
 
   if (!events.length) return <View style={{ width: '100%', maxWidth: 600, alignSelf: 'center' }}>
     <Txt k="body" style={{ lineHeight: 22 }}>
-      This league has no published iTala Connect schedule yet. You can still start games as usual.
+      {checked ? 'This league has no published iTala Connect schedule yet. You can still start games as usual.'
+        : 'The iTala Connect link has not been checked yet. You can still start games as usual.'}
     </Txt>
     <Card style={{ marginTop: space(4) }}>
       <Txt k="h2">Plan your league on iTala Connect</Txt>
@@ -161,11 +202,13 @@ export default function ScheduleTab({ league, canScore, canManageConnect, refres
       </Txt>}
       {linkError ? <Txt k="body" color={colors.red} style={{ marginTop: space(2) }}>{linkError}</Txt> : null}
     </Card>
+    {error ? <Txt k="body" color={colors.muted} style={{ marginTop: space(2), fontSize: 13 }}>{error}</Txt> : null}
     <Pressable onPress={() => void load(undefined, true)} accessibilityRole="button" accessibilityLabel="Refresh schedule"
       accessibilityHint="Checks for a published iTala Connect schedule"
+      disabled={loading} accessibilityState={{ disabled: loading }}
       style={({ pressed }) => ({ marginTop: space(2), minHeight: 44, paddingVertical: space(2),
         alignSelf: 'flex-start', maxWidth: '100%', justifyContent: 'center', opacity: pressed ? 0.65 : 1 })}>
-      <Txt k="body" color={colors.muted} style={{ fontSize: 13, textDecorationLine: 'underline' }}>Refresh schedule</Txt>
+      <Txt k="body" color={colors.muted} style={{ fontSize: 13, textDecorationLine: 'underline' }}>{loading ? 'Checking Connect link…' : 'Refresh schedule'}</Txt>
     </Pressable>
   </View>;
 

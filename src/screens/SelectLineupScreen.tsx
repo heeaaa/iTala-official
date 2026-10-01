@@ -133,18 +133,10 @@ export default function SelectLineupScreen({ route, navigation }: ScreenProps<'S
       return;
     }
     if (!game && league.kind === 'league') {
-      setStarting(true);
       setStartError('');
-      try {
-        if (!await canStartFreeformGame(league)) {
-          setStartError('This league has a published iTala Connect schedule. Go back and start its scheduled game.');
-          return;
-        }
-      } catch (e) {
-        setStartError((e as Error).message || 'Could not check the schedule. Try again.');
+      if (!canStartFreeformGame(league)) {
+        setStartError('This league has a published iTala Connect schedule. Go back and start its scheduled game.');
         return;
-      } finally {
-        setStarting(false);
       }
     }
     if (game) {
@@ -184,7 +176,7 @@ export default function SelectLineupScreen({ route, navigation }: ScreenProps<'S
         navigation.replace('FinalScore', { leagueId, gameId: saved.id });
         return;
       }
-      if (!game && !await canStartFreeformGame(league)) {
+      if (!game && !canStartFreeformGame(league)) {
         throw new Error('This league has a published iTala Connect schedule. Choose a game on the Schedule tab.');
       }
       if (game) {

@@ -31,7 +31,7 @@ export default function NewGameScreen({ route, navigation }: ScreenProps<'NewGam
     setCheckingStart(true);
     setStartError('');
     try {
-      if (!await canStartFreeformGame(league)) {
+      if (!canStartFreeformGame(league)) {
         setStartError('This league now has a published iTala Connect schedule. Go back and choose a game on the Schedule tab.');
         return;
       }

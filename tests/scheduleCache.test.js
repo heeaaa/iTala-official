@@ -48,6 +48,8 @@ function screenModule(cache, transport, linking = {}) {
     '../sync/connectScheduleCache': cache,
     '../sync/connectSchedule': {
       ...transport, nextScheduleDay: games => games.find(game => game.day)?.day ?? null,
+      refreshConnectLinkState: transport.refreshConnectLinkState ?? (async () => ({ events: await transport.listConnectEvents(), revision: 1, checkedAt: clock.now })),
+      fetchConnectLinkState: async () => ({ events: await transport.listConnectEvents(), revision: 1, checkedAt: clock.now }),
       nowInZone: () => '2026-10-01T12:00', isConnectResult: () => false,
       connectMobileGameId: id => `cg_${id}`,
     },
@@ -96,6 +98,9 @@ function screenModule(cache, transport, linking = {}) {
   disk.set('itala.connect.schedule.v1.corrupt', JSON.stringify({ events: [eventA], eventsUpdatedAt: clock.now,
     schedules: { a: { value: {}, updatedAt: clock.now } } }));
   assert.equal(await load().readConnectScheduleCache('corrupt'), null, 'a malformed saved schedule is a cache miss');
+  disk.set('itala.connect.schedule.v1.bad-revision', JSON.stringify({ events: [eventA], eventsUpdatedAt: clock.now,
+    schedules: {}, linkRevision: 'not-a-revision' }));
+  assert.equal(await load().readConnectScheduleCache('bad-revision'), null, 'malformed cache revisions cannot populate league status');
 
   const screenCache = load();
   let lists = 0, schedules = 0, offline = false;
@@ -111,8 +116,9 @@ function screenModule(cache, transport, linking = {}) {
     },
   };
   const module = screenModule(screenCache, transport);
-  const props = { league: { id: 'screen-league', teams: [], games: [] }, canScore: false,
-    canManageConnect: false, refreshKey: 0, navigation: {} };
+  const props = { league: { id: 'screen-league', teams: [], games: [],
+    connectLink: { events: [eventA, eventB], revision: 1, checkedAt: clock.now } }, canScore: false,
+    canManageConnect: true, refreshKey: 0, navigation: {} };
   let root = Hooks.render(module.Screen, props);
   assert.ok(nodes(root.element).some(node => node.type === 'ActivityIndicator'));
   await settle(); root.flush();
@@ -166,7 +172,7 @@ function screenModule(cache, transport, linking = {}) {
   root = Hooks.render(module.Screen, props);
   await settle(); root.flush();
   assert.ok(nodes(root.element).some(node => node.type === 'Card'), 'offline refresh preserves the schedule');
-  assert.ok(nodes(root.element).some(node => node.props?.children === 'Offline refresh'), 'the failed refresh remains visible');
+  assert.ok(textContent(root.element).includes('previous status is unchanged'), 'the failed refresh remains visible without hiding cached games');
   root.unmount();
 
   const unlinkedCache = load();
@@ -181,7 +187,8 @@ function screenModule(cache, transport, linking = {}) {
     listConnectEvents: async () => { emptyLists++; return published ? [eventA] : []; },
     getConnectSchedule: async () => displayedSchedule,
   }, { openURL: async url => { if (failLink) throw Error('Browser unavailable'); opened.push(url); } });
-  const unlinkedProps = { ...props, league: { ...props.league, id: unlinkedId } };
+  const unlinkedProps = { ...props, canManageConnect: false, league: { ...props.league, id: unlinkedId,
+    connectLink: { events: [], revision: 1, checkedAt: clock.now } } };
   const message = 'This league has no published iTala Connect schedule yet. You can still start games as usual.';
   function checkUnlinked(root, owner) {
     const all = nodes(root.element);
@@ -234,6 +241,58 @@ function screenModule(cache, transport, linking = {}) {
   assert.equal(emptyLists, 2);
   assert.ok(!textContent(root.element).includes(message), 'refresh replaces the empty state when a schedule is published');
   assert.ok(textContent(root.element).includes('Times in Pacific/Auckland'));
+  root.unmount();
+
+  // A newer league revision from normal sync invalidates the old published-event cache.
+  root = Hooks.render(unlinked.Screen, { ...unlinkedProps, canManageConnect: false,
+    league: { ...unlinkedProps.league, connectLink: { events: [], revision: 2, checkedAt: clock.now } } });
+  await settle(); root.flush();
+  assert.ok(textContent(root.element).includes(message), 'an unlink clears saved games without querying Connect');
+  assert.equal(emptyLists, 2);
+  root.unmount();
+
+  const unknown = screenModule(load(), { listConnectEvents: async () => { throw Error('Unavailable'); } });
+  root = Hooks.render(unknown.Screen, { ...unlinkedProps, canManageConnect: true,
+    league: { id: 'unknown', teams: [], games: [] } });
+  await settle(); root.flush();
+  assert.ok(textContent(root.element).includes('link has not been checked yet'));
+  assert.ok(textContent(root.element).includes('You can still start games as usual'));
+  assert.ok(!nodes(root.element).some(node => node.props?.title === 'Try again'), 'an unknown/unlinked failure never becomes a schedule error card');
+  root.unmount();
+
+  // A discovery outage must not block a schedule whose link is already known.
+  let knownScheduleReads = 0;
+  const known = screenModule(load(), {
+    listConnectEvents: async () => { throw Error('Link discovery unavailable'); },
+    getConnectSchedule: async () => { knownScheduleReads++; return displayedSchedule; },
+  });
+  root = Hooks.render(known.Screen, { ...props, league: { ...props.league, id: 'known-without-cache' } });
+  await settle(); root.flush();
+  assert.equal(knownScheduleReads, 1, 'known linked schedules load even when link discovery fails');
+  assert.ok(textContent(root.element).includes('Times in Pacific/Auckland'));
+  assert.ok(textContent(root.element).includes('previous status is unchanged'));
+  root.unmount();
+
+  const newer = screenModule(load(), {
+    refreshConnectLinkState: async () => ({ events: [], revision: 0, checkedAt: clock.now }),
+    getConnectSchedule: async () => displayedSchedule,
+  });
+  root = Hooks.render(newer.Screen, { ...props, league: { ...props.league, id: 'server-revision' } });
+  await settle(); root.flush();
+  assert.ok(textContent(root.element).includes('Times in Pacific/Auckland'),
+    'a legacy unversioned hint cannot erase a newer authoritative link');
+  root.unmount();
+
+  const legacyCache = load();
+  legacyCache.saveConnectScheduleCache('legacy-cache', [eventA], displayedSchedule);
+  const legacyStates = [];
+  const legacyTab = screenModule(legacyCache, { listConnectEvents: async () => { throw Error('Unexpected lookup'); } });
+  root = Hooks.render(legacyTab.Screen, { ...props, league: { id: 'legacy-cache', teams: [], games: [] },
+    onLinkUpdate: state => legacyStates.push(state) });
+  await settle(); root.flush();
+  assert.equal(legacyStates.length, 1, 'visiting an older cached schedule populates the league link setting');
+  assert.equal(legacyStates[0].revision, 0);
+  assert.equal(legacyStates[0].events[0].id, 'a');
   root.unmount();
 
   console.log('✓ schedule cache and tab: fetch, remount, disk restore, event switching, refresh, expiry, offline fallback, league isolation, and unlinked owner/guest actions');

@@ -45,7 +45,7 @@ export function DefaultResultForm({ home, away, onCancel, onConfirm, busy = fals
     </Txt>
     <View style={{ flexDirection: 'row', gap: 10, marginTop: space(4) }}>
       <Button title="Cancel" kind="ghost" onPress={onCancel} disabled={busy} style={{ flex: 1 }} />
-      <Button title={busy ? 'Saving…' : 'Confirm default'} disabled={!winnerId || !validScore || busy}
+      <Button title={busy ? 'Saving…' : 'Confirm'} disabled={!winnerId || !validScore || busy}
         onPress={() => winnerId && onConfirm(winnerId, score)} style={{ flex: 1 }} />
     </View>
   </ScrollView>;

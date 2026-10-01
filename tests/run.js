@@ -179,6 +179,10 @@ try { run('node', [path.join('tests', 'connectSchedule.test.js')], { env }); }
 catch { failed++; }
 try { run('node', [path.join('tests', 'scheduleCache.test.js')], { env }); }
 catch { failed++; }
+try { run('node', [path.join('tests', 'connectLinkState.test.js')], { env }); }
+catch { failed++; }
+try { run('node', [path.join('tests', 'connectStartUi.test.js')], { env }); }
+catch { failed++; }
 if (process.env.ITALA_PGLITE_MODULE) {
   try { run('node', [path.join('tests', 'connectSchedule.database.test.js')], { env }); }
   catch { failed++; }
@@ -188,6 +192,11 @@ if (process.env.ITALA_PGLITE_MODULE) {
   catch { failed++; }
   try { run('node', [path.join('tests', 'contentReports.database.test.js')], { env }); }
   catch { failed++; }
+  const connectRoot = process.env.ITALA_CONNECT_ROOT || path.resolve(ROOT, '..', 'iTala-connect-webapp');
+  if (fs.existsSync(path.join(connectRoot, 'supabase', 'migrations', '20261001000100_mobile_link_sync.sql'))) {
+    try { run('node', [path.join('tests', 'connectLinkSync.database.test.js')], { env: { ...env, ITALA_CONNECT_ROOT: connectRoot } }); }
+    catch { failed++; }
+  } else console.log('  SKIP: cross-project link delivery needs the Connect checkout (ITALA_CONNECT_ROOT).');
 }
 try { run('node', [path.join('tests', 'static.test.js')], { env }); }
 catch { failed++; }
