@@ -236,8 +236,11 @@ evidence of native presentation):
       Check the share-card prompt, profile sheet, Settings, and drop-in sign-in
       on a compact phone, iPhone 17, and iPad portrait/landscape. Apple and Google
       buttons share the same width, height, light fill, and corner radius; labels
-      stay centered without clipping at larger text settings. Apple opens its
-      native sign-in sheet. The sharing prompts say "Google/Apple account".
+      stay centered without clipping at larger text settings. The native white
+      Apple button shows Apple's logo and "Continue with Apple" above Google.
+      At normal text size on iPad, both choices are visible together; larger
+      text remains reachable by scrolling. Tap Apple and complete the native
+      sign-in sheet. The sharing prompts say "Google/Apple account".
 - [ ] **R57** **Sign in with Apple: deletion revokes the authorization.**
       Device build only (Expo Go signs tokens for `host.exp.Exponent`, which
       these secrets cannot revoke), real Apple ID, and the `delete-account`

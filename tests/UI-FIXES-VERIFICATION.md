@@ -21,6 +21,19 @@ passes. Database checks are skipped because this host has no `psql` installation
 All user-facing app text uses “schedule” or “scheduled game” instead of
 “fixture.” The sharing prompts say “Google/Apple account.”
 
+## Earlier checkout edits
+
+The seven uncommitted files in the original `rel/build-three` checkout were
+compared with this branch. Their changes are all represented:
+
+| Earlier file | Combined result |
+| --- | --- |
+| `src/components/ui.tsx` | Native white Apple button, Apple above Google in both overlays, matching button frames, and black Google text are retained. The new Google text fitting and tab fixes are also included. |
+| `src/screens/RecGameScreen.tsx` and `src/screens/SettingsScreen.tsx` | Apple-first ordering and conditional spacing are retained within the centered tablet containers. |
+| `tests/gamePresentation.test.js` and `tests/rosterSetupUi.test.js` | Apple native-module stubs are retained; the presentation suite also checks the responsive frames and tab constraints. |
+| `docs/APP_REVIEW.md` | The earlier native Apple sign-in review notes are incorporated. |
+| `tests/MANUAL-REGRESSION.md` | Native logo, Apple-first ordering, matching frames, and end-to-end sign-in checks are combined with the compact-phone and tablet cases. |
+
 ## Native visual verification
 
 Not executed on this Windows host: native iOS pixels, Apple's sign-in sheet,
