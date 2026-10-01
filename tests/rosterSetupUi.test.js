@@ -76,6 +76,7 @@ const ui = load('src/components/ui.tsx', {
   'react-native-gesture-handler': {},
   'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
   'expo-linear-gradient': {},
+  'expo-apple-authentication': {},
   '../theme': imports['../theme'],
   '../../assets/sponsor-bpbl-clothing-inverse.png': 1,
   '../../assets/sponsor-bpbl-clothing.png': 2,

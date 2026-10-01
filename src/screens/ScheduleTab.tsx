@@ -8,6 +8,9 @@ import {
   CONNECT_SITE_URL, ConnectEventRef, ConnectSchedule, connectAdminImportUrl, connectMobileGameId,
   getConnectSchedule, isConnectResult, listConnectEvents, nextScheduleDay, nowInZone,
 } from '../sync/connectSchedule';
+import {
+  isConnectScheduleCacheFresh, peekConnectScheduleCache, readConnectScheduleCache, saveConnectScheduleCache,
+} from '../sync/connectScheduleCache';
 
 type Props = {
   league: League;
@@ -40,16 +43,21 @@ function Chip({ label, selected, onPress }: { label: string; selected: boolean; 
 }
 
 export default function ScheduleTab({ league, canScore, canManageConnect, refreshKey, navigation }: Props) {
-  const [events, setEvents] = useState<ConnectEventRef[]>([]);
-  const [selectedEvent, setSelectedEvent] = useState<string | null>(null);
-  const [schedule, setSchedule] = useState<ConnectSchedule | null>(null);
-  const [day, setDay] = useState<string | null>(null);
+  const initialCache = peekConnectScheduleCache(league.id);
+  const initialEvent = initialCache?.events[0]?.id ?? null;
+  const initialSchedule = initialEvent ? initialCache?.schedules[initialEvent]?.value ?? null : null;
+  const [events, setEvents] = useState<ConnectEventRef[]>(initialCache?.events ?? []);
+  const [selectedEvent, setSelectedEvent] = useState<string | null>(initialEvent);
+  const [schedule, setSchedule] = useState<ConnectSchedule | null>(initialSchedule);
+  const [day, setDay] = useState<string | null>(initialSchedule
+    ? nextScheduleDay(initialSchedule.games, nowInZone(initialSchedule.event.timezone)) : null);
   const [division, setDivision] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialCache || (!!initialEvent && !initialSchedule));
   const [error, setError] = useState('');
   const [linkError, setLinkError] = useState('');
   const sequence = useRef(0);
-  const loadRef = useRef<(eventId?: string) => Promise<void>>(async () => {});
+  const previousRefreshKey = useRef(refreshKey);
+  const loadRef = useRef<(eventId?: string, force?: boolean) => Promise<void>>(async () => {});
 
   const openConnect = async (url: string) => {
     setLinkError('');
@@ -57,21 +65,45 @@ export default function ScheduleTab({ league, canScore, canManageConnect, refres
     catch { setLinkError('Could not open iTala Connect. Check your browser and try again.'); }
   };
 
-  const load = async (eventId?: string) => {
+  const load = async (eventId?: string, force = false) => {
     const request = ++sequence.current;
-    setLoading(true);
     setError('');
     try {
+      const cached = await readConnectScheduleCache(league.id);
+      if (request !== sequence.current) return;
+      const cachedChoice = cached && (eventId && cached.events.some(e => e.id === eventId) ? eventId
+        : selectedEvent && cached.events.some(e => e.id === selectedEvent) ? selectedEvent : cached.events[0]?.id);
+      const cachedSchedule = cachedChoice ? cached?.schedules[cachedChoice]?.value ?? null : null;
+      if (cached) {
+        setEvents(cached.events);
+        setSelectedEvent(cachedChoice ?? null);
+        setSchedule(cachedSchedule);
+        if (cachedSchedule) {
+          setDay(previous => cachedChoice === selectedEvent && previous && cachedSchedule.games.some(g => g.day === previous)
+            ? previous : nextScheduleDay(cachedSchedule.games, nowInZone(cachedSchedule.event.timezone)));
+          setDivision(previous => cachedChoice === selectedEvent && cachedSchedule.divisions.some(d => d.id === previous) ? previous : null);
+        } else { setDay(null); setDivision(null); }
+        if (!force && isConnectScheduleCacheFresh(cached, cachedChoice ?? undefined)) {
+          setLoading(false);
+          return;
+        }
+      }
+      setLoading(true);
       const linked = await listConnectEvents(league.id);
       if (request !== sequence.current) return;
       setEvents(linked);
       const chosen = eventId && linked.some(e => e.id === eventId) ? eventId
         : selectedEvent && linked.some(e => e.id === selectedEvent) ? selectedEvent : linked[0]?.id;
       setSelectedEvent(chosen ?? null);
-      if (!chosen) { setSchedule(null); setDay(null); return; }
-      if (chosen !== schedule?.event.id) setSchedule(null);
+      if (!chosen) {
+        setSchedule(null); setDay(null); setDivision(null);
+        saveConnectScheduleCache(league.id, linked);
+        return;
+      }
+      if (chosen !== cachedSchedule?.event.id && chosen !== schedule?.event.id) setSchedule(null);
       const result = await getConnectSchedule(league.id, chosen);
       if (request !== sequence.current) return;
+      saveConnectScheduleCache(league.id, linked, result);
       setSchedule(result);
       setDay(previous => chosen === selectedEvent && previous && result.games.some(g => g.day === previous)
         ? previous : nextScheduleDay(result.games, nowInZone(result.event.timezone)));
@@ -85,11 +117,13 @@ export default function ScheduleTab({ league, canScore, canManageConnect, refres
   loadRef.current = load;
 
   useEffect(() => {
-    void loadRef.current();
+    const force = previousRefreshKey.current !== refreshKey;
+    previousRefreshKey.current = refreshKey;
+    void loadRef.current(undefined, force);
     const requests = sequence;
     let previous = AppState.currentState;
     const subscription = AppState.addEventListener('change', state => {
-      if (state === 'active' && previous !== 'active') void loadRef.current();
+      if (state === 'active' && previous !== 'active') void loadRef.current(undefined, true);
       previous = state;
     });
     return () => { requests.current++; subscription.remove(); };
@@ -97,18 +131,18 @@ export default function ScheduleTab({ league, canScore, canManageConnect, refres
 
   if (loading && (!schedule || selectedEvent !== schedule.event.id)) return <View style={{ padding: space(5), alignItems: 'center' }}>
     <ActivityIndicator color={colors.brandTeal} accessibilityLabel="Loading Connect schedule" />
-    <Txt k="body" color={colors.muted} style={{ marginTop: 12 }}>Loading Connect fixtures…</Txt>
+    <Txt k="body" color={colors.muted} style={{ marginTop: 12 }}>Fetching schedule from iTala Connect</Txt>
   </View>;
 
   if (error && !schedule) return <Card>
     <Txt k="body">{error}</Txt>
-    <Button title="Try again" onPress={() => void load()} style={{ marginTop: space(3) }} />
+    <Button title="Try again" onPress={() => void load(undefined, true)} style={{ marginTop: space(3) }} />
   </Card>;
 
   if (!events.length) return <Card>
     <Txt k="h2">Plan your league on iTala Connect</Txt>
     <Txt k="body" color={colors.muted} style={{ marginTop: space(2) }}>
-      Build round robins and seeded playoffs. Share one link for fixtures, scores and standings. Organisers approve final scores from the iTala scorekeeper app.
+      Build round robins and seeded playoffs. Share one link for schedules, scores and standings. Organisers approve final scores from the iTala scorekeeper app.
     </Txt>
     <Txt k="body" color={colors.muted} style={{ marginTop: space(3), fontSize: 13 }}>
       This league has no published iTala Connect schedule yet. You can still start games as usual.
@@ -121,7 +155,7 @@ export default function ScheduleTab({ league, canScore, canManageConnect, refres
       Connect organiser access is required. Publish the event, then return here.
     </Txt>}
     {linkError ? <Txt k="body" color={colors.red} style={{ marginTop: space(2) }}>{linkError}</Txt> : null}
-    <Button title="Refresh schedule" kind="ghost" onPress={() => void load()} style={{ marginTop: space(2) }} />
+    <Button title="Refresh schedule" kind="ghost" onPress={() => void load(undefined, true)} style={{ marginTop: space(2) }} />
   </Card>;
 
   if (!schedule) return null;
@@ -145,7 +179,7 @@ export default function ScheduleTab({ league, canScore, canManageConnect, refres
       <Txt k="body" color={colors.muted} style={{ flex: 1, fontSize: 12 }}>
         {events.length === 1 ? `${schedule.event.name} · ` : ''}Times in {schedule.event.timezone}
       </Txt>
-      <Pressable onPress={() => void load()} accessibilityRole="button" accessibilityLabel="Refresh schedule"
+      <Pressable onPress={() => void load(undefined, true)} accessibilityRole="button" accessibilityLabel="Refresh schedule"
         disabled={loading} style={{ padding: 8 }}>
         <Txt k="body" color={colors.brandTeal} style={{ fontSize: 12 }}>{loading ? 'Refreshing…' : 'Refresh'}</Txt>
       </Pressable>
@@ -165,7 +199,7 @@ export default function ScheduleTab({ league, canScore, canManageConnect, refres
         onPress={() => setDivision(d.id)} />)}
     </ScrollView>}
 
-    {visible.length === 0 ? <Empty title="No fixtures for this date" subtitle="Choose another date or division." /> :
+    {visible.length === 0 ? <Empty title="No schedules for this date" subtitle="Choose another date or division." /> :
       <>
         <Txt k="body" color={colors.muted} style={{ fontSize: 12, marginBottom: space(2) }}>
           {day ? dateLabel(day) : 'Date TBC'} · {visible.length} {visible.length === 1 ? 'game' : 'games'}
@@ -216,7 +250,7 @@ export default function ScheduleTab({ league, canScore, canManageConnect, refres
                 })} style={{ marginTop: space(3) }} />
               : scored || !canScore ? null : <Txt k="body" color={colors.muted} style={{ marginTop: space(2), fontSize: 12 }}>
                 {!game.day || !game.time ? 'Awaiting a time in Connect.'
-                  : !home || !away ? 'Teams will appear when this fixture is set.'
+                  : !home || !away ? 'Teams will appear when this scheduled game is set.'
                   : 'Both teams must be linked to this mobile league before Start is available.'}
               </Txt>}
           </Card>;

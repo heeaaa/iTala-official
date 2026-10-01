@@ -14,7 +14,7 @@ import {
 } from '../lib/stats';
 import { claimOnce, reconcileLineup, courtKeyOf } from '../lib/liveInput';
 import { PlayLogRow, PlayLogTeam } from '../components/PlayLog';
-import DefaultResultModal from '../components/DefaultResultModal';
+import FinishLevelModal from '../components/FinishLevelModal';
 import { tapFeedback, undoFeedback, successFeedback } from '../lib/haptics';
 import { usePromos, onPromoTap } from '../lib/usePromos';
 
@@ -122,7 +122,7 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   const [subOpen, setSubOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [timeoutOpen, setTimeoutOpen] = useState(false);
-  const [defaultOpen, setDefaultOpen] = useState(false);
+  const [finishLevel, setFinishLevel] = useState<{ canDefault: boolean } | null>(null);
   // The chip in the Exit row is the whole indicator; this is the explanation
   // behind it. A modal rather than an Alert so the count, the reassurance and
   // the dev-only detail can be laid out and read, not crammed into one string.
@@ -509,11 +509,11 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
     if (!latest || !current || current.status !== 'live' || latest.kind === 'recreational') return;
     const currentScore = gameScore(latest, current);
     if (currentScore.home !== 0 || currentScore.away !== 0) {
-      setDefaultOpen(false);
+      setFinishLevel(null);
       Alert.alert('Score changed', 'A team has scored since you opened this form. Review the game before finishing.');
       return;
     }
-    setDefaultOpen(false);
+    setFinishLevel(null);
     successFeedback();
     leavingRef.current = true;
     dispatch({ t: 'SET_GAME_STATUS', leagueId, gameId, status: 'final',
@@ -530,22 +530,8 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
     // Offered, not enforced. A game really can end level in a social setting,
     // and refusing outright would trap a scorekeeper with no way to close it.
     if (score.home === score.away) {
-      const canAddPeriod = period < MAX_PERIOD;
-      Alert.alert(
-        'Scores are level',
-        `${homeTeam.name} ${score.home} — ${score.away} ${awayTeam.name}.\n\n`
-        + 'Basketball goes to overtime rather than ending level. '
-        + (canAddPeriod
-            ? `Add period ${period + 1} to play it out, or finish now — a level game counts towards neither team's record.`
-            : `This is the last period the tracker allows, so finishing now records a game that counts towards neither team's record.`),
-        [
-          { text: 'Cancel', style: 'cancel' },
-          ...(canAddPeriod
-            ? [{ text: `Add period ${period + 1}`, onPress: () => setPeriod(period + 1) }]
-            : []),
-          { text: 'Finish level', style: 'destructive' as const, onPress: doFinish },
-        ],
-      );
+      setFinishLevel({ canDefault: league.kind !== 'recreational' && game.status === 'live'
+        && score.home === 0 && score.away === 0 });
       return;
     }
     Alert.alert('Finish game?', 'This locks the final score and updates standings. You can still edit the box score after.', [
@@ -753,10 +739,6 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
               </View>
             ))}
             <Button title="FINISH GAME" onPress={finish} />
-            {league.kind !== 'recreational' && game.status === 'live' && score.home === 0 && score.away === 0 && (
-              <Button title="Record default (0–0)" kind="ghost" onPress={() => setDefaultOpen(true)}
-                style={{ marginTop: space(2) }} />
-            )}
           </View>
         )}
       </View>
@@ -801,8 +783,10 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
         />
       )}
 
-      {defaultOpen && <DefaultResultModal home={homeTeam} away={awayTeam}
-        onCancel={() => setDefaultOpen(false)} onConfirm={finishDefault} />}
+      {finishLevel && <FinishLevelModal home={homeTeam} away={awayTeam} score={score.home} period={period}
+        onCancel={() => setFinishLevel(null)} onFinish={doFinish}
+        onAddPeriod={period < MAX_PERIOD ? () => { setFinishLevel(null); setPeriod(period + 1); } : undefined}
+        onDefaultConfirm={finishLevel.canDefault ? finishDefault : undefined} />}
 
       {/* What the chip in the Exit row means, on demand. */}
       {syncDetailOpen && (

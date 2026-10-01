@@ -50,6 +50,26 @@ build preserves what it should - neither of which a static check can tell you.
 
 Highest probability of defects. Each of these was a real bug at some point.
 
+### League tabs and saved schedules
+
+- [ ] **UI1** On a compact phone, iPhone 17, and iPad portrait/landscape,
+      select each of Standings, Leaders, Games, Schedule, and Roster. Every
+      label is centered in its cell and the selected background stays inside
+      the tab bar. Repeat with larger system text and iPad Split View.
+- [ ] **UI2** First Schedule load says "Fetching schedule from iTala Connect".
+      Leave the tab and return within five minutes: saved games and the next
+      scheduled date appear immediately without another loading screen.
+      Relaunch within five minutes and repeat; the disk cache restores them.
+- [ ] **UI3** After five minutes, return to Schedule. The saved games stay
+      visible while Refreshing appears. Tap Refresh or background/foreground
+      the app: updates are fetched immediately even when the cache is fresh.
+- [ ] **UI4** With a loaded schedule, disconnect and refresh. Saved games stay
+      visible alongside the error. Switch between multiple linked events and
+      leagues: their schedules remain separate. Reconnect and refresh.
+- [ ] **UI5** The empty state says "No schedules for this date"; the Connect
+      description says "Share one link for schedules, scores and standings."
+      Starting a game from a stale schedule still respects the server's checks.
+
 ### Drop-in games (most fragile area historically)
 
 - [ ] **R1** Community drop-in: create a game with location, two team names,
@@ -213,6 +233,11 @@ evidence of native presentation):
       and boot is not stalled for ~10 seconds.
 - [ ] **R53** Sign out, then sign back in with Google.
 - [ ] **R54** Sign in with Apple (device build only).
+      Check the share-card prompt, profile sheet, Settings, and drop-in sign-in
+      on a compact phone, iPhone 17, and iPad portrait/landscape. Apple and Google
+      buttons share the same width, height, light fill, and corner radius; labels
+      stay centered without clipping at larger text settings. Apple opens its
+      native sign-in sheet. The sharing prompts say "Google/Apple account".
 - [ ] **R57** **Sign in with Apple: deletion revokes the authorization.**
       Device build only (Expo Go signs tokens for `host.exp.Exponent`, which
       these secrets cannot revoke), real Apple ID, and the `delete-account`
@@ -695,6 +720,13 @@ anyone mis-tapping.
 - [ ] **T1** Play a game to a level score and tap FINISH.
       *Expect:* the "Scores are level" prompt, naming both teams and the score, offering
       **Add period N+1** and **Finish level**.
+- [ ] **T1a** At 0–0 in a league game, FINISH also offers **Default/Forfeit**.
+      It opens the winner/score form within the same dialog. Cancel returns to
+      the finish choices; confirm records the selected winner's score against 0.
+      At 10–10 or in a drop-in game, Default/Forfeit is absent. The live tracker
+      has no separate default button. Tip Off uses the label **Default/Forfeit**.
+      Repeat on compact phones and iPad portrait/landscape with larger text and
+      the keyboard open; every choice remains reachable by scrolling.
 - [ ] **T2** Choose **Add period**. *Expect:* the period advances, the tracker stays open, no game
       is finished. This is the overtime path and should be the normal answer.
 - [ ] **T3** Finish level anyway, then check Standings. *Expect:* **neither** team gains a win or a

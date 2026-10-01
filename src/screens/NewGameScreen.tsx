@@ -32,7 +32,7 @@ export default function NewGameScreen({ route, navigation }: ScreenProps<'NewGam
     setStartError('');
     try {
       if (!await canStartFreeformGame(league)) {
-        setStartError('This league now has a published iTala Connect schedule. Go back and choose a fixture on the Schedule tab.');
+        setStartError('This league now has a published iTala Connect schedule. Go back and choose a game on the Schedule tab.');
         return;
       }
       // The game row is deliberately NOT created here. Creating it on the way to

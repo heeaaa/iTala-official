@@ -8,6 +8,7 @@ import {
 import { Swipeable, RectButton } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { colors, font, radius, space, brandGradient, wordmarkGradient } from '../theme';
 import { Promo } from '../types';
 import { SyncSummary, SyncTone } from '../sync/syncStatus';
@@ -327,28 +328,30 @@ export function Segmented({ options, value, onChange }:
   { options: string[]; value: number; onChange: (i: number) => void }) {
   return (
     <View accessibilityRole="tablist"
-      style={{ flexDirection: 'row', backgroundColor: colors.surface, borderRadius: radius.md, padding: 4, borderWidth: 1, borderColor: colors.line }}>
+      style={{ flexDirection: 'row', alignItems: 'stretch', backgroundColor: colors.surface, borderRadius: radius.md, padding: 4, borderWidth: 1, borderColor: colors.line }}>
       {options.map((o, i) => {
         const active = i === value;
         const inner = (
           <Text numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.85}
-            style={{ fontFamily: font.bodyMed, fontSize: options.length >= 5 ? 11 : 13, color: active ? colors.bg : colors.muted, letterSpacing: 0.2, textAlign: 'center' }}>{o}</Text>
+            style={{ fontFamily: font.bodyMed, fontSize: 13, color: active ? colors.bg : colors.muted, letterSpacing: 0.2, textAlign: 'center' }}>{o}</Text>
         );
         return (
-          <Pressable key={o} onPress={() => onChange(i)} style={{ flex: 1, minWidth: 0 }}
+          <Pressable key={o} onPress={() => onChange(i)}
+            style={{ flex: 1, minWidth: 0, minHeight: 44, paddingHorizontal: options.length >= 5 ? 2 : 6,
+              paddingVertical: 8, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' }}
             accessibilityRole="tab"
             accessibilityLabel={o}
             // Selection is conveyed visually by a gradient fill only, so without
             // this a screen reader cannot tell which segment is active.
             accessibilityState={{ selected: active }}>
-            {active ? (
+            {/* The label determines the bar height; the fill follows the cell's
+                measured bounds, including when another label wraps. */}
+            {active && (
               <LinearGradient colors={brandGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
-                style={{ flex: 1, minHeight: 44, paddingHorizontal: options.length >= 5 ? 2 : 6, paddingVertical: 8, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' }}>
-                {inner}
-              </LinearGradient>
-            ) : (
-              <View style={{ flex: 1, minHeight: 44, paddingHorizontal: options.length >= 5 ? 2 : 6, paddingVertical: 8, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' }}>{inner}</View>
+                pointerEvents="none"
+                style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, borderRadius: radius.sm }} />
             )}
+            {inner}
           </Pressable>
         );
       })}
@@ -438,17 +441,21 @@ function GoogleGlyph({ size = 18 }: { size?: number }) {
 }
 
 // The one Google CTA used everywhere (modal + sheet), so it always looks the same.
+const AUTH_BUTTON_HEIGHT = 52;
+
 export function GoogleButton({ title = 'Continue with Google', onPress, busy, style }:
   { title?: string; onPress: () => void; busy?: boolean; style?: ViewStyle }) {
   return (
     <TouchableOpacity activeOpacity={0.75} onPress={onPress} disabled={busy}
+      accessibilityRole="button" accessibilityState={{ disabled: !!busy }}
       style={[{
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
-        paddingVertical: 14, borderRadius: radius.md, backgroundColor: colors.text,
+        width: '100%', height: AUTH_BUTTON_HEIGHT, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+        paddingHorizontal: 8, borderRadius: radius.md, backgroundColor: '#FFFFFF',
         opacity: busy ? 0.6 : 1,
       }, style]}>
       <GoogleGlyph />
-      <Text style={{ fontFamily: font.bodyBold, fontSize: 15, color: colors.bg }}>
+      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}
+        style={{ flexShrink: 1, fontSize: 19, fontWeight: '500', color: '#000000', textAlign: 'center' }}>
         {busy ? 'Signing in…' : title}
       </Text>
     </TouchableOpacity>
@@ -479,23 +486,22 @@ export function SponsorMark({ size = 52, onLight }: { size?: number; onLight?: b
   );
 }
 
-// Sign in with Apple CTA — App Store Guideline 4.8 requires offering it
-// wherever Google sign-in is offered (iOS only; callers gate on availability).
-// Styled per Apple's HIG "black" button: solid black, white  glyph + label.
-export function AppleButton({ title = 'Continue with Apple', onPress, busy, style }:
-  { title?: string; onPress: () => void; busy?: boolean; style?: ViewStyle }) {
+// Apple's native control provides its logo and label. Keep its frame equal to
+// Google's across compact phones, larger phones, and tablet sign-in surfaces.
+export function AppleButton({ onPress, busy, style }:
+  { onPress: () => void; busy?: boolean; style?: ViewStyle }) {
+  if (Platform.OS !== 'ios') return null;
   return (
-    <TouchableOpacity activeOpacity={0.75} onPress={onPress} disabled={busy}
-      style={[{
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-        paddingVertical: 14, borderRadius: radius.md, backgroundColor: '#000000',
-        borderWidth: 1, borderColor: colors.line, opacity: busy ? 0.6 : 1,
-      }, style]}>
-      <Text style={{ fontSize: 18, color: '#FFFFFF', includeFontPadding: false } as any}></Text>
-      <Text style={{ fontFamily: font.bodyBold, fontSize: 15, color: '#FFFFFF' }}>
-        {busy ? 'Signing in…' : title}
-      </Text>
-    </TouchableOpacity>
+    <View pointerEvents={busy ? 'none' : 'auto'}
+      style={[{ width: '100%', height: AUTH_BUTTON_HEIGHT, opacity: busy ? 0.6 : 1 }, style]}>
+      <AppleAuthentication.AppleAuthenticationButton
+        buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+        buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+        cornerRadius={radius.md}
+        onPress={onPress}
+        style={{ width: '100%', height: '100%' }}
+      />
+    </View>
   );
 }
 
@@ -511,8 +517,8 @@ export function SignInModal({ visible, title = 'Sign in required', message, erro
         <View style={{ width: '100%', maxWidth: 360, backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, padding: space(5) }}>
           <Txt k="h2" style={{ marginBottom: 6 }}>{title}</Txt>
           {message ? <Txt k="body" color={colors.muted} style={{ marginBottom: space(4) }}>{message}</Txt> : <View style={{ height: space(2) }} />}
-          <GoogleButton onPress={onGoogle} busy={busy} />
-          {onApple ? <AppleButton onPress={onApple} busy={busy} style={{ marginTop: 10 }} /> : null}
+          {onApple ? <AppleButton onPress={onApple} busy={busy} /> : null}
+          <GoogleButton onPress={onGoogle} busy={busy} style={onApple ? { marginTop: 10 } : undefined} />
           {error ? <Txt k="body" color={colors.red} style={{ marginTop: 10, fontSize: 13 }}>{error}</Txt> : null}
           <TouchableOpacity activeOpacity={0.7} onPress={onCancel} disabled={busy}
             style={{ marginTop: 10, paddingVertical: 14, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, alignItems: 'center', opacity: busy ? 0.5 : 1 }}>
@@ -967,15 +973,15 @@ export function ProfileSheet({ visible, onClose, user, role, busy, error, onGoog
             <RowBtn label={busy ? 'Signing out…' : 'Sign out'} color={colors.red} onPress={onSignOut} disabled={busy} />
           </>
         ) : (
-          <>
+          <View style={{ width: '100%', maxWidth: 400, alignSelf: 'center' }}>
             <View style={{ marginBottom: space(4) }}>
               <Txt k="h2">You're browsing as a guest</Txt>
               <Txt k="body" color={colors.muted} style={{ marginTop: 4 }}>
                 Sign in to share stat cards. Admins are recognized automatically.
               </Txt>
             </View>
-            <GoogleButton onPress={onGoogle} busy={busy} />
-            {onApple ? <AppleButton onPress={onApple} busy={busy} style={{ marginTop: 10 }} /> : null}
+            {onApple ? <AppleButton onPress={onApple} busy={busy} /> : null}
+            <GoogleButton onPress={onGoogle} busy={busy} style={onApple ? { marginTop: 10 } : undefined} />
             {error ? <Txt k="body" color={colors.red} style={{ marginTop: 10, fontSize: 13 }}>{error}</Txt> : null}
             <TouchableOpacity activeOpacity={0.7} onPress={onClose} disabled={busy}
               style={{ marginTop: 10, paddingVertical: 14, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, alignItems: 'center' }}>
@@ -983,7 +989,7 @@ export function ProfileSheet({ visible, onClose, user, role, busy, error, onGoog
             </TouchableOpacity>
             <Line />
             <RowBtn label="About" onPress={onAbout} />
-          </>
+          </View>
         )}
       </Animated.View>
     </View>

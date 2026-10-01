@@ -30,13 +30,13 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
     };
     return (
       <Screen scroll>
-        <View style={{ paddingTop: space(8), alignItems: 'center' }}>
+        <View style={{ width: '100%', maxWidth: 400, alignSelf: 'center', paddingTop: space(8), alignItems: 'center' }}>
           <Txt k="h1" style={{ marginBottom: space(2) }}>Sign in required</Txt>
           <Txt k="body" color={colors.muted} style={{ textAlign: 'center', marginBottom: space(6) }}>
             Settings are tied to your account. Sign in to continue.
           </Txt>
-          <GoogleButton onPress={() => { void onSignIn(signInWithGoogle); }} busy={busy || authBusy} style={{ alignSelf: 'stretch' }} />
-          {appleAvailable ? <AppleButton onPress={() => { void onSignIn(signInWithApple); }} busy={busy || authBusy} style={{ alignSelf: 'stretch', marginTop: 10 }} /> : null}
+          {appleAvailable ? <AppleButton onPress={() => { void onSignIn(signInWithApple); }} busy={busy || authBusy} /> : null}
+          <GoogleButton onPress={() => { void onSignIn(signInWithGoogle); }} busy={busy || authBusy} style={{ marginTop: appleAvailable ? 10 : 0 }} />
           {errorFor('signin') ? <Txt k="body" color={colors.red} style={{ marginTop: 10, fontSize: 13 }}>{errorFor('signin')}</Txt> : null}
           <Button title="Cancel" kind="ghost" onPress={() => navigation.goBack()} style={{ alignSelf: 'stretch', marginTop: 10 }} />
         </View>

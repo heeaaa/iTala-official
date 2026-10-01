@@ -162,6 +162,8 @@ try { run('node', [path.join('tests', 'substitution.test.js')], { env }); }
 catch { failed++; }
 try { run('node', [path.join('tests', 'gamePresentation.test.js')], { env }); }
 catch { failed++; }
+try { run('node', [path.join('tests', 'defaultGameUi.test.js')], { env }); }
+catch { failed++; }
 try { run('node', [path.join('tests', 'recSetup.test.js')], { env }); }
 catch { failed++; }
 // Apple Sign-In revocation: the client secret, both Apple requests, the
@@ -174,6 +176,8 @@ catch { failed++; }
 try { run('node', [path.join('tests', 'contentReports.integration.test.js')], { env }); }
 catch { failed++; }
 try { run('node', [path.join('tests', 'connectSchedule.test.js')], { env }); }
+catch { failed++; }
+try { run('node', [path.join('tests', 'scheduleCache.test.js')], { env }); }
 catch { failed++; }
 if (process.env.ITALA_PGLITE_MODULE) {
   try { run('node', [path.join('tests', 'connectSchedule.database.test.js')], { env }); }
