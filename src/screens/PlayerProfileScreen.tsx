@@ -377,7 +377,7 @@ export default function PlayerProfileScreen({ route, navigation }: ScreenProps<'
 
       <SignInModal
         visible={askSignIn}
-        message="Sharing player stat cards requires a Google account."
+        message="Sharing player stat cards requires a Google/Apple account."
         error={errorFor('signin') ?? undefined}
         busy={authBusy}
         onGoogle={() => { void onSignInThenShare(signInWithGoogle); }}

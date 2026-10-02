@@ -21,7 +21,7 @@ const imports = {
   '../components/ui': Object.fromEntries(['Txt', 'Button', 'Segmented'].map(x => [x, x])),
   '../theme': theme,
   '../lib/liveInput': load('src/lib/liveInput.ts'),
-  ...Object.fromEntries(['expo-keep-awake', '../store/StoreProvider', '../store/AdminProvider', '../lib/stats', '../components/PlayLog', '../components/DefaultResultModal', '../lib/haptics', '../lib/usePromos'].map(x => [x, {}])),
+  ...Object.fromEntries(['expo-keep-awake', '../store/StoreProvider', '../store/AdminProvider', '../lib/stats', '../components/PlayLog', '../components/FinishLevelModal', '../lib/haptics', '../lib/usePromos'].map(x => [x, {}])),
 };
 const { SubModal, compareSubPlayers } = load('src/screens/LiveGameScreen.tsx', imports, '\nexport { SubModal, compareSubPlayers };');
 function nodes(n) {

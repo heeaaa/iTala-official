@@ -1,5 +1,5 @@
 import { getSupabase, SYNC_ENABLED } from './supabase';
-import type { League } from '../types';
+import type { ConnectLinkState, League } from '../types';
 
 export interface ConnectEventRef {
   id: string;
@@ -84,14 +84,16 @@ async function call<T>(body: Record<string, unknown>): Promise<T> {
   }
   if (error) {
     let message = 'Could not load the Connect schedule. Check your connection and try again.';
+    let status: number | undefined;
     try {
       const response = (error as { context?: Response }).context;
+      status = response?.status;
       if (response?.json) {
         const parsed = await response.json();
         if (typeof parsed?.error === 'string') message = parsed.error;
       }
     } catch { /* Retain the safe generic error. */ }
-    throw new Error(message);
+    throw Object.assign(new Error(message), { status });
   }
   return data as T;
 }
@@ -101,20 +103,73 @@ export async function listConnectEvents(leagueId: string): Promise<ConnectEventR
   return result.events;
 }
 
-/** A published Connect link makes its fixtures the only way to start a synced league game.
- * Drop-in spaces and local-only leagues never consult Connect, preserving offline play.
- * A failed lookup must propagate: guessing "unlinked" would create duplicate games.
+/** Game screens only read persisted league metadata. Discovery belongs in Schedule/settings.
+ * The mobile database guards new game inserts if a device has an older league revision.
  */
-export async function canStartFreeformGame(
-  league: Pick<League, 'id' | 'kind'>,
-  listEvents: (leagueId: string) => Promise<ConnectEventRef[]> = listConnectEvents,
+export function canStartFreeformGame(
+  league: Pick<League, 'id' | 'kind' | 'connectLink'>,
   syncEnabled = SYNC_ENABLED,
-): Promise<boolean> {
-  return league.kind === 'recreational' || !syncEnabled || (await listEvents(league.id)).length === 0;
+): boolean {
+  return league.kind === 'recreational' || !syncEnabled || !league.connectLink?.events.length;
 }
 
+const linkChecks = new Map<string, { at: number; value?: ConnectLinkState; error?: Error }>();
+const linkRequests = new Map<string, Promise<ConnectLinkState>>();
+
+/** Explicit guest refresh reads the mobile registry, never the Connect project. */
+export async function fetchConnectLinkState(leagueId: string): Promise<ConnectLinkState | null> {
+  const sb = getSupabase();
+  if (!sb) return null;
+  const { data, error } = await sb.from('leagues')
+    .select('connect_events,connect_link_revision,connect_link_checked_at').eq('id', leagueId).single();
+  if (error) throw new Error('Could not refresh the league’s Connect status.');
+  if (data?.connect_link_checked_at == null) return null;
+  return { events: data.connect_events, revision: data.connect_link_revision, checkedAt: data.connect_link_checked_at };
+}
+
+/** Coalesce owner discovery and throttle successful AND failed visits. Explicit refresh retries. */
+export async function refreshConnectLinkState(leagueId: string, force = false): Promise<ConnectLinkState> {
+  const pending = linkRequests.get(leagueId);
+  if (pending) return pending;
+  const previous = linkChecks.get(leagueId);
+  if (!force && previous && Date.now() - previous.at < 5 * 60 * 1000) {
+    if (previous.error) throw previous.error;
+    if (previous.value) return previous.value;
+  }
+  const request = (async () => {
+    try {
+      let value: ConnectLinkState;
+      try { value = await call<ConnectLinkState>({ action: 'refreshLinks', leagueId }); }
+      catch (error) {
+        // During a coordinated upgrade an older bridge/source database may not support refreshLinks.
+        // A successful legacy lookup is an unversioned hint; it never overrides server-owned revisions.
+        const status = (error as { status?: number }).status;
+        if (!status || ![400, 404, 405, 501, 502, 503].includes(status)) throw error;
+        const events = await listConnectEvents(leagueId);
+        value = { events, revision: 0, checkedAt: Date.now() };
+      }
+      if (!Array.isArray(value?.events) || !Number.isSafeInteger(value.revision) || value.revision < 0
+        || !Number.isFinite(value.checkedAt)) throw new Error('Could not refresh the Connect link.');
+      linkChecks.set(leagueId, { at: Date.now(), value });
+      return value;
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error('Could not refresh the Connect link.');
+      linkChecks.set(leagueId, { at: Date.now(), error: failure });
+      throw failure;
+    }
+  })();
+  linkRequests.set(leagueId, request);
+  try { return await request; } finally { linkRequests.delete(leagueId); }
+}
+
+const scheduleRequests = new Map<string, Promise<ConnectSchedule>>();
 export async function getConnectSchedule(leagueId: string, eventId: string): Promise<ConnectSchedule> {
-  return call<ConnectSchedule>({ action: 'getDivisionSchedule', leagueId, eventId });
+  const key = JSON.stringify([leagueId, eventId]);
+  const pending = scheduleRequests.get(key);
+  if (pending) return pending;
+  const request = call<ConnectSchedule>({ action: 'getDivisionSchedule', leagueId, eventId });
+  scheduleRequests.set(key, request);
+  try { return await request; } finally { scheduleRequests.delete(key); }
 }
 
 export async function startConnectGame(

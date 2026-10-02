@@ -122,7 +122,9 @@ not a documentation workaround.
 
 Explain the following in Review Notes:
 
-- Google sign-in is accompanied by Sign in with Apple on iOS.
+- On iOS, the native white **Continue with Apple** button appears above Google
+  in the guest profile sheet and every account sign-in prompt. The buttons have
+  matching width and height; Apple sign-in opens the native authentication sheet.
 - Guest browsing does not require a named social account.
 - Named accounts can be deleted inside the app through **Settings → Delete account**.
 - Synced league and roster information is visible to valid app sessions, including

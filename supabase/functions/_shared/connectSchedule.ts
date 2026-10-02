@@ -1,6 +1,8 @@
 // iTala Connect is read here, never from the mobile bundle. The Connect key
 // bypasses RLS, so published status and the mobile league link are checked
 // explicitly before any record is returned or a fixture can be started.
+import { applyLinkSnapshot, validLinkSnapshot } from './connectLinkState.ts';
+
 type Row = Record<string, unknown>;
 type Env = (name: string) => string | undefined;
 export interface BridgeDependencies { env: Env; fetch: typeof fetch }
@@ -228,6 +230,13 @@ export async function handleConnectSchedule(req: Request, deps: BridgeDependenci
     if (!leagueId || leagueId.length > 100) throw new BridgeError(400, 'Choose a league.');
     const league = await table(mobile, mobileKey, 'leagues', { select: 'id,kind', id: `eq.${leagueId}` }, deps, bearer);
     if (league.length !== 1 || league[0].kind !== 'league') throw new BridgeError(404, 'League not found.');
+    if (action === 'refreshLinks') {
+      const snapshot = await api(connect, secret, '/rest/v1/rpc/connect_mobile_link_snapshot', deps, secret,
+        { p_league_id: leagueId });
+      if (!validLinkSnapshot(snapshot) || snapshot.leagueId !== leagueId)
+        throw new BridgeError(502, 'Could not check the Connect link. The previous status is unchanged.');
+      return respond(await applyLinkSnapshot(snapshot, deps));
+    }
     if (action === 'listEvents') {
       const linked = await linksForLeague(leagueId, connect, secret, deps);
       return respond({ events: linked.events.map(e => ({
@@ -240,12 +249,12 @@ export async function handleConnectSchedule(req: Request, deps: BridgeDependenci
     if (action === 'getDivisionSchedule') return respond(await schedule(leagueId, eventId, connect, secret, deps));
     if (action === 'startGame' || action === 'recordDefault') {
       const gameId = string(body.gameId);
-      if (!isUuid(gameId)) throw new BridgeError(400, 'Choose a fixture.');
+      if (!isUuid(gameId)) throw new BridgeError(400, 'Choose a scheduled game.');
       const current = await schedule(leagueId, eventId, connect, secret, deps);
       const fixture = current.games.find(g => g.id === gameId);
       if (!fixture || !fixture.day || !fixture.time || !fixture.homeTeamId || !fixture.awayTeamId
         || fixture.score1 !== null || fixture.score2 !== null || fixture.mobileGameId) {
-        throw new BridgeError(409, 'This fixture is no longer available to start. Refresh the schedule.');
+        throw new BridgeError(409, 'This scheduled game is no longer available to start. Refresh the schedule.');
       }
       const home = current.teams.find(t => t.id === fixture.homeTeamId)?.mobileTeamId;
       const away = current.teams.find(t => t.id === fixture.awayTeamId)?.mobileTeamId;
@@ -258,6 +267,11 @@ export async function handleConnectSchedule(req: Request, deps: BridgeDependenci
             (defaultWinner !== home && defaultWinner !== away))) {
         throw new BridgeError(400, 'Choose a winner and a default score from 1 to 999.');
       }
+      const mobileService = deps.env('SUPABASE_SERVICE_ROLE_KEY');
+      if (!mobileService) throw new BridgeError(503, 'Scheduled game validation is not configured.');
+      await api(mobile, mobileService, '/rest/v1/rpc/authorize_connect_game', deps, mobileService, {
+        p_league_id: leagueId, p_game_id: `cg_${gameId}`, p_home_team_id: home, p_away_team_id: away,
+      });
       const result = action === 'recordDefault'
         ? await api(mobile, mobileKey, '/rest/v1/rpc/record_connect_default_game', deps, bearer, {
             p_league_id: leagueId, p_connect_game_id: gameId, p_home_team_id: home, p_away_team_id: away,

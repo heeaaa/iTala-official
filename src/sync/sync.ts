@@ -22,7 +22,7 @@ import { isNetworkFailure } from '../store/authErrors';
 
 /* ---------- Row shapes (snake_case columns ↔ camelCase types) -------------- */
 
-interface LeagueRow { id: string; name: string; season: string; kind: 'league' | 'recreational'; foul_out_limit: number | null; track_misses: boolean | null; track_turnovers: boolean | null; is_shared: boolean | null; is_closed: boolean | null; is_archived: boolean | null; created_at: number; }
+interface LeagueRow { id: string; name: string; season: string; kind: 'league' | 'recreational'; foul_out_limit: number | null; track_misses: boolean | null; track_turnovers: boolean | null; is_shared: boolean | null; is_closed: boolean | null; is_archived: boolean | null; created_at: number; connect_events?: import('./connectSchedule').ConnectEventRef[]; connect_link_revision?: number; connect_link_checked_at?: number | null; }
 interface TeamRow   { id: string; league_id: string; name: string; color: string; logo: string | null; coach: string | null; team_only: boolean; player_ids: string[]; }
 interface PlayerRow { id: string; league_id: string; name: string; number: string | null; origin_player_id: string | null; }
 interface GameRow   { id: string; league_id: string; home_team_id: string; away_team_id: string; status: 'scheduled'|'live'|'final'; scheduled_at: number | null; location: string | null; finished_at: number | null; default_winner_team_id: string | null; default_score: number | null; home_on_court: string[]; away_on_court: string[]; period: number | null; attendance: string[] | null; track_misses: boolean | null; track_turnovers: boolean | null; created_by: string | null; }
@@ -38,6 +38,9 @@ const leagueFromRow = (r: LeagueRow, teams: Team[], players: Player[], games: Ga
   isShared: r.is_shared || undefined,
   isClosed: r.is_closed || undefined,
   isArchived: r.is_archived || undefined,
+  connectLink: r.connect_link_checked_at != null ? {
+    events: r.connect_events ?? [], revision: r.connect_link_revision ?? 0, checkedAt: r.connect_link_checked_at,
+  } : undefined,
   createdAt: r.created_at, teams, players, games, events,
 });
 const teamFromRow = (r: TeamRow): Team => ({
@@ -927,6 +930,7 @@ export async function pushAction(sb: SupabaseClient, action: Action, state: AppS
       }
 
       case 'HYDRATE':
+      case 'CONNECT_LINK_REFRESHED':
         // Local hydrate only — no server write.
         return { refused };
 

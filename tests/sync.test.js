@@ -2923,7 +2923,41 @@ async function y1_default_result_round_trips_without_events() {
     [['tA', 1, 0, 30, 0], ['tH', 0, 1, 0, 30]]);
 }
 
+async function connect_link_metadata_syncs_without_discovery() {
+  const server = new FakeServer();
+  const A = await seed(server), B = new Device('B', server);
+  const row = server.rows.leagues[0];
+  const events = [{ id: 'event', name: 'Published event', timezone: 'Pacific/Auckland', divisions: [] }];
+  Object.assign(row, { connect_events: events, connect_link_revision: 10, connect_link_checked_at: 1000 });
+  for (const device of [A, B]) {
+    device.applySnapshot(await device.snapshot([]));
+    eq('CONNECT catalogue sync carries status to ' + device.name, device.league().connectLink,
+      { events, revision: 10, checkedAt: 1000 });
+    ok('CONNECT synced linked policy blocks freeform on ' + device.name, !M.canStartFreeformGame(device.league(), true));
+  }
+  A.dispatch({ t: 'CONNECT_LINK_REFRESHED', leagueId: 'lg1', state: { events, revision: 12, checkedAt: 1200 } });
+  await A.settle();
+  eq('CONNECT discovered metadata is not echoed to the database', row.connect_link_revision, 10);
+  A.applySnapshot(await A.snapshot([]));
+  eq('CONNECT older catalogue cannot erase discovered state', A.league().connectLink.revision, 12);
+  A.dispatch({ t: 'CONNECT_LINK_REFRESHED', leagueId: 'lg1', state: { events: [], revision: 0, checkedAt: 1300 } });
+  eq('CONNECT compatibility hint cannot overwrite authoritative status', A.league().connectLink.revision, 12);
+  Object.assign(row, { connect_events: [], connect_link_revision: 13, connect_link_checked_at: 1400 });
+  for (const device of [A, B]) {
+    device.applySnapshot(await device.snapshot([]));
+    ok('CONNECT unlink activates regular games on ' + device.name, M.canStartFreeformGame(device.league(), true));
+    eq('CONNECT unlink revision reaches ' + device.name, device.league().connectLink.revision, 13);
+  }
+  // Disk restoration uses the same reducer hydrate and keeps metadata across a restart.
+  const restored = reducer({ leagues: [], settings: { trackMisses: true } },
+    { t: 'HYDRATE', state: JSON.parse(JSON.stringify(A.state)) });
+  eq('CONNECT link status survives local persistence', restored.leagues[0].connectLink, A.league().connectLink);
+  const copy = reducer(A.state, { t: 'DUPLICATE_LEAGUE', sourceLeagueId: 'lg1', newLeagueId: 'copy', name: 'New', season: '2027' });
+  eq('CONNECT a new season does not inherit the old league link', copy.leagues.find(l => l.id === 'copy').connectLink, undefined);
+}
+
 const TESTS = [
+  ['CONNECT durable metadata and two-device catalogue sync', connect_link_metadata_syncs_without_discovery],
   ['Y1 default result round-trips without events', y1_default_result_round_trips_without_events],
   ['S1 resurrection is real', s1_resurrection_is_real],
   ['S2 undo deletes server-side', s2_head_deletes_the_row],
