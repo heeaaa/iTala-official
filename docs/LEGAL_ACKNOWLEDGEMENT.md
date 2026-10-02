@@ -47,7 +47,7 @@ It is not a universal backend signup prohibition for modified/older clients or d
 Auth API calls. That stricter requirement would need a separate trusted pre-auth flow
 and Supabase Auth hook.
 
-## Deployment
+## Initial 7 September 2026 deployment (historical)
 
 1. Apply the legal acknowledgement section of `supabase/schema.sql` (or rerun the
    idempotent full schema) before shipping this client. No production changes are
@@ -65,10 +65,11 @@ and Supabase Auth hook.
 
 Keep prior document snapshots and prior registry rows/receipts; do not overwrite
 history or re-label changed text with the same version. Update `LEGAL_VERSION` and
-the three links in `src/lib/legal.ts` for the new bundle. Publish the corresponding
-documents and ship the matching app update. Then, in one database transaction, insert
-the new registry row with `is_current = false`, set the old current row to false,
-and set the new row to true. The partial unique index permits only one current row.
+the three links in `src/lib/legal.ts` for the new bundle. Stage the new registry row
+with `is_current = false` through a migration while the earlier row remains current.
+Publish the corresponding documents and ship the matching app update. At the release
+gate, use a later migration that atomically sets the old current row to false and the
+new row to true. The partial unique index permits only one current row.
 
 On the next account restoration or explicit sign-in, the matching new client asks
 for acknowledgement. Older clients implementing this feature show an update-required
