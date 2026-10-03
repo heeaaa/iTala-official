@@ -7,6 +7,9 @@ import { colors, space, font, radius } from '../theme';
 import { ScreenProps } from '../navigation';
 import { standings, leaderboards, leagueAwards, winPctOf, gameScore, gamesPlayedMap } from '../lib/stats';
 import { dayKey, dayLabel, uid } from '../lib/format';
+import ScheduleTab from './ScheduleTab';
+import { canStartFreeformGame } from '../sync/connectSchedule';
+import ConnectLinkSettings from '../components/ConnectLinkSettings';
 
 export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'LeagueDetail'>) {
   const { leagueId } = route.params;
@@ -20,6 +23,7 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
   const [showSettings, setShowSettings] = useState(false);
   const [dupOpen, setDupOpen] = useState(false);
   const [dupSeason, setDupSeason] = useState('');
+  const [scheduleRefreshKey, setScheduleRefreshKey] = useState(0);
 
   // This league's games and stats may not be on the device: the catalogue
   // carries every league's name, but the heavy tables are only fetched for the
@@ -83,10 +87,20 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
   const isRec = league.kind === 'recreational'; // drop-in space, not a league
   const seasonOver = !isRec && !!league.isClosed; // completed league season
   // Tab labels differ (rec has no Standings/Leaders), so map the numeric tab
-  // index to a stable NAME and switch on that — keeps the four league blocks
+  // index to a stable NAME and switch on that — keeps the five league blocks
   // and two rec blocks working without renumbering.
-  const tabNames = isRec ? ['Games', 'Roster'] : ['Standings', 'Leaders', 'Games', 'Roster'];
+  const tabNames = isRec ? ['Games', 'Roster'] : ['Standings', 'Leaders', 'Games', 'Schedule', 'Roster'];
   const activeTab = tabNames[tab] ?? tabNames[0];
+
+  const hasPublishedSchedule = !canStartFreeformGame(league);
+  const startLeagueGame = () => {
+    if (!hasPublishedSchedule) {
+      navigation.navigate('NewGame', { leagueId });
+    } else {
+      setScheduleRefreshKey(key => key + 1);
+      setTab(tabNames.indexOf('Schedule'));
+    }
+  };
 
   // Favorite teams float to the top of the roster and the games filter chips;
   // within each group the order is alphabetical so it never shifts under the
@@ -151,7 +165,7 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
         )}
         {!showSettings && (
           <View style={{ marginTop: space(3) }}>
-            <Segmented options={isRec ? ['Games', 'Roster'] : ['Standings', 'Leaders', 'Games', 'Roster']} value={tab} onChange={setTab} />
+            <Segmented options={tabNames} value={tab} onChange={setTab} />
           </View>
         )}
       </View>
@@ -162,6 +176,8 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
         {owner && showSettings && (
           <Card style={{ marginTop: space(3) }}>
             <Txt k="label" style={{ marginBottom: space(2) }}>{isRec ? 'Drop-in settings' : 'League settings'}</Txt>
+            {!isRec && <ConnectLinkSettings league={league}
+              onUpdate={state => dispatch({ t: 'CONNECT_LINK_REFRESHED', leagueId, state })} />}
             <Toggle
               label="Track missed shots"
               description={`Show the 2PT ✗, 3PT ✗, and FT ✗ buttons in the live tracker for ${isRec ? 'these drop-in games' : 'this league'}. Makes and all other stats are always tracked.`}
@@ -539,6 +555,12 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
           })()
         )}
 
+        {!showSettings && activeTab === 'Schedule' && (
+          <ScheduleTab league={league} canScore={scorer && !seasonOver} canManageConnect={owner}
+            onLinkUpdate={state => dispatch({ t: 'CONNECT_LINK_REFRESHED', leagueId, state })}
+            refreshKey={scheduleRefreshKey} navigation={navigation} />
+        )}
+
         {!showSettings && activeTab === 'Roster' && (
           <>
             {owner && !isRec && league.teams.length === 0 && (
@@ -668,8 +690,8 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
           paddingHorizontal: space(4), paddingTop: space(3), paddingBottom: space(6),
           backgroundColor: colors.bg, borderTopWidth: 1, borderTopColor: colors.line,
         }}>
-          <Button title="▶  Start Game" onPress={() => navigation.navigate('NewGame', { leagueId })}
-            disabled={league.teams.length < 2} />
+          <Button title={hasPublishedSchedule ? 'Choose a scheduled game' : '▶  Start Game'}
+            onPress={startLeagueGame} disabled={league.teams.length < 2} />
         </View>
       )}
     </Screen>

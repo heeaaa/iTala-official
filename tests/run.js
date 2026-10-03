@@ -58,6 +58,11 @@ function resolveNpx() {
 }
 const NPX = resolveNpx();
 function npx(args, opts = {}) {
+  // CI/offline machines may already have the exact esbuild binary but not
+  // npm's package metadata. Let them use it without any registry request.
+  if (process.env.ITALA_ESBUILD_BIN && args[0] === '--yes' && args[1] === 'esbuild@0.24.0') {
+    return run(process.env.ITALA_ESBUILD_BIN, args.slice(2), opts);
+  }
   return run(NPX.cmd, [...NPX.prefix, ...args], { ...NPX.opts, ...opts });
 }
 
@@ -153,6 +158,12 @@ try { run('node', [path.join('tests', 'rosterImport.test.js')], { env }); }
 catch { failed++; }
 try { run('node', [path.join('tests', 'rosterSetupUi.test.js')], { env }); }
 catch { failed++; }
+try { run('node', [path.join('tests', 'substitution.test.js')], { env }); }
+catch { failed++; }
+try { run('node', [path.join('tests', 'gamePresentation.test.js')], { env }); }
+catch { failed++; }
+try { run('node', [path.join('tests', 'defaultGameUi.test.js')], { env }); }
+catch { failed++; }
 try { run('node', [path.join('tests', 'recSetup.test.js')], { env }); }
 catch { failed++; }
 // Apple Sign-In revocation: the client secret, both Apple requests, the
@@ -164,13 +175,28 @@ try { run('node', [path.join('tests', 'contentReports.test.js')], { env }); }
 catch { failed++; }
 try { run('node', [path.join('tests', 'contentReports.integration.test.js')], { env }); }
 catch { failed++; }
+try { run('node', [path.join('tests', 'connectSchedule.test.js')], { env }); }
+catch { failed++; }
+try { run('node', [path.join('tests', 'scheduleCache.test.js')], { env }); }
+catch { failed++; }
+try { run('node', [path.join('tests', 'connectLinkState.test.js')], { env }); }
+catch { failed++; }
+try { run('node', [path.join('tests', 'connectStartUi.test.js')], { env }); }
+catch { failed++; }
 if (process.env.ITALA_PGLITE_MODULE) {
+  try { run('node', [path.join('tests', 'connectSchedule.database.test.js')], { env }); }
+  catch { failed++; }
   try { run('node', [path.join('tests', 'recSetup.database.test.js')], { env }); }
   catch { failed++; }
   try { run('node', [path.join('tests', 'rosterImport.database.test.js')], { env }); }
   catch { failed++; }
   try { run('node', [path.join('tests', 'contentReports.database.test.js')], { env }); }
   catch { failed++; }
+  const connectRoot = process.env.ITALA_CONNECT_ROOT || path.resolve(ROOT, '..', 'iTala-connect-webapp');
+  if (fs.existsSync(path.join(connectRoot, 'supabase', 'migrations', '20261001000100_mobile_link_sync.sql'))) {
+    try { run('node', [path.join('tests', 'connectLinkSync.database.test.js')], { env: { ...env, ITALA_CONNECT_ROOT: connectRoot } }); }
+    catch { failed++; }
+  } else console.log('  SKIP: cross-project link delivery needs the Connect checkout (ITALA_CONNECT_ROOT).');
 }
 try { run('node', [path.join('tests', 'static.test.js')], { env }); }
 catch { failed++; }

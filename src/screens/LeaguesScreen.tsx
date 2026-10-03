@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { View, FlatList, Pressable, Alert, TextInput, ScrollView, useWindowDimensions, RefreshControl, ActivityIndicator } from 'react-native';
+import { View, FlatList, Pressable, Alert, Linking, TextInput, ScrollView, useWindowDimensions, RefreshControl, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Screen, Txt, Card, Button, Pill, Empty, Wordmark, PasswordModal, LivePip,
@@ -10,6 +10,7 @@ import { useStore } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
 import { colors, space, font, radius } from '../theme';
 import { ScreenProps } from '../navigation';
+import { PRIVACY_POLICY_URL } from '../lib/legal';
 
 // Tap the wordmark this many times (with <1.5s between taps) to reveal the
 // hidden password lock — the emergency admin backup when Google sign-in or
@@ -249,7 +250,15 @@ Share this with the organizer. It can create exactly one league, then expires.`)
     Alert.alert(
       'iTala',
       'Record. Track. Elevate.\n\nLive basketball stat tracking, league standings, and shareable stat cards for the people you play with.\n\nVersion 1.0.0',
-      [{ text: 'OK' }],
+      [
+        { text: 'Privacy Policy', onPress: () => {
+          void Linking.openURL(PRIVACY_POLICY_URL).catch(() => {
+            Alert.alert('Could not open Privacy Policy', 'Please check your connection and try again.');
+          });
+        } },
+        // The cancel style lets VoiceOver's escape gesture close the alert.
+        { text: 'OK', style: 'cancel' },
+      ],
     );
   };
 

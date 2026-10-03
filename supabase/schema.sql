@@ -34,20 +34,28 @@ revoke all on public.legal_versions from anon, authenticated;
 -- `is_current` is set only when no version is current yet, and the conflict
 -- clause below deliberately leaves it alone.
 --
--- The URLs, though, must self-heal. They moved host when the itala.fyi domain
--- was bought, and `on conflict do nothing` would have left an existing project
--- pinned to the old `itala.abejohanna.workers.dev` addresses forever - a stale
--- record that no amount of re-running the schema would correct. The three
--- documents are the same documents at a new address, so this is an update, NOT
--- a new version: bumping `version` here would force every existing user to
--- re-accept unchanged terms.
+-- Keep the 7 September text at immutable archive URLs so old receipts still
+-- identify the documents that were shown. The 2 October bundle updates Privacy;
+-- Terms and Content Policy are unchanged. On an existing project this stages
+-- the new row without making it current. Promote only once the matching app is
+-- available, publishing the new pages at the same time (docs/LEGAL_ACKNOWLEDGEMENT.md).
 --
--- Keep these three in step with LEGAL_LINKS in src/lib/legal.ts - the app opens
--- the client's copy, so a disagreement means the receipt on file cites a
--- different address from the page the person actually read. tests/static.test.js
--- checks the two agree.
+-- Keep both rows' URLs in step with src/lib/legal.ts - LEGAL_LINKS for the new
+-- row, PREVIOUS_LEGAL_LINKS for the earlier one. The app opens the client's copy,
+-- so a disagreement means the receipt on file cites a different address from the
+-- page the person actually read. tests/static.test.js checks they agree.
 insert into public.legal_versions (version, terms_url, privacy_url, content_policy_url, is_current)
-values ('2026-09-07', 'https://www.itala.fyi/terms/',
+values ('2026-09-07', 'https://www.itala.fyi/archive/2026-09-07/terms/',
+  'https://www.itala.fyi/archive/2026-09-07/privacy/',
+  'https://www.itala.fyi/archive/2026-09-07/content-policy/',
+  false)
+on conflict (version) do update set
+  terms_url = excluded.terms_url,
+  privacy_url = excluded.privacy_url,
+  content_policy_url = excluded.content_policy_url;
+
+insert into public.legal_versions (version, terms_url, privacy_url, content_policy_url, is_current)
+values ('2026-10-02', 'https://www.itala.fyi/terms/',
   'https://www.itala.fyi/privacy/',
   'https://www.itala.fyi/content-policy/',
   not exists (select 1 from public.legal_versions where is_current))
@@ -351,6 +359,19 @@ alter table public.games add column if not exists attendance text[];
 alter table public.games add column if not exists track_misses boolean;
 alter table public.games add column if not exists track_turnovers boolean;
 alter table public.games add column if not exists created_by uuid references auth.users(id) on delete set null;
+alter table public.games add column if not exists default_winner_team_id text;
+alter table public.games add column if not exists default_score int;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'games_default_result_check'
+    and conrelid = 'public.games'::regclass) then
+    alter table public.games add constraint games_default_result_check check (
+      (default_winner_team_id is null and default_score is null) or
+      (status = 'final' and default_winner_team_id is not null and default_score is not null
+        and default_winner_team_id in (home_team_id, away_team_id)
+        and default_score between 1 and 999)
+    );
+  end if;
+end $$;
 
 create table if not exists public.teams (
   id           text primary key,
@@ -381,6 +402,8 @@ create table if not exists public.games (
   scheduled_at    bigint,
   location        text,
   finished_at     bigint,
+  default_winner_team_id text,
+  default_score   int,
   home_on_court   text[] not null default '{}',
   away_on_court   text[] not null default '{}',
   period          int default 1,
@@ -1749,7 +1772,8 @@ grant execute on function public.ping() to anon, authenticated;
 --
 -- WHY THIS EXISTS
 --
--- Nothing stores a final score. There is no score column on games and no
+-- Ordinary games do not store a final score. Default games store one official
+-- team result on games, separate from player events. There is no general score column and no
 -- player_game_stats table: box scores, standings and leaders are all derived
 -- from the public.events log, one row per stat tap (docs/ARCHITECTURE.md, and
 -- src/lib/stats.ts). That is deliberate - editing or deleting one event has to
@@ -1824,8 +1848,12 @@ select
   ht.name                       as home_name,
   g.away_team_id                as away_team_id,
   aw.name                       as away_name,
-  coalesce(s.home_pts, 0)::int  as home_pts,
-  coalesce(s.away_pts, 0)::int  as away_pts,
+  (case when g.default_winner_team_id is not null then
+    case when g.default_winner_team_id = g.home_team_id then g.default_score else 0 end
+    else coalesce(s.home_pts, 0) end)::int as home_pts,
+  (case when g.default_winner_team_id is not null then
+    case when g.default_winner_team_id = g.away_team_id then g.default_score else 0 end
+    else coalesce(s.away_pts, 0) end)::int as away_pts,
   -- BASKETBALL HAS NO DRAWS, but a level score still reaches here: a game
   -- finished with no events at all is 0-0, and the tracker lets a scorekeeper
   -- finish one after a warning (see standings() in src/lib/stats.ts). Such a
@@ -1833,6 +1861,7 @@ select
   -- `home >= away` bug. Exposing the winner rather than leaving each consumer to
   -- compare the two columns is what stops that bug being rewritten downstream.
   case
+    when g.default_winner_team_id is not null then g.default_winner_team_id
     when coalesce(s.home_pts, 0) > coalesce(s.away_pts, 0) then g.home_team_id
     when coalesce(s.away_pts, 0) > coalesce(s.home_pts, 0) then g.away_team_id
     else null
@@ -1847,7 +1876,8 @@ select
   -- for a game that already reads final. A consumer that wants to be sure it has
   -- the whole game waits for these two to stop changing before it publishes.
   coalesce(s.event_count, 0)::int as event_count,
-  s.last_event_at               as last_event_at
+  s.last_event_at               as last_event_at,
+  (g.default_winner_team_id is not null) as is_default
 from public.games g
 join public.leagues l on l.id = g.league_id
 -- LEFT joins: games.home_team_id/away_team_id carry no foreign key to teams, so
@@ -1895,3 +1925,214 @@ create index if not exists games_final_finished_idx
   on public.games (finished_at)
   where status = 'final';
 -- END FINAL GAME SCORES
+
+-- START CONNECT SCHEDULE INTEGRATION
+-- A Connect fixture UUID deterministically names one mobile game. The Edge
+-- Function re-reads the published fixture and its team links immediately
+-- before calling this RPC. This transaction protects a second device's Start
+-- tap from creating or overwriting a second game. It never writes to Connect.
+create or replace function public.start_connect_game(
+  p_league_id text,
+  p_connect_game_id uuid,
+  p_home_team_id text,
+  p_away_team_id text,
+  p_home_on_court text[],
+  p_away_on_court text[],
+  p_location text default null
+) returns public.games
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  v_id text := 'cg_' || p_connect_game_id::text;
+  v_home public.teams%rowtype;
+  v_away public.teams%rowtype;
+  v_game public.games%rowtype;
+begin
+  if not exists (select 1 from public.leagues where id = p_league_id and kind = 'league' and not coalesce(is_closed, false))
+     or not public.can_score(p_league_id) then
+    raise exception 'You cannot start games in this league' using errcode = '42501';
+  end if;
+  select * into v_home from public.teams where id = p_home_team_id and league_id = p_league_id;
+  select * into v_away from public.teams where id = p_away_team_id and league_id = p_league_id;
+  if v_home.id is null or v_away.id is null or v_home.id = v_away.id then
+    raise exception 'Both teams must belong to this league' using errcode = '22023';
+  end if;
+  if p_home_on_court is null or p_away_on_court is null
+     or cardinality(p_home_on_court) > 5 or cardinality(p_away_on_court) > 5
+     or (not v_home.team_only and cardinality(p_home_on_court) = 0)
+     or (not v_away.team_only and cardinality(p_away_on_court) = 0)
+     or (v_home.team_only and cardinality(p_home_on_court) <> 0)
+     or (v_away.team_only and cardinality(p_away_on_court) <> 0)
+     or not (v_home.player_ids @> p_home_on_court)
+     or not (v_away.player_ids @> p_away_on_court)
+     or (select count(*) from unnest(p_home_on_court) x) <> (select count(distinct x) from unnest(p_home_on_court) x)
+     or (select count(*) from unnest(p_away_on_court) x) <> (select count(distinct x) from unnest(p_away_on_court) x)
+  then
+    raise exception 'Choose valid starting lineups' using errcode = '22023';
+  end if;
+  insert into public.games (
+    id, league_id, home_team_id, away_team_id, status, scheduled_at,
+    location, home_on_court, away_on_court, period
+  ) values (
+    v_id, p_league_id, p_home_team_id, p_away_team_id, 'live',
+    floor(extract(epoch from now()) * 1000)::bigint,
+    nullif(btrim(coalesce(p_location, '')), ''), p_home_on_court, p_away_on_court, 1
+  ) on conflict (id) do nothing
+  returning * into v_game;
+  if v_game.id is null then
+    select * into v_game from public.games where id = v_id;
+    if v_game.id is null or v_game.league_id <> p_league_id
+       or v_game.home_team_id <> p_home_team_id
+       or v_game.away_team_id <> p_away_team_id then
+      raise exception 'This fixture was already started with different teams' using errcode = '23505';
+    end if;
+  end if;
+  return v_game;
+end;
+$$;
+revoke all on function public.start_connect_game(text,uuid,text,text,text[],text[],text) from public, anon;
+grant execute on function public.start_connect_game(text,uuid,text,text,text[],text[],text) to authenticated;
+
+-- A default fixture is final at creation. No lineup or event can represent its
+-- team-only points, and the existing start RPC intentionally requires lineups.
+create or replace function public.record_connect_default_game(
+  p_league_id text,
+  p_connect_game_id uuid,
+  p_home_team_id text,
+  p_away_team_id text,
+  p_winner_team_id text,
+  p_default_score int,
+  p_location text default null
+) returns public.games
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  v_id text := 'cg_' || p_connect_game_id::text;
+  v_game public.games%rowtype;
+begin
+  if not exists (select 1 from public.leagues where id = p_league_id and kind = 'league' and not coalesce(is_closed, false))
+     or not public.can_score(p_league_id) then
+    raise exception 'You cannot record games in this league' using errcode = '42501';
+  end if;
+  if p_home_team_id = p_away_team_id
+     or not exists (select 1 from public.teams where id = p_home_team_id and league_id = p_league_id)
+     or not exists (select 1 from public.teams where id = p_away_team_id and league_id = p_league_id)
+     or p_winner_team_id is null or p_winner_team_id not in (p_home_team_id, p_away_team_id)
+     or p_default_score is null or p_default_score not between 1 and 999 then
+    raise exception 'Choose valid teams and a default score' using errcode = '22023';
+  end if;
+  insert into public.games (
+    id, league_id, home_team_id, away_team_id, status, scheduled_at, finished_at,
+    location, home_on_court, away_on_court, period, default_winner_team_id, default_score
+  ) values (
+    v_id, p_league_id, p_home_team_id, p_away_team_id, 'final',
+    floor(extract(epoch from now()) * 1000)::bigint,
+    floor(extract(epoch from now()) * 1000)::bigint,
+    nullif(btrim(coalesce(p_location, '')), ''), '{}', '{}', 1,
+    p_winner_team_id, p_default_score
+  ) on conflict (id) do nothing returning * into v_game;
+  if v_game.id is null then
+    select * into v_game from public.games where id = v_id;
+    if v_game.id is null or v_game.league_id <> p_league_id
+       or v_game.home_team_id <> p_home_team_id or v_game.away_team_id <> p_away_team_id
+       or v_game.status <> 'final' or v_game.default_winner_team_id is distinct from p_winner_team_id
+       or v_game.default_score is distinct from p_default_score then
+      raise exception 'This fixture already has a different result' using errcode = '23505';
+    end if;
+  end if;
+  return v_game;
+end;
+$$;
+revoke all on function public.record_connect_default_game(text,uuid,text,text,text,int,text) from public, anon;
+grant execute on function public.record_connect_default_game(text,uuid,text,text,text,int,text) to authenticated;
+-- END CONNECT SCHEDULE INTEGRATION
+
+-- START CONNECT LINK STATE
+-- Connect owns this metadata; phones read it as part of their normal league sync.
+alter table public.leagues add column if not exists connect_events jsonb not null default '[]';
+alter table public.leagues add column if not exists connect_link_revision bigint not null default 0;
+alter table public.leagues add column if not exists connect_link_checked_at bigint;
+
+create or replace function public.protect_connect_link_state() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  if current_user in ('postgres', 'supabase_admin', 'service_role') then return new; end if;
+  if (tg_op = 'INSERT' and (new.connect_events <> '[]'::jsonb or new.connect_link_revision <> 0 or new.connect_link_checked_at is not null))
+     or (tg_op = 'UPDATE' and (new.connect_events is distinct from old.connect_events
+       or new.connect_link_revision is distinct from old.connect_link_revision
+       or new.connect_link_checked_at is distinct from old.connect_link_checked_at)) then
+    raise exception 'Connect link status is managed by the schedule service' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+drop trigger if exists protect_connect_link_state on public.leagues;
+create trigger protect_connect_link_state before insert or update on public.leagues
+for each row execute function public.protect_connect_link_state();
+
+create or replace function public.apply_connect_link_snapshot(
+  p_league_id text, p_events jsonb, p_revision bigint, p_checked_at bigint
+) returns jsonb language plpgsql security definer set search_path = '' as $$
+declare v_league public.leagues%rowtype;
+begin
+  if p_revision is null or p_revision < 1 or p_checked_at is null or p_checked_at < 1
+     or p_events is null or jsonb_typeof(p_events) <> 'array'
+     or jsonb_array_length(p_events) > 100 then
+    raise exception 'Invalid Connect link snapshot' using errcode = '22023';
+  end if;
+  select * into v_league from public.leagues where id = p_league_id and kind = 'league' for update;
+  if not found then return null; end if; -- Deleted mobile leagues need no further delivery.
+  if p_revision >= v_league.connect_link_revision then
+    update public.leagues set connect_events = p_events, connect_link_revision = p_revision,
+      connect_link_checked_at = greatest(coalesce(connect_link_checked_at, 0), p_checked_at)
+      where id = p_league_id returning * into v_league;
+  end if;
+  return jsonb_build_object('events', v_league.connect_events, 'revision', v_league.connect_link_revision,
+    'checkedAt', v_league.connect_link_checked_at);
+end $$;
+revoke all on function public.apply_connect_link_snapshot(text,jsonb,bigint,bigint) from public, anon, authenticated;
+grant execute on function public.apply_connect_link_snapshot(text,jsonb,bigint,bigint) to service_role;
+
+-- Only a server-validated scheduled game receives an authorization. A cg_ ID alone is insufficient.
+create table if not exists public.connect_game_authorizations (
+  game_id text primary key,
+  league_id text not null references public.leagues(id) on delete cascade,
+  home_team_id text not null,
+  away_team_id text not null
+);
+alter table public.connect_game_authorizations enable row level security;
+revoke all on public.connect_game_authorizations from public, anon, authenticated;
+create or replace function public.authorize_connect_game(
+  p_league_id text, p_game_id text, p_home_team_id text, p_away_team_id text
+) returns void language sql security definer set search_path = '' as $$
+  insert into public.connect_game_authorizations(game_id, league_id, home_team_id, away_team_id)
+    values (p_game_id, p_league_id, p_home_team_id, p_away_team_id)
+  on conflict (game_id) do update set league_id = excluded.league_id,
+    home_team_id = excluded.home_team_id, away_team_id = excluded.away_team_id;
+$$;
+revoke all on function public.authorize_connect_game(text,text,text,text) from public, anon, authenticated;
+grant execute on function public.authorize_connect_game(text,text,text,text) to service_role;
+
+create or replace function public.guard_connect_game_creation() returns trigger
+language plpgsql security definer set search_path = '' as $$
+declare v_events jsonb;
+begin
+  -- Upserts for ongoing/historical games remain valid after a league is linked.
+  if exists (select 1 from public.games where id = new.id) then return new; end if;
+  select connect_events into v_events from public.leagues where id = new.league_id for share;
+  if jsonb_array_length(coalesce(v_events, '[]'::jsonb)) > 0 and not exists (
+    select 1 from public.connect_game_authorizations a where a.game_id = new.id
+      and a.league_id = new.league_id and a.home_team_id = new.home_team_id and a.away_team_id = new.away_team_id
+  ) then
+    raise exception 'This league has a published iTala Connect schedule. Choose a game on the Schedule tab.' using errcode = '23514';
+  end if;
+  return new;
+end $$;
+drop trigger if exists guard_connect_game_creation on public.games;
+create trigger guard_connect_game_creation before insert on public.games
+for each row execute function public.guard_connect_game_creation();
+
+-- END CONNECT LINK STATE

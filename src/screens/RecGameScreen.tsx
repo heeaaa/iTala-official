@@ -203,13 +203,13 @@ function RecGameEditor({ navigation }: Pick<ScreenProps<'RecGame'>, 'navigation'
     };
     return (
       <Screen scroll>
-        <View style={{ paddingTop: space(8), alignItems: 'center' }}>
+        <View style={{ width: '100%', maxWidth: 400, alignSelf: 'center', paddingTop: space(8), alignItems: 'center' }}>
           <Txt k="h1" style={{ marginBottom: space(2) }}>Sign in required</Txt>
           <Txt k="body" color={colors.muted} style={{ textAlign: 'center', marginBottom: space(6) }}>
             Drop-in games are saved to your account — sign in to start one.
           </Txt>
-          <GoogleButton onPress={() => { void onSignIn(signInWithGoogle); }} busy={signInBusy || authBusy} style={{ alignSelf: 'stretch' }} />
-          {appleAvailable ? <AppleButton onPress={() => { void onSignIn(signInWithApple); }} busy={signInBusy || authBusy} style={{ alignSelf: 'stretch', marginTop: 10 }} /> : null}
+          {appleAvailable ? <AppleButton onPress={() => { void onSignIn(signInWithApple); }} busy={signInBusy || authBusy} /> : null}
+          <GoogleButton onPress={() => { void onSignIn(signInWithGoogle); }} busy={signInBusy || authBusy} style={{ marginTop: appleAvailable ? 10 : 0 }} />
           {errorFor('signin') ? <Txt k="body" color={colors.red} style={{ marginTop: 10, fontSize: 13 }}>{errorFor('signin')}</Txt> : null}
           <Button title="Cancel" kind="ghost" onPress={() => navigation.goBack()} style={{ alignSelf: 'stretch', marginTop: 10 }} />
         </View>

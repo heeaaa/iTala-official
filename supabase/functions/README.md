@@ -1,8 +1,34 @@
 # Supabase Edge Functions
 
-One function lives here: **`delete-account`**.
+Two functions live here: **`delete-account`** and **`connect-schedule`**.
 
-## Why it exists
+## Connect schedule
+
+`connect-schedule` is the mobile project's bridge to the separate iTala Connect
+Supabase project. Set `CONNECT_SUPABASE_URL` and
+`CONNECT_SUPABASE_SERVICE_ROLE_KEY` as **mobile Edge Function secrets**, never
+as `EXPO_PUBLIC_*` variables. The mobile project supplies `SUPABASE_URL` and
+`SUPABASE_ANON_KEY` to the function runtime. Deploy
+`supabase/migrations/20260929000100_connect_schedule.sql` to the **mobile**
+project before deploying the function and a mobile build with the Schedule tab.
+
+The client invokes `listEvents` and `getDivisionSchedule` using its mobile
+session. The function validates that session and mobile league, then reads
+Connect's private division/team links and published events with its server-only
+Connect key. A mobile scorer's **Start game** uses `startGame`: the bridge
+re-reads the fixture and calls the mobile project's `start_connect_game` RPC
+with the scorer's JWT. The RPC enforces existing `can_score` rights and creates
+one game ID (`cg_<Connect fixture UUID>`) across repeated taps or devices.
+Neither action writes to Connect. `postFinalScore` is deferred; Connect's
+existing results inbox still handles approval.
+
+Connect scores (including admin-entered default results) are displayed in the
+Schedule tab and disable Start. They do not create mobile stat events or change
+the mobile Standings tab. Fixture dates and times are shown in the Connect
+event's IANA timezone, so a game played in Vancouver does not move to an
+Auckland date on a developer's phone.
+
+## Delete account: why it exists
 
 `public.delete_own_account()` in `supabase/schema.sql` deletes `auth.users`, and
 the app then clears its local session. For a Google account that is the whole

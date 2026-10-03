@@ -46,6 +46,9 @@ The submitted build's Supabase project must remain available for the entire revi
 - Anonymous sign-in is enabled.
 - Google and Apple providers are enabled for the production bundle identifier.
 - The production schema has been applied.
+- The current legal version is the submitted build's own bundle or the one before
+  it (`docs/LEGAL_ACKNOWLEDGEMENT.md`). The build cannot show any other version, so
+  signing in would return the reviewer to guest browsing.
 - At least one League Creation Code remains unused and can be redeemed.
 - A sample league with teams, players, games and statistics loads at launch.
 - Legal and support pages load without authentication.
@@ -122,7 +125,9 @@ not a documentation workaround.
 
 Explain the following in Review Notes:
 
-- Google sign-in is accompanied by Sign in with Apple on iOS.
+- On iOS, the native white **Continue with Apple** button appears above Google
+  in the guest profile sheet and every account sign-in prompt. The buttons have
+  matching width and height; Apple sign-in opens the native authentication sheet.
 - Guest browsing does not require a named social account.
 - Named accounts can be deleted inside the app through **Settings → Delete account**.
 - Synced league and roster information is visible to valid app sessions, including

@@ -1023,6 +1023,8 @@ test('only an explicit "no such user" counts as a deleted account', () => {
 // ===========================================================================
 // E. AdminProvider: which path a real deletion takes
 // ===========================================================================
+// Legal receipt caches on the device; the device-wide required version is not one.
+const legalReceipts = disk => [...disk.keys()].filter(k => k.startsWith('itala.legal.receipt.')).length;
 function providerHarness(options = {}) {
   const calls = [];
   const disk = new Map();
@@ -1047,7 +1049,7 @@ function providerHarness(options = {}) {
 
   const RN = {
     Platform: { OS: 'ios' }, StyleSheet: { create: v => v },
-    Linking: { openURL: async () => {} },
+    Linking: { openURL: async () => {} }, AccessibilityInfo: { announceForAccessibility() {} },
     Modal: 'Modal', ScrollView: 'ScrollView', Text: 'Text', TouchableOpacity: 'TouchableOpacity', View: 'View',
   };
   const component = load('src/components/LegalAcknowledgement.tsx', {
@@ -1125,7 +1127,7 @@ test('an Apple account is deleted through the revoking function, never the bare 
     'the RPC alone would delete the account and leave the Apple authorization live');
   assert.equal(p.ctx.user, null);
   assert.equal(p.ctx.userId, 'guest', 'the device returns to guest browsing');
-  assert.equal(p.disk.size, 0, 'the deleted account keeps no legal receipt cache');
+  assert.equal(legalReceipts(p.disk), 0, 'the deleted account keeps no legal receipt cache');
   assert.equal(p.count('clearRosterDrafts'), 1, 'successful deletion removes local import drafts');
   assert.equal(p.count('clearRecSetup'), 1, 'successful deletion removes local drop-in setup');
   p.root.unmount();
@@ -1227,7 +1229,7 @@ test('a lost database response is reconciled through the handler, client and pro
       assert.equal(p.count('getUser'), 2, 'the database transport error requires reconciliation');
       assert.equal(p.count('delete_own_account'), 0, 'do not repeat deletion through the bare RPC');
       assert.equal(p.ctx.userId, recheck === GONE ? 'guest' : 'account-a');
-      assert.equal(p.disk.size, recheck === GONE ? 0 : 1);
+      assert.equal(legalReceipts(p.disk), recheck === GONE ? 0 : 1);
       if (recheck !== GONE) assert.match(p.ctx.errorFor('account'), /couldn't confirm account deletion/);
       p.root.unmount();
     }
@@ -1301,7 +1303,7 @@ test('a timeout after the server finished completes the deletion instead of stra
   assert.equal(p.ctx.errorFor('account'), null);
   assert.equal(p.ctx.user, null);
   assert.equal(p.ctx.userId, 'guest');
-  assert.equal(p.disk.size, 0);
+  assert.equal(legalReceipts(p.disk), 0);
   p.root.unmount();
 });
 

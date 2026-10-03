@@ -50,6 +50,34 @@ build preserves what it should - neither of which a static check can tell you.
 
 Highest probability of defects. Each of these was a real bug at some point.
 
+### League tabs and saved schedules
+
+- [ ] **UI1** On a compact phone, iPhone 17, and iPad portrait/landscape,
+      select each of Standings, Leaders, Games, Schedule, and Roster. Every
+      label is centered in its cell and the selected background stays inside
+      the tab bar. Repeat with larger system text and iPad Split View.
+- [ ] **UI2** First Schedule load says "Fetching schedule from iTala Connect".
+      Leave the tab and return within five minutes: saved games and the next
+      scheduled date appear immediately without another loading screen.
+      Relaunch within five minutes and repeat; the disk cache restores them.
+- [ ] **UI3** After five minutes, return to Schedule. The saved games stay
+      visible while Refreshing appears. Tap Refresh or background/foreground
+      the app: updates are fetched immediately even when the cache is fresh.
+- [ ] **UI4** With a loaded schedule, disconnect and refresh. Saved games stay
+      visible alongside the error. Switch between multiple linked events and
+      leagues: their schedules remain separate. Reconnect and refresh.
+- [ ] **UI5** The empty state says "No schedules for this date"; the Connect
+      description says "Share one link for schedules, scores and standings."
+      Starting a game from a stale schedule still respects the server's checks.
+- [ ] **UI6** Open Schedule for an unlinked league as its owner, then as a guest.
+      The first message says the league has no published iTala Connect schedule
+      yet and games can still be started as usual. The planning card follows,
+      with an underlined website link. Only the owner sees the primary link-league
+      action. Refresh is a quiet footnote below the card and fetches a newly
+      published schedule immediately. Check phone/iPad portrait, landscape,
+      Split View, and larger text: all text wraps, links remain easy to tap,
+      and the tablet content stays in a centered column.
+
 ### Drop-in games (most fragile area historically)
 
 - [ ] **R1** Community drop-in: create a game with location, two team names,
@@ -208,11 +236,50 @@ evidence of native presentation):
       offline. After the server announces a newer version, kill/restart offline:
       the obsolete cached receipt must not grant account access.
 - [ ] Account deletion removes its receipts; another account cannot see them.
+- [ ] Bundle switch, on a test project with the next bundle staged, on an iPhone,
+      an iPad and an Android phone, with an older build installed alongside the
+      new one.
+      1. Before promotion, the new build signs in an account that accepted the
+         earlier bundle without a prompt. An account without a receipt sees the
+         earlier version number. Its three links open the archived pages with
+         their stylesheet, and links inside them stay under `/archive/`. Agreeing
+         grants access. Settings still opens the current pages.
+      2. Sign in with the connection off until the prompt shows this build's
+         version and a load error, then reconnect and tap Continue. *Expect:* the
+         prompt switches to the earlier version with "The current legal
+         documents have loaded", and nothing is recorded until Continue is tapped
+         again.
+      3. Promote while the prompt is open, then tap Continue. *Expect:* the prompt
+         says the documents changed, and the tick clears at once with no flicker.
+         VoiceOver and TalkBack speak the message once and read the checkbox as
+         not checked. Double-tapping Continue records nothing until it is ticked
+         again, and then exactly one receipt.
+      4. After promotion, the new build asks again with the current links. The
+         older build shows the update message and records nothing.
+
+- [ ] **R171** Profile → About → **Privacy Policy**, both as a guest and signed in,
+      on an iPhone, an iPad and an Android phone, including with VoiceOver,
+      TalkBack and the largest font and display size.
+      *Expect:* the alert offers Privacy Policy and OK, and neither is
+      truncated. VoiceOver's escape gesture and Android's back button close it.
+      Privacy Policy opens `https://www.itala.fyi/privacy/` in the browser, and
+      returning leaves the app usable. Until runbook step 4 the page shows the
+      September policy, and after it the October one. This is the in-app policy
+      route for guests (Apple 5.1.1(i)); `tests/static.test.js` only checks that
+      the button and its failure alert exist.
 
 - [ ] **R52** Cold start the app. *Expect:* no "Invalid Refresh Token" error,
       and boot is not stalled for ~10 seconds.
 - [ ] **R53** Sign out, then sign back in with Google.
 - [ ] **R54** Sign in with Apple (device build only).
+      Check the share-card prompt, profile sheet, Settings, and drop-in sign-in
+      on a compact phone, iPhone 17, and iPad portrait/landscape. Apple and Google
+      buttons share the same width, height, light fill, and corner radius; labels
+      stay centered without clipping at larger text settings. The native white
+      Apple button shows Apple's logo and "Continue with Apple" above Google.
+      At normal text size on iPad, both choices are visible together; larger
+      text remains reachable by scrolling. Tap Apple and complete the native
+      sign-in sheet. The sharing prompts say "Google/Apple account".
 - [ ] **R57** **Sign in with Apple: deletion revokes the authorization.**
       Device build only (Expo Go signs tokens for `host.exp.Exponent`, which
       these secrets cannot revoke), real Apple ID, and the `delete-account`
@@ -695,6 +762,13 @@ anyone mis-tapping.
 - [ ] **T1** Play a game to a level score and tap FINISH.
       *Expect:* the "Scores are level" prompt, naming both teams and the score, offering
       **Add period N+1** and **Finish level**.
+- [ ] **T1a** At 0–0 in a league game, FINISH also offers **Default/Forfeit**.
+      It opens the winner/score form within the same dialog. Cancel returns to
+      the finish choices; confirm records the selected winner's score against 0.
+      At 10–10 or in a drop-in game, Default/Forfeit is absent. The live tracker
+      has no separate default button. Tip Off uses the label **Default/Forfeit**.
+      Repeat on compact phones and iPad portrait/landscape with larger text and
+      the keyboard open; every choice remains reachable by scrolling.
 - [ ] **T2** Choose **Add period**. *Expect:* the period advances, the tracker stays open, no game
       is finished. This is the overtime path and should be the normal answer.
 - [ ] **T3** Finish level anyway, then check Standings. *Expect:* **neither** team gains a win or a

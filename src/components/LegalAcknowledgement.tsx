@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { Linking, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { AccessibilityInfo, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { colors, font, radius, space } from '../theme';
-import { LEGAL_LINKS, LEGAL_STATEMENT } from '../lib/legal';
+import { LEGAL_STATEMENT, LEGAL_VERSION, legalLinksFor } from '../lib/legal';
 
 export interface LegalPrompt {
   version: string;
@@ -10,8 +10,13 @@ export interface LegalPrompt {
   error: string | null;
 }
 
-export function LegalLinks({ inline = false, compact = false }: { inline?: boolean; compact?: boolean } = {}) {
+// `version` picks the bundle whose documents open: a prompt must show the text it
+// records, and Settings shows this build's current documents.
+export function LegalLinks({ inline = false, compact = false, version = LEGAL_VERSION }: {
+  inline?: boolean; compact?: boolean; version?: string;
+} = {}) {
   const [error, setError] = useState<string | null>(null);
+  const links = legalLinksFor(version);
   const open = async (url: string) => {
     setError(null);
     try { await Linking.openURL(url); }
@@ -20,13 +25,13 @@ export function LegalLinks({ inline = false, compact = false }: { inline?: boole
   return <View>
     {inline ? <Text style={styles.agreement}>
       {LEGAL_STATEMENT.split(/(Terms of Use|Privacy Policy|Content Policy)/).map((part, index) => {
-        const link = LEGAL_LINKS.find(item => item.label === part);
+        const link = links.find(item => item.label === part);
         return link ? <Text key={link.url} accessibilityRole="link"
           accessibilityLabel={link.label} accessibilityHint="Opens in your browser"
           onPress={() => { void open(link.url); }} style={styles.inlineLink}>{part}</Text>
           : <Text key={index}>{part}</Text>;
       })}
-    </Text> : LEGAL_LINKS.map((link, index) => <TouchableOpacity key={link.url} accessibilityRole="link"
+    </Text> : links.map((link, index) => <TouchableOpacity key={link.url} accessibilityRole="link"
       accessibilityLabel={link.label} accessibilityHint="Opens in your browser"
       onPress={() => { void open(link.url); }} style={[styles.link, compact && styles.compactLink,
         compact && index > 0 && styles.divider]}>
@@ -40,9 +45,16 @@ export function LegalLinks({ inline = false, compact = false }: { inline?: boole
 export function LegalAcknowledgement({ prompt, onContinue, onCancel, onDismiss }: {
   prompt: LegalPrompt | null; onContinue: () => void; onCancel: () => void; onDismiss: () => void;
 }) {
-  const [checked, setChecked] = useState(false);
-  const visible = !!prompt;
-  React.useEffect(() => { setChecked(false); }, [prompt?.version, prompt?.returning, visible]);
+  // The tick belongs to one prompt. Deriving it, rather than clearing it in an
+  // effect after the render, means a prompt whose version changes while it is
+  // open is never drawn, even for a frame, with the earlier version's tick.
+  const [checkedFor, setCheckedFor] = useState<string | null>(null);
+  const promptKey = prompt ? `${prompt.version}|${prompt.returning}` : null;
+  const checked = checkedFor !== null && checkedFor === promptKey;
+  React.useEffect(() => { setCheckedFor(null); }, [promptKey]);
+  // VoiceOver ignores live regions (see LiveGameScreen), and a version switch
+  // also clears the tick, so each new error is spoken.
+  React.useEffect(() => { if (prompt?.error) AccessibilityInfo.announceForAccessibility(prompt.error); }, [prompt?.error]);
   return <Modal supportedOrientations={['portrait', 'landscape']} visible={!!prompt} transparent animationType="none" onDismiss={onDismiss}
     onRequestClose={() => { if (!prompt?.busy) onCancel(); }}>
     <View style={styles.backdrop}>
@@ -52,16 +64,16 @@ export function LegalAcknowledgement({ prompt, onContinue, onCancel, onDismiss }
           <View style={styles.checkboxRow}>
             <TouchableOpacity accessibilityRole="checkbox" accessibilityLabel={LEGAL_STATEMENT}
             accessibilityState={{ checked, disabled: prompt?.busy }} disabled={prompt?.busy}
-            onPress={() => setChecked(value => !value)} style={styles.checkboxTarget}>
+            onPress={() => setCheckedFor(value => value === promptKey ? null : promptKey)} style={styles.checkboxTarget}>
               <View style={[styles.checkbox, checked && styles.checked]}>
                 <Text style={styles.checkmark}>{checked ? '✓' : ''}</Text>
               </View>
             </TouchableOpacity>
             <View style={styles.agreementContainer}>
-              <LegalLinks inline />
+              <LegalLinks inline version={prompt?.version} />
             </View>
           </View>
-          {prompt?.error ? <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={styles.error}>{prompt.error}</Text> : null}
+          {prompt?.error ? <Text accessibilityRole="alert" style={styles.error}>{prompt.error}</Text> : null}
           <TouchableOpacity accessibilityRole="button" accessibilityState={{ disabled: !checked || prompt?.busy, busy: prompt?.busy }}
             disabled={!checked || prompt?.busy} onPress={() => { if (checked && !prompt?.busy) onContinue(); }}
             style={[styles.button, { backgroundColor: colors.text, opacity: !checked || prompt?.busy ? 0.5 : 1 }]}>
