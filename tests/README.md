@@ -1,5 +1,9 @@
 # iTala regression tests
 
+Connect status, schedule caching and cross-project delivery evidence is in
+[`CONNECT-LINK-VERIFICATION.md`](CONNECT-LINK-VERIFICATION.md), including the
+repeatable failing baseline and optional two-database PostgreSQL run.
+
 `node tests/legal.test.js` runs the real legal receipt client, acknowledgement
 component handlers, and AdminProvider using the existing small hook runtime.
 It covers both OAuth paths, cancellation, receipt ordering, failed saves/retry,

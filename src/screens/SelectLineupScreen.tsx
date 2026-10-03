@@ -133,18 +133,10 @@ export default function SelectLineupScreen({ route, navigation }: ScreenProps<'S
       return;
     }
     if (!game && league.kind === 'league') {
-      setStarting(true);
       setStartError('');
-      try {
-        if (!await canStartFreeformGame(league)) {
-          setStartError('This league has a published iTala Connect schedule. Go back and start its scheduled fixture.');
-          return;
-        }
-      } catch (e) {
-        setStartError((e as Error).message || 'Could not check the schedule. Try again.');
+      if (!canStartFreeformGame(league)) {
+        setStartError('This league has a published iTala Connect schedule. Go back and start its scheduled game.');
         return;
-      } finally {
-        setStarting(false);
       }
     }
     if (game) {
@@ -184,8 +176,8 @@ export default function SelectLineupScreen({ route, navigation }: ScreenProps<'S
         navigation.replace('FinalScore', { leagueId, gameId: saved.id });
         return;
       }
-      if (!game && !await canStartFreeformGame(league)) {
-        throw new Error('This league has a published iTala Connect schedule. Choose its fixture on the Schedule tab.');
+      if (!game && !canStartFreeformGame(league)) {
+        throw new Error('This league has a published iTala Connect schedule. Choose a game on the Schedule tab.');
       }
       if (game) {
         dispatch({ t: 'SET_GAME_STATUS', leagueId, gameId, status: 'final',
@@ -233,7 +225,7 @@ export default function SelectLineupScreen({ route, navigation }: ScreenProps<'S
         <Button title={starting ? 'Starting…' : 'Tip off  ▶'} onPress={() => void start()} disabled={!ready || starting} />
         {league.kind !== 'recreational' && (!game || (game.status === 'live' &&
           gameScore(league, game).home === 0 && gameScore(league, game).away === 0)) && (
-          <Button title="Record default (0–0)" kind="ghost" onPress={() => setDefaultOpen(true)}
+          <Button title="Default/Forfeit" kind="ghost" onPress={() => setDefaultOpen(true)}
             disabled={starting} style={{ marginTop: space(2) }} />
         )}
       </View>

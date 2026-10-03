@@ -10,6 +10,7 @@ that matches the job.
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Shipping: EAS Build and Submit, App Store and Play Store listings, the privacy-policy site, and the store data-safety declarations. |
 | [APP_REVIEW.md](APP_REVIEW.md) | Preparing App Store reviewer access, the test walkthrough, public URLs and Review Notes without committing credentials. |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Something is broken while developing: Expo Go won't connect, sign-in fails, the score behaves oddly. |
+| [CONNECT_LINK_SYNC.md](CONNECT_LINK_SYNC.md) | Deploying cached Connect status and cross-device link delivery with the paired backend changes. |
 
 ## What lives elsewhere, and why
 

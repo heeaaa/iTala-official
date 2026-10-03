@@ -9,6 +9,7 @@ import { standings, leaderboards, leagueAwards, winPctOf, gameScore, gamesPlayed
 import { dayKey, dayLabel, uid } from '../lib/format';
 import ScheduleTab from './ScheduleTab';
 import { canStartFreeformGame } from '../sync/connectSchedule';
+import ConnectLinkSettings from '../components/ConnectLinkSettings';
 
 export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'LeagueDetail'>) {
   const { leagueId } = route.params;
@@ -22,8 +23,6 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
   const [showSettings, setShowSettings] = useState(false);
   const [dupOpen, setDupOpen] = useState(false);
   const [dupSeason, setDupSeason] = useState('');
-  const [checkingStart, setCheckingStart] = useState(false);
-  const [hasPublishedSchedule, setHasPublishedSchedule] = useState(false);
   const [scheduleRefreshKey, setScheduleRefreshKey] = useState(0);
 
   // This league's games and stats may not be on the device: the catalogue
@@ -93,24 +92,13 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
   const tabNames = isRec ? ['Games', 'Roster'] : ['Standings', 'Leaders', 'Games', 'Schedule', 'Roster'];
   const activeTab = tabNames[tab] ?? tabNames[0];
 
-  const startLeagueGame = async () => {
-    if (checkingStart) return;
-    setCheckingStart(true);
-    try {
-      if (await canStartFreeformGame(league)) {
-        setHasPublishedSchedule(false);
-        navigation.navigate('NewGame', { leagueId });
-      } else {
-        setHasPublishedSchedule(true);
-        setScheduleRefreshKey(key => key + 1);
-        setTab(tabNames.indexOf('Schedule'));
-      }
-    } catch (e) {
-      Alert.alert('Could not check the schedule',
-        `${(e as Error).message || 'Check your connection and try again.'} New games are paused until the schedule can be checked.`,
-        [{ text: 'Try again', onPress: () => void startLeagueGame() }, { text: 'Cancel', style: 'cancel' }]);
-    } finally {
-      setCheckingStart(false);
+  const hasPublishedSchedule = !canStartFreeformGame(league);
+  const startLeagueGame = () => {
+    if (!hasPublishedSchedule) {
+      navigation.navigate('NewGame', { leagueId });
+    } else {
+      setScheduleRefreshKey(key => key + 1);
+      setTab(tabNames.indexOf('Schedule'));
     }
   };
 
@@ -188,6 +176,8 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
         {owner && showSettings && (
           <Card style={{ marginTop: space(3) }}>
             <Txt k="label" style={{ marginBottom: space(2) }}>{isRec ? 'Drop-in settings' : 'League settings'}</Txt>
+            {!isRec && <ConnectLinkSettings league={league}
+              onUpdate={state => dispatch({ t: 'CONNECT_LINK_REFRESHED', leagueId, state })} />}
             <Toggle
               label="Track missed shots"
               description={`Show the 2PT ✗, 3PT ✗, and FT ✗ buttons in the live tracker for ${isRec ? 'these drop-in games' : 'this league'}. Makes and all other stats are always tracked.`}
@@ -567,6 +557,7 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
 
         {!showSettings && activeTab === 'Schedule' && (
           <ScheduleTab league={league} canScore={scorer && !seasonOver} canManageConnect={owner}
+            onLinkUpdate={state => dispatch({ t: 'CONNECT_LINK_REFRESHED', leagueId, state })}
             refreshKey={scheduleRefreshKey} navigation={navigation} />
         )}
 
@@ -699,8 +690,8 @@ export default function LeagueDetailScreen({ route, navigation }: ScreenProps<'L
           paddingHorizontal: space(4), paddingTop: space(3), paddingBottom: space(6),
           backgroundColor: colors.bg, borderTopWidth: 1, borderTopColor: colors.line,
         }}>
-          <Button title={checkingStart ? 'Checking schedule…' : hasPublishedSchedule ? 'Choose a scheduled game' : '▶  Start Game'}
-            onPress={() => void startLeagueGame()} disabled={league.teams.length < 2 || checkingStart} />
+          <Button title={hasPublishedSchedule ? 'Choose a scheduled game' : '▶  Start Game'}
+            onPress={startLeagueGame} disabled={league.teams.length < 2} />
         </View>
       )}
     </Screen>

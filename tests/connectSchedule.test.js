@@ -49,6 +49,9 @@ let defaultRpcCalls = 0;
 let stored;
 let truncateGames = false;
 let omitCount = false;
+let discoveryFailure = false, registryFailure = false, registryWrites = 0;
+let linkSnapshot = { leagueId: 'mobile-1', revision: 20, checkedAt: 1000,
+  events: [{ id: E, name: 'BC League', timezone: 'America/Vancouver', divisions: [{ id: D1, name: 'Men' }] }] };
 function filtered(list, search) {
   return list.filter(row => [...search.entries()].every(([key, condition]) => {
     if (['select', 'order', 'limit', 'offset'].includes(key)) return true;
@@ -74,6 +77,24 @@ async function fakeFetch(input, options) {
     stored ??= { id: connectMobileGameId(G[2]), status: 'live' };
     return Response.json(stored);
   }
+  if (url.pathname === '/rest/v1/rpc/authorize_connect_game') {
+    assert.equal(options.headers.authorization, 'Bearer mobile-service');
+    return new Response(null, { status: 204 });
+  }
+  if (url.pathname === '/rest/v1/rpc/connect_mobile_link_snapshot') {
+    assert.equal(url.host, 'connect.invalid');
+    assert.equal(options.headers.authorization, 'Bearer connect-service');
+    assert.deepEqual(JSON.parse(options.body), { p_league_id: 'mobile-1' });
+    return discoveryFailure ? new Response(null, { status: 503 }) : Response.json(linkSnapshot);
+  }
+  if (url.pathname === '/rest/v1/rpc/apply_connect_link_snapshot') {
+    registryWrites++;
+    assert.equal(url.host, 'mobile.invalid');
+    assert.equal(options.headers.authorization, 'Bearer mobile-service');
+    assert.equal(JSON.parse(options.body).p_revision, 20);
+    return registryFailure ? new Response(null, { status: 503 })
+      : Response.json({ events: linkSnapshot.events, revision: 21, checkedAt: 1100 });
+  }
   if (url.pathname === '/rest/v1/rpc/record_connect_default_game') {
     defaultRpcCalls++;
     const body = JSON.parse(options.body);
@@ -98,6 +119,7 @@ async function fakeFetch(input, options) {
 }
 const deps = {
   env: key => ({ SUPABASE_URL: 'https://mobile.invalid', SUPABASE_ANON_KEY: 'mobile-anon',
+    SUPABASE_SERVICE_ROLE_KEY: 'mobile-service',
     CONNECT_SUPABASE_URL: 'https://connect.invalid', CONNECT_SUPABASE_SERVICE_ROLE_KEY: 'connect-service' })[key],
   fetch: fakeFetch,
 };
@@ -163,18 +185,30 @@ async function ask(body) {
   assert.ok(!JSON.stringify(schedule.body).includes('connect-service'));
   assert.equal(CONNECT_SITE_URL, 'https://itala-connect.netlify.app');
   assert.equal(connectAdminImportUrl('mobile 1'), `${CONNECT_SITE_URL}/admin/import/mobile%201`);
-  let checked = 0;
-  const listNone = async () => { checked++; return []; };
-  const listLinked = async () => { checked++; return [{ id: E }]; };
-  assert.equal(await canStartFreeformGame({ id: 'rec-1', kind: 'recreational' }, listLinked, true), true);
-  assert.equal(checked, 0, 'drop-in games must never require Connect or network access');
-  assert.equal(await canStartFreeformGame({ id: 'mobile-1', kind: 'league' }, listLinked, false), true);
-  assert.equal(checked, 0, 'local-only leagues must keep their existing start flow');
-  assert.equal(await canStartFreeformGame({ id: 'mobile-1', kind: 'league' }, listNone, true), true);
-  assert.equal(await canStartFreeformGame({ id: 'mobile-1', kind: 'league' }, listLinked, true), false);
-  await assert.rejects(canStartFreeformGame({ id: 'mobile-1', kind: 'league' }, async () => {
-    throw Error('offline');
-  }, true), /offline/, 'an unknown link status cannot enable freeform Tip off');
+  const linkedLeague = { id: 'mobile-1', kind: 'league', connectLink: { events: [{ id: E }], revision: 1, checkedAt: 1 } };
+  const requestsBeforePolicy = calls.length;
+  assert.equal(canStartFreeformGame({ ...linkedLeague, kind: 'recreational' }, true), true);
+  assert.equal(canStartFreeformGame(linkedLeague, false), true);
+  assert.equal(canStartFreeformGame({ ...linkedLeague, connectLink: { events: [], revision: 2, checkedAt: 2 } }, true), true);
+  assert.equal(canStartFreeformGame(linkedLeague, true), false);
+  assert.equal(calls.length, requestsBeforePolicy, 'game-start policy reads local league status without requesting Connect');
+
+  const refreshed = await ask({ action: 'refreshLinks', leagueId: 'mobile-1' });
+  assert.equal(refreshed.status, 200);
+  assert.equal(refreshed.body.revision, 21, 'manual discovery returns the latest mobile registry revision');
+  assert.equal(registryWrites, 1);
+  discoveryFailure = true;
+  assert.equal((await ask({ action: 'refreshLinks', leagueId: 'mobile-1' })).status, 502);
+  assert.equal(registryWrites, 1, 'failed discovery never writes an empty status');
+  discoveryFailure = false;
+  const validSnapshot = linkSnapshot;
+  linkSnapshot = { ...linkSnapshot, leagueId: 'different-league' };
+  assert.equal((await ask({ action: 'refreshLinks', leagueId: 'mobile-1' })).status, 502);
+  assert.equal(registryWrites, 1, 'mismatched source responses cannot update another league');
+  linkSnapshot = validSnapshot;
+  registryFailure = true;
+  assert.equal((await ask({ action: 'refreshLinks', leagueId: 'mobile-1' })).status, 502);
+  registryFailure = false;
 
   const playoff = {
     id: G[4], divisionId: D1, type: 'final', playoff: true, bracketGameId: G[4],

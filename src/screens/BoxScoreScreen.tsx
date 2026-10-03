@@ -391,7 +391,7 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
 
       <SignInModal
         visible={askSignIn}
-        message="Sharing box-score cards requires a Google account."
+        message="Sharing box-score cards requires a Google/Apple account."
         error={errorFor('signin') ?? undefined}
         busy={authBusy}
         onGoogle={() => { void onSignInThenShare(signInWithGoogle); }}

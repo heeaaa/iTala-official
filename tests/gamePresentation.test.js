@@ -23,8 +23,9 @@ const theme = load('src/theme.ts');
 const format = load('src/lib/format.ts');
 const stats = load('src/lib/stats.ts', { './format': format, '../theme': theme });
 let league;
-const rn = Object.fromEntries(['View', 'Text', 'Pressable', 'ScrollView', 'ActivityIndicator'].map(x => [x, x]));
+const rn = Object.fromEntries(['View', 'Text', 'Pressable', 'ScrollView', 'ActivityIndicator', 'TouchableOpacity'].map(x => [x, x]));
 rn.StyleSheet = { create: x => x };
+rn.Platform = { OS: 'ios' };
 const ui = Object.fromEntries(['Screen', 'Txt', 'Card', 'Segmented', 'Button', 'Pill', 'TeamBadge', 'LivePip', 'MiniWordmark', 'SignInModal', 'SponsorMark', 'ReportAction'].map(x => [x, x]));
 const imports = {
   react: Hooks, 'react-native': rn, '../theme': theme,
@@ -32,7 +33,7 @@ const imports = {
   '../store/StoreProvider': { useStore: () => ({ dispatch() {} }), useLeague: () => league },
   '../store/AdminProvider': { useAdmin: () => ({ role: 'owner', errorFor: () => null, canScore: () => true, canScoreGame: () => true }) },
   'react-native-view-shot': {}, 'expo-linear-gradient': { LinearGradient: 'LinearGradient' },
-  'expo-sharing': {}, '../components/PlayLog': {}, '../components/DefaultResultModal': {},
+  'expo-sharing': {}, '../components/PlayLog': {}, '../components/FinishLevelModal': {},
 };
 const Box = load('src/screens/BoxScoreScreen.tsx', imports).default;
 const Final = load('src/screens/FinalScoreScreen.tsx', {
@@ -126,19 +127,55 @@ for (const right of [false, true]) check(`live long name constrained on ${right 
   assert.equal(root.element.props.style.minWidth, 0);
   root.unmount();
 });
-const Segmented = load('src/components/ui.tsx', {
+const { Segmented, GoogleButton, AppleButton } = load('src/components/ui.tsx', {
   react: Hooks, 'react-native': rn, '../theme': theme,
   'react-native-gesture-handler': {}, 'react-native-safe-area-context': {},
   'expo-linear-gradient': imports['expo-linear-gradient'],
+  'expo-apple-authentication': {
+    AppleAuthenticationButton: 'AppleNative',
+    AppleAuthenticationButtonType: { CONTINUE: 'continue' },
+    AppleAuthenticationButtonStyle: { WHITE: 'white' },
+  },
   '../../assets/sponsor-bpbl-clothing-inverse.png': 1, '../../assets/sponsor-bpbl-clothing.png': 2,
-}).Segmented;
-check('team tabs center both labels and stretch both backgrounds equally', () => {
-  const root = Hooks.render(Segmented, { options: ['SAMARITANS', 'TIGS HANDYMAN AND DOC FRANK'], value: 0, onChange() {} });
-  for (const label of nodes(root.element).filter(n => n.type === 'Text')) {
-    assert.equal(label.props.numberOfLines, 2);
-    assert.equal(label.props.style.textAlign, 'center');
+});
+check('two and five tab bars keep the selected fill inside its cell when labels wrap', () => {
+  for (const options of [
+    ['SAMARITANS', 'TIGS HANDYMAN AND DOC FRANK'],
+    ['Standings', 'Leaders', 'Games', 'Schedule', 'Roster'],
+  ]) for (let selected = 0; selected < options.length; selected++) {
+    const root = Hooks.render(Segmented, { options, value: selected, onChange() {} });
+    const tabs = nodes(root.element).filter(n => n.type === 'Pressable');
+    assert.equal(tabs.length, options.length);
+    for (const [index, tab] of tabs.entries()) {
+      assert.equal(tab.props.style.flex, 1, 'each tab gets an equal share of the available width');
+      assert.equal(tab.props.style.minWidth, 0, 'long labels can shrink on compact phones');
+      assert.equal(tab.props.style.minHeight, 44);
+      assert.equal(tab.props.style.justifyContent, 'center');
+      const [fill, label] = tab.props.children;
+      if (index === selected) {
+        assert.equal(fill.type, 'LinearGradient');
+        assert.equal(fill.props.pointerEvents, 'none');
+        assert.equal(fill.props.style.position, 'absolute');
+        for (const edge of ['top', 'bottom', 'left', 'right']) assert.equal(fill.props.style[edge], 0);
+      } else assert.equal(fill, false);
+      assert.equal(label.props.numberOfLines, 2);
+      assert.equal(label.props.style.textAlign, 'center');
+      assert.equal(label.props.style.fontSize, 13, 'wide tablet cells keep a readable label size');
+      assert.equal(label.props.adjustsFontSizeToFit, true, 'compact cells can fit their labels');
+    }
+    root.unmount();
   }
-  for (const tab of nodes(root.element).filter(n => n.type === 'Pressable')) assert.equal(tab.props.children.props.style.flex, 1);
-  root.unmount();
+});
+check('Apple and Google sign-in controls share a responsive frame', () => {
+  const google = Hooks.render(GoogleButton, { onPress() {} });
+  const apple = Hooks.render(AppleButton, { onPress() {} });
+  const googleFrame = google.element.props.style[0];
+  const appleFrame = apple.element.props.style[0];
+  assert.equal(googleFrame.width, '100%');
+  assert.equal(appleFrame.width, '100%');
+  assert.equal(googleFrame.height, appleFrame.height);
+  assert.equal(apple.element.props.children.type, 'AppleNative');
+  assert.equal(apple.element.props.children.props.style.width, '100%');
+  google.unmount(); apple.unmount();
 });
 process.exitCode = failures ? 1 : 0;
