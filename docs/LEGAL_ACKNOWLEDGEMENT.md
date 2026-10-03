@@ -108,11 +108,13 @@ identify. Offline cached sessions and already-active sessions continue until the
 next online restoration; there is deliberately no per-action enforcement. Re-running
 the initial schema does not reset the operator's current version.
 
-### 2 October 2026 Connect privacy update
+### 2 October 2026 Connect policy update
 
-The new bundle is `2026-10-02`. Its Privacy Policy covers the app and Connect;
-Terms of Use and Content Policy retain their 7 September text. Exact copies of
-all three earlier pages and their stylesheet are in `site/archive/2026-09-07/`.
+The new bundle is `2026-10-02`. Its Privacy Policy, Terms of Use and Content
+Policy cover the app and Connect, including public publishing authority, changing
+schedules and results, approval of mobile finals, and reporting routes. Support
+also covers Connect help and privacy requests across both systems. Exact copies
+of all three earlier legal pages and their stylesheet are in `site/archive/2026-09-07/`.
 The app identifies the new bundle and still accepts `2026-09-07`. The new migration
 `supabase/migrations/20261003000100_stage_legal_connect_privacy.sql` updates the
 old registry URLs to those archives and inserts the new row with `is_current =
@@ -123,7 +125,7 @@ version on an existing project.
 The mobile project and Connect have separate Supabase databases. Run these SQL
 steps against the **mobile iTala project only**. The PR targets `rel/build-three`;
 merging it there does not publish the Cloudflare Worker, which deploys from
-`main`, so the revised `/privacy/` reaches production only when this change lands
+`main`, so the revised legal and Support pages reach production only when this change lands
 on `main`. Other uncommitted work in either checkout must not be included in this
 release by accident.
 
