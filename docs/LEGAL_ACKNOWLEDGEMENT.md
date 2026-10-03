@@ -158,8 +158,9 @@ release by accident.
    the September text. Keep the App Store Connect Privacy Policy URL as
    `https://www.itala.fyi/privacy/`.
 4. Once the build is available in both stores, land the revised canonical
-   `/privacy/` page on `main` and publish the Connect footer link. Verify the
-   page's effective date before publishing, and verify both live sites from a
+   `/privacy/`, `/terms/` and `/content-policy/` pages and the updated `/support/`
+   page on `main` and publish the Connect footer link. Verify the legal pages'
+   effective dates before publishing, and verify both live sites from a
    signed-out browser. Then, without delay, create a **new, later-numbered
    migration** in `supabase/migrations/` containing the reviewed SQL from
    `supabase/release/promote_legal_2026_10_02.sql`. Verify the mobile project
