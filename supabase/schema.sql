@@ -34,20 +34,28 @@ revoke all on public.legal_versions from anon, authenticated;
 -- `is_current` is set only when no version is current yet, and the conflict
 -- clause below deliberately leaves it alone.
 --
--- The URLs, though, must self-heal. They moved host when the itala.fyi domain
--- was bought, and `on conflict do nothing` would have left an existing project
--- pinned to the old `itala.abejohanna.workers.dev` addresses forever - a stale
--- record that no amount of re-running the schema would correct. The three
--- documents are the same documents at a new address, so this is an update, NOT
--- a new version: bumping `version` here would force every existing user to
--- re-accept unchanged terms.
+-- Keep the 7 September text at immutable archive URLs so old receipts still
+-- identify the documents that were shown. The 2 October bundle updates Privacy;
+-- Terms and Content Policy are unchanged. On an existing project this stages
+-- the new row without making it current. Promote only once the matching app is
+-- available, publishing the new pages at the same time (docs/LEGAL_ACKNOWLEDGEMENT.md).
 --
--- Keep these three in step with LEGAL_LINKS in src/lib/legal.ts - the app opens
--- the client's copy, so a disagreement means the receipt on file cites a
--- different address from the page the person actually read. tests/static.test.js
--- checks the two agree.
+-- Keep both rows' URLs in step with src/lib/legal.ts - LEGAL_LINKS for the new
+-- row, PREVIOUS_LEGAL_LINKS for the earlier one. The app opens the client's copy,
+-- so a disagreement means the receipt on file cites a different address from the
+-- page the person actually read. tests/static.test.js checks they agree.
 insert into public.legal_versions (version, terms_url, privacy_url, content_policy_url, is_current)
-values ('2026-09-07', 'https://www.itala.fyi/terms/',
+values ('2026-09-07', 'https://www.itala.fyi/archive/2026-09-07/terms/',
+  'https://www.itala.fyi/archive/2026-09-07/privacy/',
+  'https://www.itala.fyi/archive/2026-09-07/content-policy/',
+  false)
+on conflict (version) do update set
+  terms_url = excluded.terms_url,
+  privacy_url = excluded.privacy_url,
+  content_policy_url = excluded.content_policy_url;
+
+insert into public.legal_versions (version, terms_url, privacy_url, content_policy_url, is_current)
+values ('2026-10-02', 'https://www.itala.fyi/terms/',
   'https://www.itala.fyi/privacy/',
   'https://www.itala.fyi/content-policy/',
   not exists (select 1 from public.legal_versions where is_current))

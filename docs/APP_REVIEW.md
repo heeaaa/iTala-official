@@ -46,6 +46,9 @@ The submitted build's Supabase project must remain available for the entire revi
 - Anonymous sign-in is enabled.
 - Google and Apple providers are enabled for the production bundle identifier.
 - The production schema has been applied.
+- The current legal version is the submitted build's own bundle or the one before
+  it (`docs/LEGAL_ACKNOWLEDGEMENT.md`). The build cannot show any other version, so
+  signing in would return the reviewer to guest browsing.
 - At least one League Creation Code remains unused and can be redeemed.
 - A sample league with teams, players, games and statistics loads at launch.
 - Legal and support pages load without authentication.

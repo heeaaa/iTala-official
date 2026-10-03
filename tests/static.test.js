@@ -196,28 +196,69 @@ ok('app.json declares no RECORD_AUDIO permission',
 }
 ok('docs/DEPLOYMENT.md keeps the zip-apply commands', read('docs/DEPLOYMENT.md').includes('Expand-Archive'));
 
-// The three legal URLs are written down twice - LEGAL_LINKS in src/lib/legal.ts,
-// which is what the app actually opens, and the legal_versions seed row in
-// schema.sql, which is what the acceptance receipt cites. Nothing read them
-// together until the domain moved off itala.abejohanna.workers.dev and it became
-// possible to update one and not the other, leaving receipts on file pointing at
-// a different address from the page the person read.
+// The legal URLs are written down twice - the bundle links in src/lib/legal.ts,
+// which is what the app actually opens, and the legal_versions rows, which are
+// what the acceptance receipt cites. Nothing read them together until the domain
+// moved off itala.abejohanna.workers.dev and it became possible to update one and
+// not the other, leaving receipts on file pointing at a different address from
+// the page the person read. A build knows two bundles - its own, and the one the
+// server may still require when it ships - so each is compared column by column
+// with the row for the same version: in schema.sql, and in the newest migration
+// that sets legal URLs, which is how an existing project actually receives them.
 {
   const legalLib = read('src/lib/legal.ts');
   const schemaSql = read('supabase/schema.sql');
-  const clientUrls = [...legalLib.matchAll(/url:\s*'([^']+)'/g)].map(m => m[1]);
-  ok('src/lib/legal.ts declares three legal document URLs', clientUrls.length === 3,
-     `found ${clientUrls.length}`);
+  const constant = name => (legalLib.match(new RegExp(`\\bconst ${name} = '([^']+)'`)) || [])[1];
+  const linksOf = name => {
+    const at = legalLib.indexOf(`const ${name} = [`);
+    const end = at < 0 ? -1 : legalLib.indexOf('] as const', at);
+    return end < 0 ? [] : [...legalLib.slice(at, end).matchAll(/label:\s*'([^']+)',\s*url:\s*'([^']+)'/g)]
+      .map(m => ({ label: m[1], url: m[2] }));
+  };
+  const bundles = [
+    [constant('LEGAL_VERSION'), linksOf('LEGAL_LINKS')],
+    [constant('PREVIOUS_LEGAL_VERSION'), linksOf('PREVIOUS_LEGAL_LINKS')],
+  ];
+  // version -> [terms, privacy, content] for every row a SQL file sets: an insert
+  // in (version, terms_url, privacy_url, content_policy_url) order, or an update
+  // of all three for one version.
+  const rowsIn = sql => new Map([
+    ...[...sql.matchAll(/values\s*\(\s*'([^']+)',\s*'([^']+)',\s*'([^']+)',\s*'([^']+)'/g)]
+      .map(m => [m[1], m.slice(2, 5)]),
+    ...[...sql.matchAll(/set\s+terms_url\s*=\s*'([^']+)',\s*privacy_url\s*=\s*'([^']+)',\s*content_policy_url\s*=\s*'([^']+)'\s*where\s+version\s*=\s*'([^']+)'/g)]
+      .map(m => [m[4], m.slice(1, 4)]),
+  ]);
   const seed = schemaSql.slice(
     schemaSql.indexOf('insert into public.legal_versions'),
     schemaSql.indexOf('create table if not exists public.legal_acceptances'));
-  for (const url of clientUrls) {
-    ok(`schema.sql seeds the same legal URL as the app opens: ${url}`, seed.includes(`'${url}'`),
-       'the receipt would cite a different address from the document that was shown');
+  const migration = fs.readdirSync(path.join(ROOT, 'supabase', 'migrations')).sort().reverse()
+    .map(f => `supabase/migrations/${f}`)
+    .find(f => f.endsWith('.sql') && /\blegal_versions\b/.test(read(f)) && rowsIn(read(f)).size > 0);
+  ok('a migration sets the legal URLs an existing project receives', !!migration,
+     'schema.sql is not re-run on production for a legal change, so only a migration reaches it');
+  const sources = [['schema.sql', rowsIn(seed)], ...(migration ? [[migration, rowsIn(read(migration))]] : [])];
+  const labels = ['Terms of Use', 'Privacy Policy', 'Content Policy'];
+  for (const [version, links] of bundles) {
+    ok(`src/lib/legal.ts declares the three legal documents for ${version}`,
+       !!version && links.length === 3 && links.every((link, i) => link.label === labels[i]),
+       `found ${links.map(link => link.label).join(', ') || 'nothing'} - the order must match the URL columns`);
+    for (const [name, rows] of sources) {
+      const row = rows.get(version);
+      ok(`${name} sets the same legal URLs for ${version} as the app opens`,
+         !!row && links.every((link, i) => row[i] === link.url),
+         'the receipt would cite a different address from the document that was shown');
+    }
   }
+  const clientUrls = bundles.flatMap(([, links]) => links.map(link => link.url));
   ok('the legal URLs are https and carry a trailing slash',
-     clientUrls.every(u => /^https:\/\/[^/]+\/[a-z-]+\/$/.test(u)),
+     clientUrls.length === 6 && clientUrls.every(u => /^https:\/\/[^/]+(\/[a-z0-9-]+)+\/$/.test(u)),
      `the site serves directories, and a 404-page Worker will not redirect: ${clientUrls.join(', ')}`);
+  // The in-app route to the policy for guests (Apple 5.1.1(i)): the About alert
+  // must keep offering it, and a failure to open it must say so.
+  const leagues = read('src/screens/LeaguesScreen.tsx');
+  ok('the About alert offers the Privacy Policy',
+     /text:\s*'Privacy Policy',\s*onPress:[\s\S]{0,120}?Linking\.openURL\(PRIVACY_POLICY_URL\)\.catch\(/.test(leagues),
+     'guests reach the policy from Profile -> About; without this button they have no in-app link');
   // An existing project already holds this row, so `do nothing` would pin it to
   // whatever host it was first seeded with.
   ok('the legal_versions seed refreshes its URLs on a schema re-run',
