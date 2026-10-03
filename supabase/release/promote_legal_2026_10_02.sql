@@ -1,6 +1,8 @@
 -- Promotion template. Move this SQL into a NEW numbered file under
--- supabase/migrations only after the revised policy and matching app build are
--- live. Push that new migration to the MOBILE Supabase project, not Connect.
+-- supabase/migrations only once the matching app build is available, and push it
+-- straight after publishing the revised canonical policy: older builds keep
+-- recording 2026-09-07 until it runs. Push that new migration to the MOBILE
+-- Supabase project, not Connect.
 -- This file is outside migrations so an ordinary db push cannot activate it early.
 -- One DO statement makes the switch atomic even if the CLI does not wrap files.
 

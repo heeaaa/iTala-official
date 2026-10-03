@@ -37,13 +37,13 @@ revoke all on public.legal_versions from anon, authenticated;
 -- Keep the 7 September text at immutable archive URLs so old receipts still
 -- identify the documents that were shown. The 2 October bundle updates Privacy;
 -- Terms and Content Policy are unchanged. On an existing project this stages
--- the new row without making it current. Promote only after the matching app
--- and pages are published (docs/LEGAL_ACKNOWLEDGEMENT.md).
+-- the new row without making it current. Promote only once the matching app is
+-- available, publishing the new pages at the same time (docs/LEGAL_ACKNOWLEDGEMENT.md).
 --
--- Keep the new row's three URLs in step with LEGAL_LINKS in src/lib/legal.ts - the app opens
--- the client's copy, so a disagreement means the receipt on file cites a
--- different address from the page the person actually read. tests/static.test.js
--- checks the two agree.
+-- Keep both rows' URLs in step with src/lib/legal.ts - LEGAL_LINKS for the new
+-- row, PREVIOUS_LEGAL_LINKS for the earlier one. The app opens the client's copy,
+-- so a disagreement means the receipt on file cites a different address from the
+-- page the person actually read. tests/static.test.js checks they agree.
 insert into public.legal_versions (version, terms_url, privacy_url, content_policy_url, is_current)
 values ('2026-09-07', 'https://www.itala.fyi/archive/2026-09-07/terms/',
   'https://www.itala.fyi/archive/2026-09-07/privacy/',

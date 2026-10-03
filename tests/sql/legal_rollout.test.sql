@@ -39,6 +39,23 @@ select legal_rollout_assert(
    from public.legal_acceptances),
   'staging preserves the original receipt and timestamp');
 
+-- The app ships inside this window and records the bundle the server reports:
+-- the earlier one stays acceptable for an account without a receipt, and the
+-- staged one is refused until promotion.
+update auth_state set uid = '22222222-2222-2222-2222-222222222222';
+select legal_rollout_assert(
+  public.accept_legal('2026-09-07')->>'version' = '2026-09-07',
+  'before promotion an account can still accept the earlier bundle');
+do $$ begin
+  perform public.accept_legal('2026-10-02');
+  raise exception 'FAIL: the staged bundle was accepted before promotion';
+exception when raise_exception then
+  if sqlerrm <> 'Review the current legal version first' then raise; end if;
+end $$;
+select legal_rollout_assert(true, 'before promotion the staged bundle is refused');
+delete from public.legal_acceptances where user_id = auth.uid();
+update auth_state set uid = '11111111-1111-1111-1111-111111111111';
+
 \i supabase/release/promote_legal_2026_10_02.sql
 
 select legal_rollout_assert(
@@ -52,6 +69,13 @@ select legal_rollout_assert(
   (select count(*) = 1 and min(version) = '2026-09-07'
    from public.legal_acceptances),
   'promotion preserves the earlier receipt');
+do $$ begin
+  perform public.accept_legal('2026-09-07');
+  raise exception 'FAIL: the earlier bundle was accepted after promotion';
+exception when raise_exception then
+  if sqlerrm <> 'Review the current legal version first' then raise; end if;
+end $$;
+select legal_rollout_assert(true, 'after promotion the earlier bundle is refused');
 
 -- Reapplying either operation must not reverse the current version.
 \i supabase/migrations/20261003000100_stage_legal_connect_privacy.sql

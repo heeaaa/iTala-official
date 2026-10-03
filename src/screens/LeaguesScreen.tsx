@@ -256,7 +256,8 @@ Share this with the organizer. It can create exactly one league, then expires.`)
             Alert.alert('Could not open Privacy Policy', 'Please check your connection and try again.');
           });
         } },
-        { text: 'OK' },
+        // The cancel style lets VoiceOver's escape gesture close the alert.
+        { text: 'OK', style: 'cancel' },
       ],
     );
   };

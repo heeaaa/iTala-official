@@ -3,7 +3,11 @@
 `node tests/legal.test.js` runs the real legal receipt client, acknowledgement
 component handlers, and AdminProvider using the existing small hook runtime.
 It covers both OAuth paths, cancellation, receipt ordering, failed saves/retry,
-session restoration, cache isolation, and known-version invalidation. It is also
+session restoration, cache isolation, and known-version invalidation. It also covers
+the release window in which the server still requires the bundle before the build's
+own, a switch while the prompt is open, and the device-wide record of the required
+version that stops an earlier cached receipt reopening an account offline. A case
+that never settles fails the run instead of silently ending it. It is also
 included in `npm test`. Native modal rendering, accessibility, and OAuth browser
 handoff require device evidence. `node tests/sql/run.js legal` exercises the
 shipped legal schema, RPC permissions, own-only receipts, timestamps, reruns and

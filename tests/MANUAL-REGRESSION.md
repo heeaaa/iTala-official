@@ -208,6 +208,37 @@ evidence of native presentation):
       offline. After the server announces a newer version, kill/restart offline:
       the obsolete cached receipt must not grant account access.
 - [ ] Account deletion removes its receipts; another account cannot see them.
+- [ ] Bundle switch, on a test project with the next bundle staged, on an iPhone,
+      an iPad and an Android phone, with an older build installed alongside the
+      new one.
+      1. Before promotion, the new build signs in an account that accepted the
+         earlier bundle without a prompt. An account without a receipt sees the
+         earlier version number. Its three links open the archived pages with
+         their stylesheet, and links inside them stay under `/archive/`. Agreeing
+         grants access. Settings still opens the current pages.
+      2. Sign in with the connection off until the prompt shows this build's
+         version and a load error, then reconnect and tap Continue. *Expect:* the
+         prompt switches to the earlier version with "The current legal
+         documents have loaded", and nothing is recorded until Continue is tapped
+         again.
+      3. Promote while the prompt is open, then tap Continue. *Expect:* the prompt
+         says the documents changed, and the tick clears at once with no flicker.
+         VoiceOver and TalkBack speak the message once and read the checkbox as
+         not checked. Double-tapping Continue records nothing until it is ticked
+         again, and then exactly one receipt.
+      4. After promotion, the new build asks again with the current links. The
+         older build shows the update message and records nothing.
+
+- [ ] **R171** Profile → About → **Privacy Policy**, both as a guest and signed in,
+      on an iPhone, an iPad and an Android phone, including with VoiceOver,
+      TalkBack and the largest font and display size.
+      *Expect:* the alert offers Privacy Policy and OK, and neither is
+      truncated. VoiceOver's escape gesture and Android's back button close it.
+      Privacy Policy opens `https://www.itala.fyi/privacy/` in the browser, and
+      returning leaves the app usable. Until runbook step 4 the page shows the
+      September policy, and after it the October one. This is the in-app policy
+      route for guests (Apple 5.1.1(i)); `tests/static.test.js` only checks that
+      the button and its failure alert exist.
 
 - [ ] **R52** Cold start the app. *Expect:* no "Invalid Refresh Token" error,
       and boot is not stalled for ~10 seconds.
