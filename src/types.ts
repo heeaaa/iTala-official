@@ -67,6 +67,10 @@ export interface Game {
   scheduledAt?: number;
   location?: string;
   finishedAt?: number;
+  // Official default result. This score counts for the team record only; it is
+  // never represented by scoring events or credited to a player.
+  defaultWinnerTeamId?: string;
+  defaultScore?: number;
   homeOnCourt?: string[]; // player ids currently on the floor (max 5)
   awayOnCourt?: string[];
   period?: number;
@@ -76,6 +80,12 @@ export interface Game {
   // undefined = inherit the league setting.
   trackMisses?: boolean;
   trackTurnovers?: boolean;        // current live period (persists across screen navigation)
+}
+
+export interface ConnectLinkState {
+  events: import('./sync/connectSchedule').ConnectEventRef[];
+  revision: number;
+  checkedAt: number;
 }
 
 export interface League {
@@ -89,6 +99,8 @@ export interface League {
   isShared?: boolean; // recreational only: the community drop-in space any signed-in user can write to
   isClosed?: boolean; // season officially complete — unlocks final awards (Mythical Five)
   isArchived?: boolean; // hidden everywhere; Super Admins can view/unarchive
+  /** Server-owned Connect metadata, persisted with the league. Missing means not checked yet. */
+  connectLink?: ConnectLinkState;
   // Transient redo stash (per gameId) — lives only in memory, never synced or
   // saved. Populated by UNDO_EVENT, drained by REDO_EVENT, cleared by ADD_EVENT.
   _redo?: Record<string, GameEvent[]>;

@@ -14,6 +14,7 @@ import {
 } from '../lib/stats';
 import { claimOnce, reconcileLineup, courtKeyOf } from '../lib/liveInput';
 import { PlayLogRow, PlayLogTeam } from '../components/PlayLog';
+import FinishLevelModal from '../components/FinishLevelModal';
 import { tapFeedback, undoFeedback, successFeedback } from '../lib/haptics';
 import { usePromos, onPromoTap } from '../lib/usePromos';
 
@@ -121,6 +122,7 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
   const [subOpen, setSubOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [timeoutOpen, setTimeoutOpen] = useState(false);
+  const [finishLevel, setFinishLevel] = useState<{ canDefault: boolean } | null>(null);
   // The chip in the Exit row is the whole indicator; this is the explanation
   // behind it. A modal rather than an Alert so the count, the reassurance and
   // the dev-only detail can be laid out and read, not crammed into one string.
@@ -501,6 +503,24 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
     navigation.replace('FinalScore', { leagueId, gameId });
   };
 
+  const finishDefault = (winnerTeamId: string, defaultScore: number) => {
+    const latest = leagueRef.current;
+    const current = latest?.games.find(g => g.id === gameId);
+    if (!latest || !current || current.status !== 'live' || latest.kind === 'recreational') return;
+    const currentScore = gameScore(latest, current);
+    if (currentScore.home !== 0 || currentScore.away !== 0) {
+      setFinishLevel(null);
+      Alert.alert('Score changed', 'A team has scored since you opened this form. Review the game before finishing.');
+      return;
+    }
+    setFinishLevel(null);
+    successFeedback();
+    leavingRef.current = true;
+    dispatch({ t: 'SET_GAME_STATUS', leagueId, gameId, status: 'final',
+      defaultResult: { winnerTeamId, score: defaultScore } });
+    navigation.replace('FinalScore', { leagueId, gameId });
+  };
+
   const finish = () => {
     // Basketball has no draws: a level score at the end of regulation goes to
     // overtime, which here means adding a period. Finishing level leaves a game
@@ -510,22 +530,8 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
     // Offered, not enforced. A game really can end level in a social setting,
     // and refusing outright would trap a scorekeeper with no way to close it.
     if (score.home === score.away) {
-      const canAddPeriod = period < MAX_PERIOD;
-      Alert.alert(
-        'Scores are level',
-        `${homeTeam.name} ${score.home} — ${score.away} ${awayTeam.name}.\n\n`
-        + 'Basketball goes to overtime rather than ending level. '
-        + (canAddPeriod
-            ? `Add period ${period + 1} to play it out, or finish now — a level game counts towards neither team's record.`
-            : `This is the last period the tracker allows, so finishing now records a game that counts towards neither team's record.`),
-        [
-          { text: 'Cancel', style: 'cancel' },
-          ...(canAddPeriod
-            ? [{ text: `Add period ${period + 1}`, onPress: () => setPeriod(period + 1) }]
-            : []),
-          { text: 'Finish level', style: 'destructive' as const, onPress: doFinish },
-        ],
-      );
+      setFinishLevel({ canDefault: league.kind !== 'recreational' && game.status === 'live'
+        && score.home === 0 && score.away === 0 });
       return;
     }
     Alert.alert('Finish game?', 'This locks the final score and updates standings. You can still edit the box score after.', [
@@ -608,7 +614,7 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
             teamFouls={teamPeriodFouls(league, gameId, sideTeam(leftSide).id, period)}
             timeouts={teamPeriodTimeouts(league, gameId, sideTeam(leftSide).id, period)}
             onPress={() => setActiveSide(leftSide)} />
-          <View style={{ alignItems: 'center', paddingHorizontal: 6 }}>
+          <View style={{ alignItems: 'center', paddingHorizontal: 6, flexShrink: 0 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
               <LivePip size={5} />
               <Txt k="label" color={colors.brandLime} style={{ fontSize: 9, letterSpacing: 1 }}>LIVE</Txt>
@@ -777,6 +783,11 @@ export default function LiveGameScreen({ route, navigation }: ScreenProps<'LiveG
         />
       )}
 
+      {finishLevel && <FinishLevelModal home={homeTeam} away={awayTeam} score={score.home} period={period}
+        onCancel={() => setFinishLevel(null)} onFinish={doFinish}
+        onAddPeriod={period < MAX_PERIOD ? () => { setFinishLevel(null); setPeriod(period + 1); } : undefined}
+        onDefaultConfirm={finishLevel.canDefault ? finishDefault : undefined} />}
+
       {/* What the chip in the Exit row means, on demand. */}
       {syncDetailOpen && (
         <SyncDetailModal sync={sync} technical={lastSyncErrorDetail} onClose={() => setSyncDetailOpen(false)} />
@@ -908,12 +919,14 @@ function SideScore({ team, score, active, onPress, right, teamFouls, timeouts }:
       accessibilityLabel={`${team.name}, ${score} points, ${teamFouls} team fouls, ${timeouts} timeouts used`}
       accessibilityState={{ selected: active }}
       accessibilityHint="Activate to make this the tracked team."
-      style={{ flex: 1, alignItems: right ? 'flex-end' : 'flex-start' }}>
+      style={{ flex: 1, minWidth: 0, alignItems: right ? 'flex-end' : 'flex-start' }}>
       <Txt k="label" color={colors.muted} style={{ fontSize: 10 }}>Team Fouls: {teamFouls}</Txt>
       <Txt k="label" color={colors.muted} style={{ fontSize: 10 }}>Timeout used: {timeouts}</Txt>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2, width: '100%', minHeight: 48 }}>
         {!right && <TeamBadge logo={team.logo} color={team.color} size={18} />}
-        <Txt k="h2" numberOfLines={1} color={active ? colors.text : colors.muted}>{team.name}</Txt>
+        <Txt k="h2" numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.75}
+          color={active ? colors.text : colors.muted}
+          style={{ flex: 1, minWidth: 0, fontSize: 20, lineHeight: 24, textAlign: right ? 'right' : 'left' }}>{team.name}</Txt>
         {right && <TeamBadge logo={team.logo} color={team.color} size={18} />}
       </View>
       <Txt k="display" color={active ? colors.text : colors.muted} style={{ fontSize: 52 }}>{score}</Txt>
@@ -978,6 +991,17 @@ function PlayerChip({ name, number, pts, color, onPress, disabled, grow, fouls, 
   );
 }
 
+// Blank jerseys belong after numbered players; compare numbers numerically (2 before 10).
+function compareSubPlayers(a: Player, b: Player) {
+  const jersey = (p: Player) => p.number?.trim() && Number.isFinite(Number(p.number)) ? Number(p.number) : Infinity;
+  const an = jersey(a), bn = jersey(b);
+  return (an === bn ? 0 : an < bn ? -1 : 1)
+    || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    || a.id.localeCompare(b.id);
+}
+
+const subPlayerText = { fontSize: 18, fontFamily: font.bodyBold, flex: 1, minWidth: 0 };
+
 function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, onClose, onSetLineup, onSub }:
   {
     team: Team; players: Player[]; onCourtIds: string[]; foulLimit: number;
@@ -1036,7 +1060,8 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
     );
   };
 
-  const roster = team.playerIds.map(id => players.find(p => p.id === id)).filter(Boolean) as Player[];
+  const roster = (team.playerIds.map(id => players.find(p => p.id === id)).filter(Boolean) as Player[]).sort(compareSubPlayers);
+  const court = players.filter(p => onCourtIds.includes(p.id)).sort(compareSubPlayers);
   const eligibleCount = roster.filter(p => !fouledOut.has(p.id)).length;
   const target = Math.min(LINEUP_SIZE, eligibleCount);
   const lineupFull = onCourtIds.length >= LINEUP_SIZE;
@@ -1050,7 +1075,7 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
   };
 
   const bench = roster.filter(p => !onCourtIds.includes(p.id));
-  const label = (p: Player) => `${p.number ? `#${p.number} ` : ''}${p.name}`;
+  const label = (p: Player) => `${p.number?.trim() ? `#${p.number.trim()} ` : ''}${p.name}`;
 
   // "comes in" is allowed when the court has an empty slot (no OUT needed) OR an OUT is selected.
   const canBringIn = !lineupFull || !!outId;
@@ -1066,7 +1091,7 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
       <View style={{ flex: 1, backgroundColor: '#000B', justifyContent: 'flex-end' }}>
         <View style={{ backgroundColor: colors.bg, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: space(4), maxHeight: '85%' }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: space(3) }}>
-            <Txt k="h2">{team.name} — Substitutions</Txt>
+            <Txt k="h2" style={{ flex: 1, minWidth: 0, marginRight: 12 }}>{team.name} — Substitutions</Txt>
             <Pressable onPress={onClose} hitSlop={10}><Txt k="h2" color={colors.muted}>✕</Txt></Pressable>
           </View>
 
@@ -1078,19 +1103,19 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
               <Txt k="label" style={{ marginBottom: 6 }}>
                 {lineupFull ? '1. Tap who comes OUT' : `On court (${onCourtIds.length}/${LINEUP_SIZE}) — tap to take OUT`}
               </Txt>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: space(3) }}>
+              <View style={{ gap: 8, marginBottom: space(3) }}>
                 {onCourtIds.length === 0 && <Txt k="body" color={colors.muted}>No one is on the court yet — pick from below.</Txt>}
-                {onCourtIds.map(pid => {
-                  const p = players.find(x => x.id === pid);
-                  if (!p) return null;
+                {court.map(p => {
+                  const pid = p.id;
                   const sel = outId === pid;
                   const pf = foulsOf(pid);
                   const danger = pf >= foulLimit - 1; // one away from fouling out
                   return (
                     <Pressable key={pid} onPress={() => setOutId(sel ? null : pid)}
-                      style={{ paddingVertical: 10, paddingHorizontal: 14, borderRadius: radius.md, borderWidth: 1.5, borderColor: sel ? colors.red : colors.line, backgroundColor: sel ? colors.red : colors.surface, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <Txt k="body" color={sel ? '#FFFFFF' : colors.text}>{label(p)}</Txt>
-                      <Txt k="body" color={sel ? '#FFFFFF' : (danger ? colors.red : colors.muted)} style={{ fontSize: 12 }}>· {pf} PF</Txt>
+                      accessibilityRole="button" accessibilityState={{ selected: sel }} accessibilityLabel={`${label(p)}, ${pf} fouls, take out`}
+                      style={{ minHeight: 52, paddingVertical: 10, paddingHorizontal: 14, borderRadius: radius.md, borderWidth: 1.5, borderColor: sel ? colors.red : colors.line, backgroundColor: sel ? colors.red : colors.surface, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Txt k="body" style={subPlayerText} color={sel ? '#FFFFFF' : colors.text}>{label(p)}</Txt>
+                      <Txt k="body" color={sel ? '#FFFFFF' : (danger ? colors.red : colors.muted)} style={{ fontSize: 12 }}>{sel ? 'OUT · ' : ''}{pf} PF</Txt>
                     </Pressable>
                   );
                 })}
@@ -1101,7 +1126,7 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
                   ? (outId ? '2. Tap who comes IN' : '2. Select someone to take out first — or open a slot')
                   : '2. Tap who comes IN'}
               </Txt>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              <View style={{ gap: 8 }}>
                 {bench.length === 0 && <Txt k="body" color={colors.muted}>No bench players available.</Txt>}
                 {bench.map(p => {
                   const out = fouledOut.has(p.id);
@@ -1110,9 +1135,10 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
                   const danger = !out && pf >= foulLimit - 1;
                   return (
                     <Pressable key={p.id} disabled={disabled}
+                      accessibilityRole="button" accessibilityState={{ disabled }} accessibilityLabel={`${label(p)}, ${out ? 'fouled out' : `${pf} fouls, bring in`}`}
                       onPress={() => bringIn(p.id)}
-                      style={{ opacity: out ? 0.4 : (disabled ? 0.55 : 1), paddingVertical: 10, paddingHorizontal: 14, borderRadius: radius.md, borderWidth: 1.5, borderColor: out ? colors.line : colors.green, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <Txt k="body" color={out ? colors.muted : colors.text}>{label(p)}</Txt>
+                      style={{ minHeight: 52, opacity: out ? 0.4 : (disabled ? 0.55 : 1), paddingVertical: 10, paddingHorizontal: 14, borderRadius: radius.md, borderWidth: 1.5, borderColor: out ? colors.line : colors.green, backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Txt k="body" style={subPlayerText} color={out ? colors.muted : colors.text}>{label(p)}</Txt>
                       <Txt k="body" color={out ? colors.muted : (danger ? colors.red : colors.muted)} style={{ fontSize: 12 }}>
                         · {out ? 'fouled out' : `${pf} PF`}
                       </Txt>
@@ -1125,14 +1151,16 @@ function SubModal({ team, players, onCourtIds, foulLimit, fouledOut, foulsOf, on
             <>
               <Txt k="label" style={{ marginBottom: 6 }}>Pick your {target} on court ({selected.filter(id => !fouledOut.has(id)).length}/{target})</Txt>
               <ScrollView style={{ maxHeight: 380, flexShrink: 1 }}>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                <View style={{ gap: 8 }}>
                   {roster.map(p => {
                     const out = fouledOut.has(p.id);
                     const sel = selected.includes(p.id) && !out;
                     return (
                       <Pressable key={p.id} disabled={out} onPress={() => toggle(p.id)}
-                        style={{ opacity: out ? 0.4 : 1, paddingVertical: 12, paddingHorizontal: 14, borderRadius: radius.md, borderWidth: 1.5, borderColor: sel ? team.color : colors.line, backgroundColor: sel ? team.color : colors.surface }}>
-                        <Txt k="body" color={sel ? '#FFFFFF' : colors.text}>{label(p)}{out ? ' · fouled out' : ` · ${foulsOf(p.id)} PF`}</Txt>
+                        accessibilityRole="checkbox" accessibilityState={{ checked: sel, disabled: out }} accessibilityLabel={`${label(p)}, ${out ? 'fouled out' : `${foulsOf(p.id)} fouls`}`}
+                        style={{ minHeight: 52, opacity: out ? 0.4 : 1, paddingVertical: 12, paddingHorizontal: 14, borderRadius: radius.md, borderWidth: 1.5, borderColor: sel ? team.color : colors.line, backgroundColor: sel ? team.color : colors.surface, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Txt k="body" style={subPlayerText} color={sel ? '#FFFFFF' : colors.text}>{label(p)}</Txt>
+                        <Txt k="body" color={sel ? '#FFFFFF' : colors.muted} style={{ fontSize: 12 }}>{out ? 'fouled out' : `${sel ? '✓ · ' : ''}${foulsOf(p.id)} PF`}</Txt>
                       </Pressable>
                     );
                   })}

@@ -14,7 +14,7 @@ export type RootStackParams = {
   // `pending` carries a game that has NOT been created yet: the lineup screen
   // creates it when Tip off is pressed. Absent for the drop-in flow, where
   // setup has already saved and loaded the game together with its teams.
-  SelectLineup: { leagueId: string; gameId: string; pending?: { homeTeamId: string; awayTeamId: string; location?: string } };
+  SelectLineup: { leagueId: string; gameId: string; pending?: { homeTeamId: string; awayTeamId: string; location?: string; connect?: { eventId: string; gameId: string } } };
   LiveGame: { leagueId: string; gameId: string; spectator?: boolean };
   BoxScore: { leagueId: string; gameId: string };
   FinalScore: { leagueId: string; gameId: string };

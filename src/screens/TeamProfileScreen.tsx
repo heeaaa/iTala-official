@@ -94,6 +94,7 @@ export default function TeamProfileScreen({ route, navigation }: ScreenProps<'Te
               <TeamBadge logo={opp?.logo} color={opp?.color ?? colors.muted} size={13} />
               <Txt k="body" numberOfLines={1} style={{ flex: 1, fontSize: 14 }}>{isHome ? 'vs' : '@'} {opp?.name ?? '—'}</Txt>
               <Txt k="stat" color={resultColor}>{us}–{them}</Txt>
+              {g.defaultWinnerTeamId && <Txt k="label" color={colors.muted}>DEFAULT</Txt>}
               {g.finishedAt ? <Txt k="body" color={colors.muted} style={{ fontSize: 11 }}>{dayLabel(g.finishedAt)}</Txt> : null}
             </Pressable>
           );

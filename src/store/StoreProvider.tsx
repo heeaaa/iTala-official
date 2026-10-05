@@ -3,7 +3,7 @@
 // rather than renaming a type used across thirty files.
 import { Alert, AppState as RNAppState } from 'react-native';
 import React, { createContext, useContext, useEffect, useReducer, useRef, useCallback } from 'react';
-import { AppState, League, Team, Player, Game, GameEvent, EventType, LocalPrefs, LegacyPersistedSettings } from '../types';
+import { AppState, League, Team, Player, Game, GameEvent, EventType, LocalPrefs, LegacyPersistedSettings, ConnectLinkState } from '../types';
 import { setHapticsEnabled } from '../lib/haptics';
 import { ensureNotifPermission } from '../lib/notify';
 import { uid } from '../lib/format';
@@ -78,6 +78,9 @@ async function waitForSession(sb: NonNullable<ReturnType<typeof getSupabase>>, m
  */
 function describeSyncFailure(e: unknown): string {
   const msg = (e as Error)?.message ?? String(e ?? '');
+  if (/published iTala Connect schedule/i.test(msg)) {
+    return 'This league now uses an iTala Connect schedule. Open Schedule to choose its game. Your local game has been kept on this device.';
+  }
   if (isNetworkFailure(msg)) {
     return "The app couldn't reach the server. Check this device's connection and try again.";
   }
@@ -198,7 +201,7 @@ export type Action =
   | { t: 'ADD_PLAYER'; leagueId: string; teamId: string; name: string; number?: string; id?: string }
   | { t: 'UPDATE_PLAYER'; leagueId: string; playerId: string; name?: string; number?: string | null }
   | { t: 'DELETE_PLAYER'; leagueId: string; teamId: string; playerId: string }
-  | { t: 'CREATE_GAME'; id: string; leagueId: string; homeTeamId: string; awayTeamId: string; location?: string; homeOnCourt?: string[]; awayOnCourt?: string[] }
+  | { t: 'CREATE_GAME'; id: string; leagueId: string; homeTeamId: string; awayTeamId: string; location?: string; homeOnCourt?: string[]; awayOnCourt?: string[]; defaultResult?: { winnerTeamId: string; score: number } }
   | { t: 'SET_LINEUP'; leagueId: string; gameId: string; side: 'home' | 'away'; playerIds: string[] }
   | { t: 'SET_LINEUPS'; leagueId: string; gameId: string; home: string[]; away: string[] }
   | { t: 'SUBSTITUTE'; leagueId: string; gameId: string; side: 'home' | 'away'; outId: string; inId: string }
@@ -212,7 +215,7 @@ export type Action =
   | { t: 'DELETE_EVENT'; leagueId: string; gameId: string; eventId: string }
   | { t: 'DELETE_GAME'; leagueId: string; gameId: string }
   | { t: 'CLEANUP_REC_GAMES'; leagueId: string; gameIds: string[] }
-  | { t: 'SET_GAME_STATUS'; leagueId: string; gameId: string; status: Game['status'] }
+  | { t: 'SET_GAME_STATUS'; leagueId: string; gameId: string; status: Game['status']; defaultResult?: { winnerTeamId: string; score: number } }
   | { t: 'SET_ATTENDANCE'; leagueId: string; gameId: string; playerIds: string[] }
   | { t: 'SET_PERIOD'; leagueId: string; gameId: string; period: number }
   // `newTeamIds`/`newPlayerIds` map a source row's id to the fresh id its copy
@@ -226,6 +229,7 @@ export type Action =
   // nothing to delete there and nothing to push. See the dispatch wrapper.
   | { t: 'ROLLBACK_BUNDLE'; leagueId: string; gameIds: string[]; teamIds: string[]; playerIds: string[]; removeLeague?: boolean }
   | { t: 'REC_SETUP_CONFIRMED'; bundle: League }
+  | { t: 'CONNECT_LINK_REFRESHED'; leagueId: string; state: ConnectLinkState }
 
 const initial: AppState = { leagues: [] };
 
@@ -238,6 +242,13 @@ function mapLeague(state: AppState, id: string, fn: (l: League) => League): AppS
 function foulLimitOf(l: League): number {
   const stored = l.foulOutLimit;
   return (!stored || stored > DEFAULT_FOUL_OUT) ? DEFAULT_FOUL_OUT : stored;
+}
+
+function validDefaultResult(homeTeamId: string, awayTeamId: string,
+  result: { winnerTeamId: string; score: number }): boolean {
+  return homeTeamId !== awayTeamId &&
+    (result.winnerTeamId === homeTeamId || result.winnerTeamId === awayTeamId) &&
+    Number.isInteger(result.score) && result.score > 0 && result.score <= 999;
 }
 
 /**
@@ -357,6 +368,9 @@ export function __resetSyncPrimitives(): void {
 
 export function reducer(state: AppState, a: Action): AppState {
   switch (a.t) {
+    case 'CONNECT_LINK_REFRESHED':
+      return mapLeague(state, a.leagueId, l => !l.connectLink || a.state.revision >= l.connectLink.revision
+        ? { ...l, connectLink: a.state } : l);
     case 'HYDRATE': {
       // LEGACY MIGRATION. Saved states written before leagues.track_misses
       // existed carry an app-wide toggle instead. Read it once here to seed any
@@ -376,7 +390,10 @@ export function reducer(state: AppState, a: Action): AppState {
       const coveredSet = covered === null ? null : new Set(covered);
       const speaksFor = (id: string) => coveredSet === null || coveredSet.has(id);
 
-      const leagues = a.state.leagues.map(l => {
+      const leagues = a.state.leagues.map(incoming => {
+        const localLink = localLeagues.get(incoming.id)?.connectLink;
+        const l = localLink && (!incoming.connectLink || localLink.revision > incoming.connectLink.revision)
+          ? { ...incoming, connectLink: localLink } : incoming;
         // OUT OF SCOPE: take the catalogue fields, keep the children. The
         // snapshot carried this league's name and season but was never asked
         // for its games, so replacing them with the empty arrays it happens to
@@ -626,10 +643,14 @@ export function reducer(state: AppState, a: Action): AppState {
         // more than once for one action, so this belongs here and not in a
         // screen-level guard.
         if (l.games.some(g => g.id === a.id)) return l;
+        if (a.defaultResult && (!validDefaultResult(a.homeTeamId, a.awayTeamId, a.defaultResult) || l.kind === 'recreational')) return l;
         const game: Game = {
           id: a.id, leagueId: a.leagueId,
           homeTeamId: a.homeTeamId, awayTeamId: a.awayTeamId,
-          status: 'live', scheduledAt: Date.now(), location: a.location,
+          status: a.defaultResult ? 'final' : 'live', scheduledAt: Date.now(), location: a.location,
+          finishedAt: a.defaultResult ? Date.now() : undefined,
+          defaultWinnerTeamId: a.defaultResult?.winnerTeamId,
+          defaultScore: a.defaultResult?.score,
           homeOnCourt: a.homeOnCourt ?? [], awayOnCourt: a.awayOnCourt ?? [],
         };
         return { ...l, games: [game, ...l.games] };
@@ -868,7 +889,14 @@ export function reducer(state: AppState, a: Action): AppState {
         ...l,
         games: l.games.map(g =>
           g.id === a.gameId
-            ? { ...g, status: a.status, finishedAt: a.status === 'final' ? Date.now() : g.finishedAt }
+            ? a.defaultResult && (a.status !== 'final' || g.status !== 'live' || l.kind === 'recreational' ||
+                !validDefaultResult(g.homeTeamId, g.awayTeamId, a.defaultResult) ||
+                l.events.some(e => e.gameId === g.id && (e.teamId === g.homeTeamId || e.teamId === g.awayTeamId) &&
+                  (e.type === 'fg2_make' || e.type === 'fg3_make' || e.type === 'ft_make')))
+              ? g
+              : { ...g, status: a.status, finishedAt: a.status === 'final' ? Date.now() : g.finishedAt,
+                  defaultWinnerTeamId: a.defaultResult?.winnerTeamId,
+                  defaultScore: a.defaultResult?.score }
             : g
         ),
       }));
@@ -1746,6 +1774,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // future caller reaching for the public dispatch - which would otherwise
     // push a whole league's tables back at the server that just sent them.
     if (incoming.t === 'HYDRATE' || incoming.t === 'HYDRATE_LEAGUE') { baseDispatch(incoming); return; }
+    if (incoming.t === 'CONNECT_LINK_REFRESHED') {
+      // Discovery returns server-owned metadata; keep it locally without echoing a write.
+      stateRef.current = reducer(stateRef.current, incoming);
+      baseDispatch(incoming);
+      return;
+    }
 
     // Name the exact event row this action is about, from the PRE-dispatch
     // state, before anything else looks at it. The reducer, the server push and

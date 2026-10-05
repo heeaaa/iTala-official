@@ -308,12 +308,12 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     else resolve?.(accepted);
   };
 
-  const askLegal = useCallback((returning: boolean, action: () => Promise<void>, error: string | null = null) =>
+  const askLegal = useCallback((version: string, returning: boolean, action: () => Promise<void>, error: string | null = null) =>
     new Promise<boolean>(resolve => {
       if (!mounted.current) { resolve(false); return; }
       legalResolve.current = resolve;
       legalAction.current = action;
-      setLegalPrompt({ version: LEGAL_VERSION, returning, busy: false, error });
+      setLegalPrompt({ version, returning, busy: false, error });
     }), []);
 
   const submitLegal = async () => {
@@ -333,25 +333,54 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   const requireLegalReceipt = useCallback(async (
     sb: NonNullable<ReturnType<typeof getSupabase>>, uid: string, restoring = true,
   ): Promise<boolean> => {
+    // The bundle on screen, and the only one agreement may be recorded for. It is
+    // this build's own until the server says which bundle it currently requires.
+    let shown = LEGAL_VERSION;
+    // Whether the server has said `shown` is the bundle it requires.
+    let confirmed = false;
+    const forgetCachedReceipt = async () => {
+      try { await forgetLegalReceipt(uid); }
+      catch { warn('[auth] Could not invalidate the outdated legal receipt cache.'); }
+    };
     const save = async () => {
-      await readLegalStatus(sb); // Refuse an outdated document version, including on retries.
-      const receipt = await recordLegalAcceptance(sb, LEGAL_VERSION);
+      const status = await readLegalStatus(sb); // Refuse an unknown document version, including on retries.
+      // Already agreed to the bundle the server requires (the first read may have
+      // failed): there is nothing to record.
+      if (status.accepted_at) { await cacheLegalReceipt(uid, status); return; }
+      // The server has no receipt for its bundle, so no cached receipt applies.
+      await forgetCachedReceipt();
+      if (status.version !== shown) {
+        // The server was promoted while the prompt was open, or could not be
+        // read when it opened. Show the bundle it requires rather than record
+        // agreement to documents the person was not shown.
+        const message = confirmed
+          ? 'The legal documents have changed. Please review them, then continue.'
+          : 'The current legal documents have loaded. Please review them, then continue.';
+        shown = status.version;
+        confirmed = true;
+        if (mounted.current) setLegalPrompt(value => value ? { ...value, version: status.version } : null);
+        throw new Error(message);
+      }
+      const receipt = await recordLegalAcceptance(sb, shown);
       await cacheLegalReceipt(uid, receipt);
     };
     let problem: string | null = null;
     try {
       const status = await readLegalStatus(sb);
       if (status.accepted_at) { await cacheLegalReceipt(uid, status); return true; }
+      shown = status.version;
+      confirmed = true;
+      // No receipt for the bundle the server requires, so a cached receipt is for
+      // one that no longer applies. It must not reopen the account offline.
+      await forgetCachedReceipt();
     } catch (e) {
       // Only a previously server-confirmed receipt can allow offline restoration.
       // A known version mismatch always takes precedence over the cache.
-      if (e instanceof LegalVersionError) {
-        try { await forgetLegalReceipt(uid); }
-        catch { warn('[auth] Could not invalidate the outdated legal receipt cache.'); }
-      } else if (restoring && await cachedLegalReceipt(uid)) return true;
+      if (e instanceof LegalVersionError) await forgetCachedReceipt();
+      else if (restoring && await cachedLegalReceipt(uid)) return true;
       problem = e instanceof Error ? e.message : 'Could not check your acknowledgement. Please try again.';
     }
-    return askLegal(restoring, save, problem);
+    return askLegal(shown, restoring, save, problem);
   }, [askLegal]);
 
   const returnToGuest = useCallback(async (sb: NonNullable<ReturnType<typeof getSupabase>>) => {

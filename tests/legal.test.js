@@ -17,6 +17,9 @@ function load(file, imports) {
   return context.exports;
 }
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
+// The device also keeps the version the server last required, beside the receipts.
+const REQUIRED = 'itala.legal.required.v1';
+const receiptKeys = disk => [...disk.keys()].filter(k => k.startsWith('itala.legal.receipt.'));
 function nodes(element) {
   if (!element || typeof element !== 'object') return [];
   return [element, ...[element.props?.children].flat(Infinity).flatMap(nodes)];
@@ -26,13 +29,15 @@ function setup(options = {}) {
   const account = { id: 'account-a', email: 'a@example.invalid', is_anonymous: false };
   const guest = { id: 'guest', is_anonymous: true };
   let session = { user: options.restored ? account : guest };
-  const storage = { getItem: async k => disk.get(k) ?? null, setItem: async (k, v) => { disk.set(k, v); },
-    removeItem: async k => { disk.delete(k); } };
+  const storage = { getItem: async k => disk.get(k) ?? null,
+    setItem: async (k, v) => { if (options.failRequired && k === REQUIRED) throw new Error('storage unavailable'); disk.set(k, v); },
+    removeItem: async k => { if (options.failRemove) throw new Error('storage unavailable'); disk.delete(k); } };
   const legal = load('src/lib/legal.ts', { '@react-native-async-storage/async-storage': { default: storage } });
   const receipt = { version: legal.LEGAL_VERSION, accepted_at: '2026-09-07T01:02:03.000Z' };
   if (options.cache) disk.set('itala.legal.receipt.v1.account-a', JSON.stringify(options.cache === true ? receipt : options.cache));
   const RN = { Platform: { OS: options.ios ? 'ios' : 'android' },
     StyleSheet: { create: v => v }, Linking: { openURL: async url => { calls.push(['link', url]); } },
+    AccessibilityInfo: { announceForAccessibility: message => { calls.push(['announce', message]); } },
     Modal: 'Modal', ScrollView: 'ScrollView', Text: 'Text', TouchableOpacity: 'TouchableOpacity', View: 'View' };
   const component = load('src/components/LegalAcknowledgement.tsx', { react: HookRuntime, 'react-native': RN,
     '../theme': { colors: {}, font: {}, radius: {}, space: n => n }, '../lib/legal': legal });
@@ -173,7 +178,7 @@ for (const provider of ['Google', 'Apple']) {
     assert.equal(p.ctx.role, 'guest'); assert.equal(p.dialog.prompt.busy, true);
     saving.resolve(p.receipt); await p.settle(); await p.dismiss();
     assert.equal(await result, 'user'); assert.equal(p.ctx.role, 'user'); assert.equal(p.count('my_memberships'), 1);
-    assert.equal(p.disk.size, 1); p.root.unmount();
+    assert.equal(receiptKeys(p.disk).length, 1); p.root.unmount();
   });
 }
 test('current server receipt restores without prompting or writing a duplicate receipt', async () => {
@@ -227,7 +232,7 @@ test('post-auth status rejection holds account access even with a cached receipt
   p.dialog.onCancel(); await p.settle(); assert.equal(await result, null); p.root.unmount();
 });
 test('stale, malformed and unconfirmed local receipts are never accepted', async () => {
-  for (const cache of [{ version: 'old', accepted_at: '2026-09-07' }, { version: '2026-09-07', accepted_at: null }, { version: '2026-09-07', accepted_at: 'bad-date' }]) {
+  for (const cache of [{ version: 'old', accepted_at: '2026-09-07' }, { version: '2026-10-02', accepted_at: null }, { version: '2026-10-02', accepted_at: 'bad-date' }]) {
     const p = setup({ restored: true, cache, status: new Error('offline') }); await p.settle();
     assert.equal(p.ctx.role, 'guest'); assert.ok(p.dialog.prompt); p.root.unmount();
   }
@@ -241,6 +246,146 @@ test('server receipt validation refuses missing date and wrong version; cache fa
   await legal.cacheLegalReceipt('a', p.receipt); p.root.unmount();
 });
 
+// A build ships while the server still requires the bundle before its own:
+// docs/LEGAL_ACKNOWLEDGEMENT.md promotes only once the build is available, and
+// App Review signs in before that. Treating that server as "update iTala" signed
+// every account out of a build that was already the newest one.
+const ARCHIVED = ['terms', 'privacy', 'content-policy'].map(doc => `https://www.itala.fyi/archive/2026-09-07/${doc}/`);
+const earlier = (acceptedAt = '2026-09-07T01:02:03.000Z') => ({ version: '2026-09-07', accepted_at: acceptedAt });
+const accepted = p => p.calls.filter(c => c[0] === 'accept_legal').map(c => c[1].p_version);
+const cachedVersion = p => JSON.parse(p.disk.get('itala.legal.receipt.v1.account-a') ?? 'null')?.version;
+test('the build knows exactly its own bundle and the one before it', async () => {
+  const legal = load('src/lib/legal.ts', { '@react-native-async-storage/async-storage': { default: {} } });
+  assert.equal(legal.PREVIOUS_LEGAL_VERSION, '2026-09-07');
+  assert.equal(legal.legalLinksFor(legal.LEGAL_VERSION), legal.LEGAL_LINKS);
+  assert.deepEqual(Array.from(legal.legalLinksFor('2026-09-07'), link => link.url), ARCHIVED,
+    'the earlier bundle opens the archived text its receipts cite');
+  assert.equal(legal.PRIVACY_POLICY_URL, legal.LEGAL_LINKS.find(link => link.label === 'Privacy Policy').url,
+    'About opens the current Privacy Policy, not whichever link is listed second');
+  for (const version of ['2026-09-06', 'constructor', '__proto__', 'hasOwnProperty']) {
+    await assert.rejects(legal.readLegalStatus({ rpc: async () => ({ data: { version, accepted_at: null } }) }),
+      error => error instanceof legal.LegalVersionError, `${version} is not a bundle this build can show`);
+  }
+});
+test('server still on the previous bundle: an account that accepted it restores, caches it and restores offline', async () => {
+  const p = setup({ restored: true, status: earlier() }); await p.settle();
+  assert.equal(p.ctx.role, 'user'); assert.equal(p.dialog.prompt, null); assert.equal(p.count('accept_legal'), 0);
+  assert.equal(cachedVersion(p), '2026-09-07'); assert.equal(p.disk.get(REQUIRED), '2026-09-07'); p.root.unmount();
+  const next = setup({ restored: true, disk: p.disk, status: new Error('offline') }); await next.settle();
+  assert.equal(next.ctx.role, 'user', 'the receipt matches the bundle the device last saw required'); next.root.unmount();
+});
+test('server still on the previous bundle: sign-in asks for it, opens its archived text and records it', async () => {
+  const p = setup(); await p.settle(); p.state.status = earlier(null); p.state.save = earlier('2026-10-05T01:02:03.000Z');
+  const result = p.ctx.signInWithGoogle(); await p.settle();
+  assert.equal(p.dialog.prompt.version, '2026-09-07'); assert.equal(p.dialog.prompt.error, null, 'no update message');
+  const dialog = HookRuntime.render(p.component.LegalAcknowledgement, { prompt: p.dialog.prompt, onContinue() {}, onCancel() {}, onDismiss() {} });
+  assert.equal(nodes(dialog.element).find(n => n.type === p.component.LegalLinks).props.version, '2026-09-07',
+    'the prompt opens the documents of the bundle it records');
+  const inline = HookRuntime.render(p.component.LegalLinks, { inline: true, version: '2026-09-07' });
+  for (const n of nodes(inline.element).filter(n => n.props?.accessibilityRole === 'link')) n.props.onPress();
+  assert.deepEqual(p.calls.filter(c => c[0] === 'link').map(c => c[1]).sort(), [...ARCHIVED].sort());
+  dialog.unmount(); inline.unmount();
+  await p.submit();
+  assert.deepEqual(accepted(p), ['2026-09-07']); assert.equal(p.dialog.prompt, null);
+  assert.equal(await result, 'user'); assert.equal(p.ctx.role, 'user'); assert.equal(cachedVersion(p), '2026-09-07');
+  p.root.unmount();
+});
+for (const transport of [new Error('offline'), { error: { message: 'Failed to fetch' } }]) {
+  test(`an upgraded account restores offline from its previous-bundle receipt (${transport instanceof Error ? 'reject' : 'resolved error'})`, async () => {
+    const p = setup({ restored: true, cache: earlier(), status: transport }); await p.settle();
+    assert.equal(p.ctx.role, 'user'); assert.equal(p.dialog.prompt, null); p.root.unmount();
+  });
+}
+test('after promotion an earlier receipt asks for the new bundle and cannot reopen the account offline', async () => {
+  const first = setup({ restored: true, cache: earlier() }); await first.settle();
+  assert.equal(first.ctx.role, 'guest'); assert.equal(first.dialog.prompt.version, first.legal.LEGAL_VERSION);
+  assert.equal(first.dialog.prompt.error, null, 'the newest build is not told to update');
+  assert.equal(cachedVersion(first), undefined, 'the server has no receipt for its bundle, so the cache goes');
+  first.root.unmount();
+  const next = setup({ restored: true, disk: first.disk, status: new Error('offline') }); await next.settle();
+  assert.equal(next.ctx.role, 'guest'); assert.ok(next.dialog.prompt); next.root.unmount();
+});
+test('a promotion while the prompt is open shows the new bundle before anything is recorded', async () => {
+  const p = setup(); await p.settle(); p.state.status = earlier(null);
+  const result = p.ctx.signInWithApple(); await p.settle();
+  assert.equal(p.dialog.prompt.version, '2026-09-07');
+  p.state.status = { version: p.legal.LEGAL_VERSION, accepted_at: null };
+  await p.submit();
+  assert.equal(p.count('accept_legal'), 0, 'agreement to the earlier documents is not recorded against the new ones');
+  assert.equal(p.dialog.prompt.version, p.legal.LEGAL_VERSION); assert.match(p.dialog.prompt.error, /changed/);
+  assert.equal(p.dialog.prompt.busy, false); assert.equal(p.ctx.role, 'guest');
+  await p.submit();
+  assert.deepEqual(accepted(p), [p.legal.LEGAL_VERSION]); assert.equal(p.dialog.prompt, null);
+  assert.equal(await result, 'user'); p.root.unmount();
+});
+test('a prompt opened without reaching the server shows the required bundle before recording', async () => {
+  const p = setup(); await p.settle(); p.state.status = { error: { message: 'Failed to fetch' } };
+  const result = p.ctx.signInWithGoogle(); await p.settle();
+  assert.equal(p.dialog.prompt.version, p.legal.LEGAL_VERSION); assert.match(p.dialog.prompt.error, /load/);
+  p.state.status = earlier(null); p.state.save = earlier('2026-10-05T01:02:03.000Z');
+  await p.submit();
+  assert.equal(p.count('accept_legal'), 0); assert.equal(p.dialog.prompt.version, '2026-09-07');
+  assert.match(p.dialog.prompt.error, /loaded/, 'nothing changed from the person\'s side: the first read failed');
+  await p.submit();
+  assert.deepEqual(accepted(p), ['2026-09-07']); assert.equal(p.dialog.prompt, null);
+  assert.equal(await result, 'user'); p.root.unmount();
+});
+test('an account that already accepted the required bundle enters even when the first read failed', async () => {
+  const p = setup(); await p.settle(); p.state.status = { error: { message: 'Failed to fetch' } };
+  const result = p.ctx.signInWithGoogle(); await p.settle();
+  p.state.status = earlier();
+  await p.submit();
+  assert.equal(p.count('accept_legal'), 0, 'nothing to record');
+  assert.equal(p.dialog.prompt, null, 'not asked again'); assert.equal(await result, 'user');
+  assert.equal(cachedVersion(p), '2026-09-07'); p.root.unmount();
+});
+// The device learning which bundle is required must retire every earlier cached
+// receipt, whichever path learnt it and even when one account's delete fails.
+test('a save that fails after the server required the new bundle cannot reopen the account offline', async () => {
+  const p = setup({ cache: earlier(), failRequired: true }); await p.settle();
+  p.state.status = { error: { message: 'Failed to fetch' } };
+  const result = p.ctx.signInWithGoogle(); await p.settle();
+  p.state.status = { version: p.legal.LEGAL_VERSION, accepted_at: null }; p.state.save = { error: { message: 'Failed to fetch' } };
+  await p.submit();
+  assert.match(p.dialog.prompt.error, /save/); assert.equal(cachedVersion(p), undefined);
+  p.root.unmount(); assert.equal(await result, null);
+  const next = setup({ restored: true, disk: p.disk, status: new Error('offline') }); await next.settle();
+  assert.equal(next.ctx.role, 'guest'); next.root.unmount();
+});
+test('a cached receipt that cannot be deleted still cannot reopen the account once the new bundle was seen', async () => {
+  const first = setup({ restored: true, cache: earlier(), failRemove: true }); await first.settle();
+  assert.equal(first.ctx.role, 'guest'); assert.equal(cachedVersion(first), '2026-09-07', 'the delete failed');
+  first.root.unmount();
+  const next = setup({ restored: true, disk: first.disk, status: new Error('offline') }); await next.settle();
+  assert.equal(next.ctx.role, 'guest', 'the device remembers which bundle the server requires'); next.root.unmount();
+});
+test('once the new bundle is required, another account\'s earlier receipt on this device is not honoured', async () => {
+  const p = setup({ restored: true }); await p.settle();
+  p.disk.set('itala.legal.receipt.v1.account-z', JSON.stringify(earlier()));
+  assert.equal(await p.legal.cachedLegalReceipt('account-z'), null); p.root.unmount();
+});
+test('a version change clears the tick in the same render and is spoken', async () => {
+  const p = setup(); await p.settle(); let continued = 0;
+  const root = HookRuntime.render(p.component.LegalAcknowledgement, { prompt: { version: '2026-09-07', returning: false, busy: false, error: null },
+    onContinue: () => continued++, onCancel() {}, onDismiss() {} });
+  const checkbox = () => nodes(root.element).find(n => n.props?.accessibilityRole === 'checkbox');
+  const agree = () => nodes(root.element).find(n => n.props?.accessibilityRole === 'button');
+  checkbox().props.onPress(); root.flush(); assert.equal(checkbox().props.accessibilityState.checked, true);
+  root.props.prompt = { ...root.props.prompt, version: p.legal.LEGAL_VERSION, error: 'The legal documents have changed. Please review them, then continue.' };
+  root.invalidate(); root.renderOnce();
+  assert.equal(checkbox().props.accessibilityState.checked, false, 'never drawn with the earlier version\'s tick');
+  agree().props.onPress(); assert.equal(continued, 0);
+  root.flush();
+  assert.deepEqual(p.calls.filter(c => c[0] === 'announce').map(c => c[1]), [root.props.prompt.error]);
+  root.unmount(); p.root.unmount();
+});
+
+// A case that awaits something which never settles empties the event loop, and
+// Node would then exit 0 here with every later case silently skipped.
+let finished = false;
+process.on('exit', () => {
+  if (!finished) { console.error('  FAIL the legal suite stopped before every case ran'); process.exitCode = 1; }
+});
 (async () => {
   let failed = 0;
   for (const [name, fn] of cases) {
@@ -249,5 +394,6 @@ test('server receipt validation refuses missing date and wrong version; cache fa
   }
   console.log(`Legal: ${cases.length - failed} passed, ${failed} failed`);
   process.exitCode = failed ? 1 : 0;
+  finished = true;
 })();
 

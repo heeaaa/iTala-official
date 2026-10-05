@@ -1,4 +1,4 @@
--- @requires: is_admin, games_created_by, authz, rls, final_scores
+-- @requires: is_admin, games_created_by, authz, rls, default_result, final_scores
 --
 -- public.final_game_scores - the server-side aggregation that answers "what did
 -- this game end?" for readers outside the app.
@@ -185,6 +185,57 @@ begin
                      || 'teams hides finished games instead of reporting a null name');
 end $$;
 insert into public.teams (id, league_id, name, color) values ('tA','lg1','Away Team','#C7F000');
+
+-- D. Explicit defaults are official results with no scoring events. Keep these
+-- fixtures after the existing count assertions so older exposure checks retain
+-- their original three-game fixture.
+insert into public.games (id, league_id, home_team_id, away_team_id, status,
+                          scheduled_at, finished_at, default_winner_team_id, default_score)
+values ('gDefaultHome', 'lg1', 'tH', 'tA', 'final', 1720000000000, 1720014400000, 'tH', 30),
+       ('gDefaultAway', 'lg1', 'tH', 'tA', 'final', 1720000000000, 1720018000000, 'tA', 42);
+do $$
+declare h record; a record;
+begin
+  select * into h from public.final_game_scores where game_id = 'gDefaultHome';
+  select * into a from public.final_game_scores where game_id = 'gDefaultAway';
+  perform t_report('D1 home default is 30-0 with the home winner',
+    h.home_pts = 30 and h.away_pts = 0 and h.winner_team_id = 'tH' and h.is_default,
+    'home default result was not represented in the view');
+  perform t_report('D2 away default can use an edited score',
+    a.home_pts = 0 and a.away_pts = 42 and a.winner_team_id = 'tA' and a.is_default,
+    'away default result was not represented in the view');
+  perform t_report('D3 no player events were invented',
+    h.event_count = 0 and a.event_count = 0 and h.last_event_at is null and a.last_event_at is null,
+    'default points leaked into player events');
+end $$;
+delete from public.games where id in ('gDefaultHome', 'gDefaultAway');
+do $$
+begin
+  begin
+    insert into public.games (id, league_id, home_team_id, away_team_id, status,
+                              default_winner_team_id, default_score)
+    values ('gBadDefault', 'lg1', 'tH', 'tA', 'final', 'tX', 30);
+    perform t_report('D4 a third team cannot win by default', false);
+  exception when check_violation then
+    perform t_report('D4 a third team cannot win by default', true);
+  end;
+  begin
+    insert into public.games (id, league_id, home_team_id, away_team_id, status,
+                              default_winner_team_id, default_score)
+    values ('gBadScore', 'lg1', 'tH', 'tA', 'final', 'tH', 0);
+    perform t_report('D5 the default score must be positive', false);
+  exception when check_violation then
+    perform t_report('D5 the default score must be positive', true);
+  end;
+  begin
+    insert into public.games (id, league_id, home_team_id, away_team_id, status,
+                              default_winner_team_id, default_score)
+    values ('gPartialDefault', 'lg1', 'tH', 'tA', 'final', null, 30);
+    perform t_report('D6 both default fields must be present', false);
+  exception when check_violation then
+    perform t_report('D6 both default fields must be present', true);
+  end;
+end $$;
 
 -- ---------------------------------------------------------------------------
 -- B. Exposure. The view must not become a way around row-level security.

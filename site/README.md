@@ -1,7 +1,8 @@
 # iTala public pages
 
 Plain static HTML. No build step, no dependencies, no framework. Both stores require a publicly
-reachable privacy policy URL, and keeping the policy in this repo means it sits next to the
+reachable privacy policy URL. The same `/privacy/` page covers the app and iTala Connect; Connect
+links to it from its public footer. Keeping the policy in this repo means it sits next to the
 declaration tables in `docs/DEPLOYMENT.md` that it has to agree with. Those are what drift.
 
 ```
@@ -13,6 +14,7 @@ site/
   support/index.html  support contacts and help route
   style.css           shared styles, light and dark
   _headers            security headers, applied by Cloudflare to every response
+  archive/2026-09-07/  prior legal pages for earlier acceptance receipts
   .assetsignore       files here that are repo documentation, not published pages
 ```
 

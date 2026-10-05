@@ -2,8 +2,8 @@ import { League, Team } from '../types';
 import { colors } from '../theme';
 import { CardSpec } from '../components/AchievementCard';
 import {
-  careerStats, leagueAwards, standings, teamBoxScore, gameScore, perfRating,
-  outcomeOf, AwardWinner,
+  careerStats, leagueAwards, standings, teamBoxScore, gameScore, playerOfTheGame,
+  AwardWinner,
 } from './stats';
 import { dateLabel } from './format';
 
@@ -99,15 +99,9 @@ export function gameCardOptions(league: League, gameId: string, playerId: string
   // `sc.home >= sc.away` used to hand the title to the home side by default and
   // hide the away side's best game entirely, so a drawn game makes both teams
   // eligible and the award goes to the best line across the two.
-  const outcome = outcomeOf(sc.home, sc.away);
-  const eligibleTeamIds = outcome === 'tie'
-    ? [game.homeTeamId, game.awayTeamId]
-    : outcome === 'home' ? [game.homeTeamId] : [game.awayTeamId];
-  if (eligibleTeamIds.includes(teamId)) {
-    const pool = eligibleTeamIds.flatMap(tid => teamBoxScore(league, gameId, tid).lines);
-    const best = pool.filter(l => l.playerId && perfRating(l) > 0)
-      .sort((a, b) => perfRating(b) - perfRating(a))[0];
-    if (best && best.playerId === playerId) {
+  const best = playerOfTheGame(league, game);
+  if (best?.teamId === teamId) {
+    if (best.l.playerId === playerId) {
       opts.push({ key: 'potg', label: 'Player of the Game', build: () => ({
         kicker: 'Player of the Game', badge: '🏅', accent: colors.brandTeal, mvp: true,
         ...base, stats: heroLine(),

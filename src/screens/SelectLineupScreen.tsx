@@ -5,10 +5,13 @@ import { useStore, useLeague } from '../store/StoreProvider';
 import { colors, space, radius, LINEUP_SIZE } from '../theme';
 import { ScreenProps } from '../navigation';
 import { Team, Player } from '../types';
+import { canStartFreeformGame, startConnectGame, recordConnectDefaultGame } from '../sync/connectSchedule';
+import { gameScore } from '../lib/stats';
+import DefaultResultModal from '../components/DefaultResultModal';
 
 export default function SelectLineupScreen({ route, navigation }: ScreenProps<'SelectLineup'>) {
   const { leagueId, gameId, pending } = route.params;
-  const { dispatch } = useStore();
+  const { dispatch, loadLeagueDetail } = useStore();
   const league = useLeague(leagueId);
   const game = league?.games.find(g => g.id === gameId);
   // Either the game row already exists (the drop-in flow creates it with its
@@ -21,6 +24,9 @@ export default function SelectLineupScreen({ route, navigation }: ScreenProps<'S
 
   // ALL hooks run unconditionally, before any early return (React rules).
   const [waited, setWaited] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState('');
+  const [defaultOpen, setDefaultOpen] = useState(false);
   // Lazy initial state seeds the first five synchronously on first render when
   // teams are already present (the common league-flow case), so the defaults
   // are correct immediately without waiting for an effect tick.
@@ -103,9 +109,36 @@ export default function SelectLineupScreen({ route, navigation }: ScreenProps<'S
     needPicking.length ? `pick a starter for ${needPicking.join(' and ')}` : '',
   ].filter(Boolean).join(', and ');
 
-  const start = () => {
+  const start = async () => {
+    if (starting) return;
     const homeIds = homeTeam.teamOnly ? [] : home;
     const awayIds = awayTeam.teamOnly ? [] : away;
+    if (pending?.connect) {
+      setStarting(true);
+      setStartError('');
+      try {
+        // The bridge rechecks Connect's published fixture and team mapping.
+        // The RPC then creates one deterministic mobile game across devices.
+        const started = await startConnectGame(leagueId, pending.connect.eventId,
+          pending.connect.gameId, homeIds, awayIds);
+        const loaded = await loadLeagueDetail(leagueId);
+        if (!loaded) throw new Error('Game started, but could not load it. Try again to reopen the same game.');
+        if (started.status === 'final') navigation.replace('BoxScore', { leagueId, gameId: started.id });
+        else navigation.replace('LiveGame', { leagueId, gameId: started.id, spectator: false });
+      } catch (e) {
+        setStartError((e as Error).message || 'Could not start this game. Refresh the schedule.');
+      } finally {
+        setStarting(false);
+      }
+      return;
+    }
+    if (!game && league.kind === 'league') {
+      setStartError('');
+      if (!canStartFreeformGame(league)) {
+        setStartError('This league has a published iTala Connect schedule. Go back and start its scheduled game.');
+        return;
+      }
+    }
     if (game) {
       // One combined write so a realtime echo can't land between two separate
       // dispatches and clear the away side (the "away lineup not set" bug).
@@ -122,6 +155,46 @@ export default function SelectLineupScreen({ route, navigation }: ScreenProps<'S
       });
     }
     navigation.replace('LiveGame', { leagueId, gameId, spectator: false });
+  };
+
+  const recordDefault = async (winnerTeamId: string, score: number) => {
+    if (starting || !league || league.kind === 'recreational') return;
+    if (game && (game.status !== 'live' || gameScore(league, game).home !== 0 || gameScore(league, game).away !== 0)) {
+      setStartError('This game is no longer 0–0. Review it before recording a default.');
+      setDefaultOpen(false);
+      return;
+    }
+    setStarting(true);
+    setStartError('');
+    try {
+      if (pending?.connect) {
+        const saved = await recordConnectDefaultGame(leagueId, pending.connect.eventId,
+          pending.connect.gameId, winnerTeamId, score);
+        const loaded = await loadLeagueDetail(leagueId);
+        if (!loaded) throw new Error('Default saved, but could not load it. Refresh the schedule to reopen it.');
+        setDefaultOpen(false);
+        navigation.replace('FinalScore', { leagueId, gameId: saved.id });
+        return;
+      }
+      if (!game && !canStartFreeformGame(league)) {
+        throw new Error('This league has a published iTala Connect schedule. Choose a game on the Schedule tab.');
+      }
+      if (game) {
+        dispatch({ t: 'SET_GAME_STATUS', leagueId, gameId, status: 'final',
+          defaultResult: { winnerTeamId, score } });
+      } else {
+        dispatch({ t: 'CREATE_GAME', id: gameId, leagueId, homeTeamId: homeTeam.id,
+          awayTeamId: awayTeam.id, location: pending?.location,
+          defaultResult: { winnerTeamId, score } });
+      }
+      setDefaultOpen(false);
+      navigation.replace('FinalScore', { leagueId, gameId });
+    } catch (e) {
+      setStartError((e as Error).message || 'Could not save this default result. Try again.');
+      setDefaultOpen(false);
+    } finally {
+      setStarting(false);
+    }
   };
 
   return (
@@ -146,8 +219,19 @@ export default function SelectLineupScreen({ route, navigation }: ScreenProps<'S
             To start, {blockingHint}.
           </Txt>
         ) : null}
-        <Button title="Tip off  ▶" onPress={start} disabled={!ready} />
+        {startError ? <Txt k="body" color={colors.red} style={{ marginBottom: 8, textAlign: 'center', fontSize: 13 }}>
+          {startError}
+        </Txt> : null}
+        <Button title={starting ? 'Starting…' : 'Tip off  ▶'} onPress={() => void start()} disabled={!ready || starting} />
+        {league.kind !== 'recreational' && (!game || (game.status === 'live' &&
+          gameScore(league, game).home === 0 && gameScore(league, game).away === 0)) && (
+          <Button title="Default/Forfeit" kind="ghost" onPress={() => setDefaultOpen(true)}
+            disabled={starting} style={{ marginTop: space(2) }} />
+        )}
       </View>
+      {defaultOpen && <DefaultResultModal home={homeTeam} away={awayTeam}
+        busy={starting} onCancel={() => setDefaultOpen(false)}
+        onConfirm={(winnerTeamId, score) => void recordDefault(winnerTeamId, score)} />}
     </Screen>
   );
 }

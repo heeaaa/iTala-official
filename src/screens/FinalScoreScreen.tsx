@@ -4,7 +4,7 @@ import { Screen, Txt, Button, TeamBadge, PromoStrip } from '../components/ui';
 import { useLeague } from '../store/StoreProvider';
 import { colors, space, radius, font } from '../theme';
 import { ScreenProps } from '../navigation';
-import { gameScore, teamBoxScore, perfRating, outcomeOf } from '../lib/stats';
+import { gameScore, playerOfTheGame, outcomeOf } from '../lib/stats';
 import { usePromos, onPromoTap } from '../lib/usePromos';
 
 // The emotional payoff at the buzzer. A brief, celebratory FINAL card —
@@ -57,15 +57,8 @@ export default function FinalScoreScreen({ route, navigation }: ScreenProps<'Fin
   // Player of the Game: best composite line on the winning team, or across both
   // teams when the game is drawn.
   const potg = (() => {
-    // On a tie there is no winning team, so both are eligible. Going through
-    // `winner` here would quietly restrict Player of the Game to the home side,
-    // since `winner` falls back to home when the scores are level.
-    const teamIds = tie ? [game.homeTeamId, game.awayTeamId] : [winner?.id ?? ''];
-    const pool = teamIds
-      .flatMap(tid => teamBoxScore(league, gameId, tid).lines)
-      .filter(l => l.playerId && perfRating(l) > 0);
-    if (pool.length === 0) return null;
-    const best = pool.sort((a, b) => perfRating(b) - perfRating(a))[0];
+    const best = playerOfTheGame(league, game)?.l;
+    if (!best) return null;
     const p = league.players.find(x => x.id === best.playerId);
     return p ? { name: p.name, line: best } : null;
   })();
@@ -74,7 +67,9 @@ export default function FinalScoreScreen({ route, navigation }: ScreenProps<'Fin
     <Screen>
       <Animated.View style={{ flex: 1, opacity: fade, justifyContent: 'center', paddingHorizontal: space(5) }}>
         <Animated.View style={{ transform: [{ scale: pop }], alignItems: 'center' }}>
-          <Txt k="label" color={colors.brandLime} style={{ letterSpacing: 3, fontSize: 13 }}>FINAL</Txt>
+          <Txt k="label" color={colors.brandLime} style={{ letterSpacing: 3, fontSize: 13 }}>
+            {game.defaultWinnerTeamId ? 'FINAL · DEFAULT' : 'FINAL'}
+          </Txt>
 
           {/* Score line */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: space(4) }}>
@@ -93,9 +88,15 @@ export default function FinalScoreScreen({ route, navigation }: ScreenProps<'Fin
 
           {/* Winner line */}
           {!tie && winner ? (
-            <Txt k="h2" style={{ marginTop: space(4), textAlign: 'center' }}>
-              🏆 {winner.name} win{winnerScore - loserScore > 0 ? ` by ${winnerScore - loserScore}` : ''}
-            </Txt>
+            <View style={{ marginTop: space(4), alignItems: 'center' }}>
+              <Txt k="h2" style={{ textAlign: 'center' }}>
+                🏆 {winner.name} win{winnerScore - loserScore > 0 ? ` by ${winnerScore - loserScore}` : ''}
+              </Txt>
+              {game.defaultWinnerTeamId && <Txt k="body" color={colors.muted}
+                style={{ fontSize: 13, marginTop: 4, textAlign: 'center' }}>
+                Default result. Points count for standings only; no player receives them.
+              </Txt>}
+            </View>
           ) : (
             // Not "It's a tie!" - basketball has no draws, and the standings do
             // not record one. A game finished level has no result, so say that
