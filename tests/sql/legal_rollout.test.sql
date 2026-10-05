@@ -56,7 +56,7 @@ select legal_rollout_assert(true, 'before promotion the staged bundle is refused
 delete from public.legal_acceptances where user_id = auth.uid();
 update auth_state set uid = '11111111-1111-1111-1111-111111111111';
 
-\i supabase/release/promote_legal_2026_10_02.sql
+\i supabase/migrations/20261005000100_promote_legal_2026_10_02.sql
 
 select legal_rollout_assert(
   (select version = '2026-10-02' from public.legal_versions where is_current),
@@ -79,7 +79,7 @@ select legal_rollout_assert(true, 'after promotion the earlier bundle is refused
 
 -- Reapplying either operation must not reverse the current version.
 \i supabase/migrations/20261003000100_stage_legal_connect_privacy.sql
-\i supabase/release/promote_legal_2026_10_02.sql
+\i supabase/migrations/20261005000100_promote_legal_2026_10_02.sql
 select legal_rollout_assert(
   (select count(*) = 1 from public.legal_versions where is_current)
   and (select version = '2026-10-02' from public.legal_versions where is_current),
