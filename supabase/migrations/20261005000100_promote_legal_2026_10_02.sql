@@ -1,9 +1,7 @@
--- Promotion template. Move this SQL into a NEW numbered file under
--- supabase/migrations only once the matching app build is available, and push it
--- straight after publishing the revised canonical policy: older builds keep
--- recording 2026-09-07 until it runs. Push that new migration to the MOBILE
--- Supabase project, not Connect.
--- This file is outside migrations so an ordinary db push cannot activate it early.
+-- Promote the staged 2026-10-02 legal bundle in the MOBILE Supabase project, not Connect.
+-- Push it only once 20261003000100_stage_legal_connect_privacy.sql is applied and
+-- verified (docs/LEGAL_ACKNOWLEDGEMENT.md). Until it runs, the server keeps requiring
+-- 2026-09-07; afterwards, builds that only know 2026-09-07 ask for an app update.
 -- One DO statement makes the switch atomic even if the CLI does not wrap files.
 
 do $$

@@ -163,15 +163,20 @@ release by accident.
    `/privacy/`, `/terms/` and `/content-policy/` pages and the updated `/support/`
    page on `main` and publish the Connect footer link. Verify the legal pages'
    effective dates before publishing, and verify both live sites from a
-   signed-out browser. Then, without delay, create a **new, later-numbered
-   migration** in `supabase/migrations/` containing the reviewed SQL from
-   `supabase/release/promote_legal_2026_10_02.sql`. Verify the mobile project
-   link and pending migrations again, then push it. That SQL checks both rows
-   and switches `is_current` atomically; a missing staged row raises an error
-   instead of leaving no current version. Do not run this template against the
-   Connect database or place it in `migrations/` before this step. Until it is
-   pushed, older builds still record September receipts while the canonical page
-   shows the October text, so keep that gap to minutes.
+   signed-out browser. Then, without delay, push the promotion migration
+   `supabase/migrations/20261005000100_promote_legal_2026_10_02.sql`. Verify the
+   mobile project link and pending migrations again first. That SQL checks both
+   rows and switches `is_current` atomically; a missing staged row raises an error
+   instead of leaving no current version. Do not run it against the Connect
+   database. Because it is in `migrations/`, any `db push` from a checkout that
+   contains it also promotes, so push the staged migration from a checkout
+   without it. Until it is pushed, older builds still record September receipts
+   while the canonical page shows the October text, so keep that gap short.
+
+   What actually happened: the revised canonical pages reached production with
+   the `rel/build-three` merge to `main` on 05/10/2026, before the server switch,
+   while iTala was not yet in the App Store. The promotion migration was added the
+   same day so the switch can follow promptly. It takes effect only when pushed.
 5. Repeat the two queries above. Exactly one row must be current, and it must be
    `2026-10-02`; old acceptance counts must remain. `select public.legal_status();`
    must report `2026-10-02`. Test a previously accepted account on the new build:
