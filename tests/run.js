@@ -181,6 +181,8 @@ try { run('node', [path.join('tests', 'scheduleCache.test.js')], { env }); }
 catch { failed++; }
 try { run('node', [path.join('tests', 'connectLinkState.test.js')], { env }); }
 catch { failed++; }
+try { run('node', [path.join('tests', 'connectReports.test.js')], { env }); }
+catch { failed++; }
 try { run('node', [path.join('tests', 'connectStartUi.test.js')], { env }); }
 catch { failed++; }
 if (process.env.ITALA_PGLITE_MODULE) {
