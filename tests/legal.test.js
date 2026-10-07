@@ -62,12 +62,18 @@ function setup(options = {}) {
   };
   const provider = load('src/store/AdminProvider.tsx', {
     react: HookRuntime, 'react-native': RN,
-    'expo-web-browser': { maybeCompleteAuthSession() {}, openAuthSessionAsync: async () => options.cancelProvider
-      ? { type: 'cancel' } : { type: 'success', url: 'itala://auth-callback?code=code' } },
+    'expo-web-browser': { maybeCompleteAuthSession() {}, openAuthSessionAsync: async () => {
+      // providerGate holds the browser or Apple sheet open until the test releases it.
+      if (options.providerGate) await options.providerGate;
+      if (options.providerFails) throw new Error('provider exploded');
+      return options.cancelProvider ? { type: 'cancel' } : { type: 'success', url: 'itala://auth-callback?code=code' };
+    } },
     'expo-linking': { createURL: () => 'itala://auth-callback', parse: () => ({ queryParams: { code: 'code' } }) },
     'expo-apple-authentication': { isAvailableAsync: async () => true, AppleAuthenticationScope: { FULL_NAME: 'full-name', EMAIL: 'email' },
       signInAsync: async args => {
         calls.push(['apple', args]);
+        if (options.providerGate) await options.providerGate;
+        if (options.providerFails) throw new Error('provider exploded');
         if (options.cancelProvider) throw Object.assign(new Error('cancelled'), { code: 'ERR_REQUEST_CANCELED' });
         return { identityToken: 'test-token' };
       } },
@@ -143,7 +149,44 @@ for (const provider of ['Google', 'Apple']) {
     assert.equal(await p.ctx[`signInWith${provider}`](), null); await p.settle();
     assert.equal(p.dialog.prompt, null); assert.equal(p.ctx.role, 'guest');
     assert.equal(p.ctx.authBusy, false); assert.equal(p.count('legal_status'), 0);
+    assert.equal(p.ctx.signingInWith, null);
     assert.equal(p.count('accept_legal'), 0); p.root.unmount();
+  });
+  // The sign-in buttons label only this provider as "Signing in…". authBusy is
+  // shared by every auth flow, so it cannot say which button was tapped.
+  test(`${provider}: names itself as signing in for the whole round trip, and only that long`, async () => {
+    const own = provider.toLowerCase(), other = provider === 'Apple' ? 'Google' : 'Apple';
+    const gate = deferred();
+    const p = setup({ ios: true, providerGate: gate.promise }); await p.settle();
+    assert.equal(p.ctx.signingInWith, null, 'nothing tapped yet');
+    const result = p.ctx[`signInWith${provider}`](); await p.settle();
+    assert.equal(p.ctx.authBusy, true); assert.equal(p.ctx.signingInWith, own, `${provider} sheet open`);
+    assert.equal(await p.ctx[`signInWith${other}`](), null, `a tap on ${other} is ignored`); await p.settle();
+    assert.equal(p.ctx.signingInWith, own, `${other} does not take the label`);
+    assert.equal(p.count(other.toLowerCase()), 0);
+    gate.resolve(); await p.settle();
+    assert.equal(p.ctx.signingInWith, own, 'still signing in while the legal review is open');
+    await p.submit(); await p.dismiss();
+    assert.equal(await result, 'user'); await p.settle();
+    assert.equal(p.ctx.authBusy, false); assert.equal(p.ctx.signingInWith, null, 'cleared on success');
+    p.root.unmount();
+  });
+  test(`${provider}: declining the review clears the provider`, async () => {
+    const p = setup({ ios: true }); await p.settle(); const result = p.ctx[`signInWith${provider}`](); await p.settle();
+    assert.equal(p.ctx.signingInWith, provider.toLowerCase());
+    // iOS resolves only once the native modal has finished dismissing, and the
+    // button keeps saying so until then.
+    p.dialog.onCancel(); await p.settle();
+    assert.equal(p.ctx.signingInWith, provider.toLowerCase(), 'still in flight while the modal dismisses');
+    await p.dismiss(); assert.equal(await result, null);
+    assert.equal(p.ctx.authBusy, false); assert.equal(p.ctx.signingInWith, null); p.root.unmount();
+  });
+  test(`${provider}: a provider failure clears the provider and says why`, async () => {
+    const p = setup({ ios: true, providerFails: true }); await p.settle();
+    assert.equal(await p.ctx[`signInWith${provider}`](), null); await p.settle();
+    assert.equal(p.ctx.authBusy, false); assert.equal(p.ctx.signingInWith, null);
+    assert.ok(p.ctx.errorFor('signin'), 'the failure is reported, not swallowed');
+    assert.equal(p.ctx.role, 'guest'); p.root.unmount();
   });
   test(`${provider}: authenticate before review; declining signs out and duplicate calls are ignored`, async () => {
     const p = setup(); await p.settle(); const result = p.ctx[`signInWith${provider}`](); await p.settle();
@@ -181,6 +224,12 @@ for (const provider of ['Google', 'Apple']) {
     assert.equal(receiptKeys(p.disk).length, 1); p.root.unmount();
   });
 }
+test('restoring a session at launch is busy without naming a provider', async () => {
+  const p = setup({ restored: true }); p.state.status = p.receipt;
+  assert.equal(p.ctx.authBusy, true, 'restore holds the sign-in buttons');
+  assert.equal(p.ctx.signingInWith, null, 'but nobody tapped one, so neither says Signing in');
+  await p.settle(); assert.equal(p.ctx.authBusy, false); assert.equal(p.ctx.signingInWith, null); p.root.unmount();
+});
 test('current server receipt restores without prompting or writing a duplicate receipt', async () => {
   const p = setup({ restored: true }); p.state.status = p.receipt; await p.settle();
   assert.equal(p.ctx.role, 'user'); assert.equal(p.dialog.prompt, null); assert.equal(p.count('accept_legal'), 0); p.root.unmount();

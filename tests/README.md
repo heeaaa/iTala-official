@@ -17,6 +17,18 @@ handoff require device evidence. `node tests/sql/run.js legal` exercises the
 shipped legal schema, RPC permissions, own-only receipts, timestamps, reruns and
 version history against PostgreSQL; a skip is not a pass.
 
+`node tests/signInProgress.test.js` renders the real Apple and Google buttons,
+the sign-in modal, the profile sheet and all five screens that offer sign-in
+(box-score and player-card share prompts, Home profile sheet, Settings and
+drop-in gates). With Apple in flight, Google in flight, a session restoring at
+launch and idle, it checks that only the provider that was tapped says
+"Signing in…" and that both buttons are held while either runs. It also checks
+that finishing a sign-in never shows the Home sheet's "Signing out…" or Settings'
+"Deleting…", while a real sign-out and deletion still do. The legal suite checks
+that AdminProvider reports that provider (`signingInWith`) for the whole round
+trip, including decline and failure. How the label sits over Apple's native
+control needs a device (R54).
+
 The supported synced workflow is online league/roster/game setup followed by live
 scoring that can continue through a connection loss. Tests for offline game-row writes
 exercise recovery primitives; they do not promise offline league, team, player or

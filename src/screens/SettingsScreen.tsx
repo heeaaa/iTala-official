@@ -9,8 +9,11 @@ import { ScreenProps } from '../navigation';
 
 export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) {
   const { synced, sync, refresh, prefs, setHaptics, setNotifs } = useStore();
-  const { role, isAdmin, user, userId, signInWithGoogle, appleAvailable, signInWithApple, deleteAccount, signOut, authBusy, errorFor } = useAdmin();
+  const { role, isAdmin, user, userId, signInWithGoogle, appleAvailable, signInWithApple, deleteAccount, signOut, authBusy, signingInWith, errorFor } = useAdmin();
   const [busy, setBusy] = useState(false);
+  // Separate from `busy`, which labels Delete account "Deleting…": the account
+  // appears before a sign-in finishes, so a shared flag read "Deleting…" then.
+  const [signInBusy, setSignInBusy] = useState(false);
   // Manual sync retry. `refresh` drains the outbox before it reads, so this is
   // "send what is waiting, then fetch", which is what somebody pressing a
   // button called Try now means by it.
@@ -23,9 +26,9 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
   // Guests are prompted to sign in — Settings requires an account.
   if (role === 'guest') {
     const onSignIn = async (signIn: () => Promise<unknown>) => {
-      setBusy(true);
+      setSignInBusy(true);
       await signIn();
-      setBusy(false);
+      setSignInBusy(false);
       // On success role changes and this screen re-renders into the full view.
     };
     return (
@@ -35,8 +38,8 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
           <Txt k="body" color={colors.muted} style={{ textAlign: 'center', marginBottom: space(6) }}>
             Settings are tied to your account. Sign in to continue.
           </Txt>
-          {appleAvailable ? <AppleButton onPress={() => { void onSignIn(signInWithApple); }} busy={busy || authBusy} /> : null}
-          <GoogleButton onPress={() => { void onSignIn(signInWithGoogle); }} busy={busy || authBusy} style={{ marginTop: appleAvailable ? 10 : 0 }} />
+          {appleAvailable ? <AppleButton onPress={() => { void onSignIn(signInWithApple); }} busy={signInBusy || authBusy} signingIn={signingInWith === 'apple'} /> : null}
+          <GoogleButton onPress={() => { void onSignIn(signInWithGoogle); }} busy={signInBusy || authBusy} signingIn={signingInWith === 'google'} style={{ marginTop: appleAvailable ? 10 : 0 }} />
           {errorFor('signin') ? <Txt k="body" color={colors.red} style={{ marginTop: 10, fontSize: 13 }}>{errorFor('signin')}</Txt> : null}
           <Button title="Cancel" kind="ghost" onPress={() => navigation.goBack()}
             style={{ alignSelf: 'stretch', marginTop: 10, minHeight: AUTH_BUTTON_HEIGHT, paddingVertical: 10 }} />

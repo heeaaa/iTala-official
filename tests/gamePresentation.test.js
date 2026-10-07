@@ -179,8 +179,12 @@ check('Apple and Google sign-in controls share a responsive frame', () => {
   assert.equal(googleFrame.width, '100%');
   assert.equal(appleFrame.width, '100%');
   assert.equal(googleFrame.height, appleFrame.height);
-  assert.equal(apple.element.props.children.type, 'AppleNative');
-  assert.equal(apple.element.props.children.props.style.width, '100%');
+  // Idle, the frame draws Apple's control and nothing over it. (Children is a
+  // list because a "Signing in…" label is laid over it while Apple runs.)
+  const drawn = [apple.element.props.children].flat().filter(Boolean);
+  assert.equal(drawn.length, 1, "nothing is drawn over Apple's control while idle");
+  assert.equal(drawn[0].type, 'AppleNative');
+  assert.equal(drawn[0].props.style.width, '100%');
   google.unmount(); apple.unmount();
 });
 // Apple's native control cannot be given a font: its title is 43% of the

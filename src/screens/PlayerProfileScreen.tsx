@@ -14,7 +14,7 @@ import { dateLabel } from '../lib/format';
 export default function PlayerProfileScreen({ route, navigation }: ScreenProps<'PlayerProfile'>) {
   const { leagueId, playerId } = route.params;
   const league = useLeague(leagueId);
-  const { role, signInWithGoogle, appleAvailable, signInWithApple, authBusy, errorFor } = useAdmin();
+  const { role, signInWithGoogle, appleAvailable, signInWithApple, authBusy, signingInWith, errorFor } = useAdmin();
   const [askSignIn, setAskSignIn] = useState(false);
   const cardRef = useRef<View>(null);
 
@@ -380,6 +380,7 @@ export default function PlayerProfileScreen({ route, navigation }: ScreenProps<'
         message="Sharing player stat cards requires a Google/Apple account."
         error={errorFor('signin') ?? undefined}
         busy={authBusy}
+        signingInWith={signingInWith}
         onGoogle={() => { void onSignInThenShare(signInWithGoogle); }}
         onApple={appleAvailable ? () => { void onSignInThenShare(signInWithApple); } : undefined}
         onCancel={() => setAskSignIn(false)}

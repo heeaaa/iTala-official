@@ -16,7 +16,7 @@ import { PlayLogRow } from '../components/PlayLog';
 export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxScore'>) {
   const { leagueId, gameId } = route.params;
   const { dispatch } = useStore();
-  const { role, canScore, signInWithGoogle, appleAvailable, signInWithApple, authBusy, errorFor, canScoreGame } = useAdmin();
+  const { role, canScore, signInWithGoogle, appleAvailable, signInWithApple, authBusy, signingInWith, errorFor, canScoreGame } = useAdmin();
   const league = useLeague(leagueId);
   const game = league?.games.find(g => g.id === gameId);
   const [side, setSide] = useState(0);
@@ -394,6 +394,7 @@ export default function BoxScoreScreen({ route, navigation }: ScreenProps<'BoxSc
         message="Sharing box-score cards requires a Google/Apple account."
         error={errorFor('signin') ?? undefined}
         busy={authBusy}
+        signingInWith={signingInWith}
         onGoogle={() => { void onSignInThenShare(signInWithGoogle); }}
         onApple={appleAvailable ? () => { void onSignInThenShare(signInWithApple); } : undefined}
         onCancel={() => setAskSignIn(false)}

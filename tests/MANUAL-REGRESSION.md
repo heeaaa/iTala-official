@@ -299,6 +299,18 @@ evidence of native presentation):
       At normal text size on iPad, both choices are visible together; larger
       text remains reachable by scrolling. Tap Apple and complete the native
       sign-in sheet. The sharing prompts say "Google/Apple account".
+      At each of the five places above, tap Apple: once the Apple sheet closes,
+      the **Apple** button reads "Signing in…" in the same white fill, corners
+      and type, and Google still reads "Continue with Google" (both dimmed).
+      Tap Google: only Google reads "Signing in…". With VoiceOver on, the Apple
+      button is announced as "Signing in with Apple", not "Continue with Apple".
+      Cold start as a guest and open the Home profile sheet straight away:
+      while the session loads both buttons are dimmed and neither says
+      "Signing in…". Signing in from the Home profile sheet never shows
+      "Signing out…" before the sheet closes, and signing in from Settings never
+      shows "Deleting…" on Delete account. After the Apple sheet closes with
+      VoiceOver on, note where focus lands; the native control is hidden while
+      the "Signing in…" label covers it.
 - [ ] **R57** **Sign in with Apple: deletion revokes the authorization.**
       Device build only (Expo Go signs tokens for `host.exp.Exponent`, which
       these secrets cannot revoke), real Apple ID, and the `delete-account`
