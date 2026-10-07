@@ -61,41 +61,84 @@ export function nowInZone(timezone: string, date = new Date()): string {
   }
 }
 
+// Every action is safe to send more than once: reads are reads, refreshLinks
+// applies a revision-guarded snapshot, and start_connect_game and
+// record_connect_default_game return the existing cg_ game instead of creating
+// another (supabase/schema.sql). Content reports use the same 500 ms, 1 s waits.
+const CONNECT_ATTEMPTS = 3;
+const CONNECT_DEADLINE_MS = 15000;
+
+/** What the person was doing, for the sentence they read if no answer arrives. */
+function failureCopy(action: unknown): { what: string; timedOut: string } {
+  if (action === 'startGame') return { what: 'Could not start this game.', timedOut: 'Starting this game timed out.' };
+  if (action === 'recordDefault') {
+    return { what: 'Could not save this default result.', timedOut: 'Saving this default result timed out.' };
+  }
+  return { what: 'Could not load the Connect schedule.', timedOut: 'Schedule request timed out.' };
+}
+
+type InvokeFailure =
+  | { kind: 'answered'; message: string; status?: number }
+  | { kind: 'unreached' | 'unavailable' | 'refused'; status?: number };
+
+/**
+ * Who answered. connect-schedule reports each of its own failures as JSON
+ * `{ error }`, and that answer is final. Anything else never reached it:
+ * supabase-js reports a request that got no response as FunctionsFetchError,
+ * and Supabase's Edge Runtime can answer in the function's place - it sheds
+ * requests with `503 {"code":"SUPABASE_EDGE_RUNTIME_SERVICE_DEGRADED"}` before
+ * any function code runs. Both are worth sending again. Treating them as final
+ * showed "check your connection" to people who had a working connection.
+ */
+async function readInvokeFailure(error: unknown): Promise<InvokeFailure> {
+  const { name, context } = (error ?? {}) as { name?: unknown; context?: unknown };
+  if (name === 'FunctionsFetchError') return { kind: 'unreached' };
+  const response = context as Partial<Response> | undefined;
+  const status = typeof response?.status === 'number' ? response.status : undefined;
+  if (name === 'FunctionsRelayError') return { kind: 'unavailable', status };
+  if (typeof response?.json === 'function') {
+    try {
+      const parsed = await response.json();
+      if (typeof parsed?.error === 'string') return { kind: 'answered', message: parsed.error, status };
+    } catch { /* Not the handler's JSON; classified by status below. */ }
+  }
+  return status !== undefined && status >= 500 ? { kind: 'unavailable', status } : { kind: 'refused', status };
+}
+
 async function call<T>(body: Record<string, unknown>): Promise<T> {
   if (!SYNC_ENABLED) throw new Error('Connect schedule needs the synced app configuration.');
   const sb = getSupabase();
   if (!sb) throw new Error('Sign in to see the Connect schedule.');
+  const copy = failureCopy(body.action);
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let data: unknown;
-  let error: unknown;
+  // One deadline bounds every send, every error body read and every wait
+  // between attempts, so retrying never makes anyone wait longer than a single
+  // request could, and nothing is sent after they were told it timed out.
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`${copy.timedOut} Check your connection and try again.`));
+    }, CONNECT_DEADLINE_MS);
+  });
+  function bounded<V>(step: PromiseLike<V>): Promise<V> { return Promise.race([step, deadline]); }
   try {
-    const deadline = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        controller.abort();
-        reject(new Error('Schedule request timed out. Check your connection and try again.'));
-      }, 15000);
-    });
-    ({ data, error } = await Promise.race([
-      sb.functions.invoke('connect-schedule', { body, signal: controller.signal }), deadline,
-    ]));
+    for (let attempt = 1; ; attempt++) {
+      const { data, error } = await bounded(sb.functions.invoke('connect-schedule', { body, signal: controller.signal }));
+      if (!error) return data as T;
+      const failure = await bounded(readInvokeFailure(error));
+      if (failure.kind === 'answered') throw Object.assign(new Error(failure.message), { status: failure.status });
+      if (failure.kind === 'refused' || attempt >= CONNECT_ATTEMPTS) {
+        const advice = failure.kind === 'unavailable'
+          ? 'The schedule service is busy. Try again in a moment.'
+          : 'Check your connection and try again.';
+        throw Object.assign(new Error(`${copy.what} ${advice}`), { status: failure.status });
+      }
+      await bounded(new Promise(resolve => setTimeout(resolve, 500 * 2 ** (attempt - 1))));
+    }
   } finally {
     if (timer) clearTimeout(timer);
   }
-  if (error) {
-    let message = 'Could not load the Connect schedule. Check your connection and try again.';
-    let status: number | undefined;
-    try {
-      const response = (error as { context?: Response }).context;
-      status = response?.status;
-      if (response?.json) {
-        const parsed = await response.json();
-        if (typeof parsed?.error === 'string') message = parsed.error;
-      }
-    } catch { /* Retain the safe generic error. */ }
-    throw Object.assign(new Error(message), { status });
-  }
-  return data as T;
 }
 
 export async function listConnectEvents(leagueId: string): Promise<ConnectEventRef[]> {
@@ -176,9 +219,12 @@ export async function startConnectGame(
   leagueId: string, eventId: string, gameId: string,
   homeOnCourt: string[], awayOnCourt: string[],
 ): Promise<{ id: string; status: 'live' | 'final' }> {
-  const result = await call<{ game: { id: string; status: 'live' | 'final' } }>({
+  const result = await call<{ game?: { id: string; status: 'live' | 'final' } }>({
     action: 'startGame', leagueId, eventId, gameId, homeOnCourt, awayOnCourt,
   });
+  // A 200 that is not the bridge's answer (a captive portal page, say) must not
+  // surface as "Cannot read property 'status' of undefined" under Tip off.
+  if (typeof result?.game?.id !== 'string') throw new Error(`${failureCopy('startGame').what} Check your connection and try again.`);
   return result.game;
 }
 
@@ -186,8 +232,11 @@ export async function startConnectGame(
 export async function recordConnectDefaultGame(
   leagueId: string, eventId: string, gameId: string, winnerTeamId: string, score: number,
 ): Promise<{ id: string; status: 'final' }> {
-  const result = await call<{ game: { id: string; status: 'final' } }>({
+  const result = await call<{ game?: { id: string; status: 'final' } }>({
     action: 'recordDefault', leagueId, eventId, gameId, winnerTeamId, score,
   });
+  if (typeof result?.game?.id !== 'string') {
+    throw new Error(`${failureCopy('recordDefault').what} Check your connection and try again.`);
+  }
   return result.game;
 }

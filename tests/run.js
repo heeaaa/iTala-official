@@ -185,6 +185,10 @@ try { run('node', [path.join('tests', 'connectReports.test.js')], { env }); }
 catch { failed++; }
 try { run('node', [path.join('tests', 'connectStartUi.test.js')], { env }); }
 catch { failed++; }
+// The bridge transport through the real supabase-js client: Edge Runtime 503s
+// and unanswered requests are retried within one deadline; handler answers are not.
+try { run('node', [path.join('tests', 'connectInvoke.test.js')], { env }); }
+catch { failed++; }
 if (process.env.ITALA_PGLITE_MODULE) {
   try { run('node', [path.join('tests', 'connectSchedule.database.test.js')], { env }); }
   catch { failed++; }

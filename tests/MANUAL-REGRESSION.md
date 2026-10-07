@@ -77,6 +77,16 @@ Highest probability of defects. Each of these was a real bug at some point.
       published schedule immediately. Check phone/iPad portrait, landscape,
       Split View, and larger text: all text wraps, links remain easy to tap,
       and the tablet content stays in a centered column.
+- [ ] **UI7** Start a scheduled game from Schedule straight after a cold start,
+      and again after the app has been in the background for ten minutes or more.
+      Tip off opens the live tracker, and "Could not load the Connect schedule"
+      never appears under Tip off. If the schedule service is briefly busy, the
+      button stays on "Starting…" a second or two longer and the game still
+      opens. In aeroplane mode, Tip off ends within 15 seconds with "Could not
+      start this game. Check your connection and try again." and can be tapped
+      again; a later Tip off reopens the same game. Default/Forfeit on a
+      scheduled game behaves the same way. The automated half of this, including
+      the service's real 503 answer, is `tests/connectInvoke.test.js`.
 
 ### Drop-in games (most fragile area historically)
 
