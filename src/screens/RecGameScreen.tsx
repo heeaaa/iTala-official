@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, ScrollView, TextInput, Pressable, Alert } from 'react-native';
-import { Screen, Txt, Card, Button, Field, Toggle, GoogleButton, AppleButton } from '../components/ui';
+import { Screen, Txt, Card, Button, Field, Toggle, GoogleButton, AppleButton, AUTH_BUTTON_HEIGHT } from '../components/ui';
 import { reducer, useStore } from '../store/StoreProvider';
 import { clearRecSetup, loadRecSetup, readRecSetup, RecSetupDraft, saveRecSetup } from '../sync/recSetup';
 import { getSupabase } from '../sync/supabase';
@@ -211,7 +211,8 @@ function RecGameEditor({ navigation }: Pick<ScreenProps<'RecGame'>, 'navigation'
           {appleAvailable ? <AppleButton onPress={() => { void onSignIn(signInWithApple); }} busy={signInBusy || authBusy} /> : null}
           <GoogleButton onPress={() => { void onSignIn(signInWithGoogle); }} busy={signInBusy || authBusy} style={{ marginTop: appleAvailable ? 10 : 0 }} />
           {errorFor('signin') ? <Txt k="body" color={colors.red} style={{ marginTop: 10, fontSize: 13 }}>{errorFor('signin')}</Txt> : null}
-          <Button title="Cancel" kind="ghost" onPress={() => navigation.goBack()} style={{ alignSelf: 'stretch', marginTop: 10 }} />
+          <Button title="Cancel" kind="ghost" onPress={() => navigation.goBack()}
+            style={{ alignSelf: 'stretch', marginTop: 10, minHeight: AUTH_BUTTON_HEIGHT, paddingVertical: 10 }} />
         </View>
       </Screen>
     );

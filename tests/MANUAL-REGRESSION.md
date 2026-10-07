@@ -284,8 +284,13 @@ evidence of native presentation):
 - [ ] **R54** Sign in with Apple (device build only).
       Check the share-card prompt, profile sheet, Settings, and drop-in sign-in
       on a compact phone, iPhone 17, and iPad portrait/landscape. Apple and Google
-      buttons share the same width, height, light fill, and corner radius; labels
-      stay centered without clipping at larger text settings. The native white
+      buttons share the same 44 pt height, width, light fill, and corner radius,
+      and their labels are the same size: Apple sizes its native title from the
+      button height, and Google's label follows the same rule. Google shows its
+      multicolour G, about level with Apple's logo. "Continue as Guest" and
+      "Cancel" sit at the same height below them. Labels stay centered on one
+      line without clipping at larger text settings (Google's may grow a little;
+      Apple's native title does not). The native white
       Apple button shows Apple's logo and "Continue with Apple" above Google.
       At normal text size on iPad, both choices are visible together; larger
       text remains reachable by scrolling. Tap Apple and complete the native

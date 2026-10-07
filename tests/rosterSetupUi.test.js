@@ -80,6 +80,7 @@ const ui = load('src/components/ui.tsx', {
   '../theme': imports['../theme'],
   '../../assets/sponsor-bpbl-clothing-inverse.png': 1,
   '../../assets/sponsor-bpbl-clothing.png': 2,
+  '../../assets/google-g.png': 3,
 });
 for (const offset of [undefined, 96]) {
   const screen = Hooks.render(ui.Screen, { children: 'content', keyboardVerticalOffset: offset });

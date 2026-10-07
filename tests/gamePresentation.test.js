@@ -127,8 +127,12 @@ for (const right of [false, true]) check(`live long name constrained on ${right 
   assert.equal(root.element.props.style.minWidth, 0);
   root.unmount();
 });
-const { Segmented, GoogleButton, AppleButton } = load('src/components/ui.tsx', {
-  react: Hooks, 'react-native': rn, '../theme': theme,
+const GOOGLE_G = 3;
+const { Segmented, GoogleButton, AppleButton, SignInModal, ProfileSheet } = load('src/components/ui.tsx', {
+  react: Hooks, 'react-native': { ...rn, Image: 'Image', Animated: {
+    View: 'Animated.View', Value: class { interpolate() { return 0; } },
+    timing: () => ({ start(done) { done?.(); } }),
+  } }, '../theme': theme,
   'react-native-gesture-handler': {}, 'react-native-safe-area-context': {},
   'expo-linear-gradient': imports['expo-linear-gradient'],
   'expo-apple-authentication': {
@@ -137,6 +141,7 @@ const { Segmented, GoogleButton, AppleButton } = load('src/components/ui.tsx', {
     AppleAuthenticationButtonStyle: { WHITE: 'white' },
   },
   '../../assets/sponsor-bpbl-clothing-inverse.png': 1, '../../assets/sponsor-bpbl-clothing.png': 2,
+  '../../assets/google-g.png': GOOGLE_G,
 });
 check('two and five tab bars keep the selected fill inside its cell when labels wrap', () => {
   for (const options of [
@@ -177,5 +182,46 @@ check('Apple and Google sign-in controls share a responsive frame', () => {
   assert.equal(apple.element.props.children.type, 'AppleNative');
   assert.equal(apple.element.props.children.props.style.width, '100%');
   google.unmount(); apple.unmount();
+});
+// Apple's native control cannot be given a font: its title is 43% of the
+// button's height (Apple HIG). At 52 pt that was 22 pt beside Google's 19 pt,
+// which is the mismatch reported from the preview build.
+check('Google label is the size Apple gives its native title at the shared height', () => {
+  const google = Hooks.render(GoogleButton, { onPress() {} });
+  const frame = google.element.props.style[0];
+  const [logo, label] = google.element.props.children;
+  assert.ok(frame.height >= 44, 'iOS minimum touch target');
+  assert.equal(label.props.style.fontSize, Math.round(frame.height * 0.43),
+    "differs from Apple's title at this height");
+  assert.ok(frame.height + google.element.props.hitSlop.top + google.element.props.hitSlop.bottom >= 48,
+    'Android 48 dp touch target');
+  assert.equal(label.props.numberOfLines, 1);
+  assert.equal(label.props.adjustsFontSizeToFit, true, 'compact phones shrink rather than clip');
+  // Line height of the system font is about 1.2 em: the largest allowed text
+  // must still fit on one line inside the fixed frame.
+  assert.ok(label.props.style.fontSize * label.props.maxFontSizeMultiplier * 1.2 <= frame.height);
+  assert.equal(logo.type, 'Image');
+  assert.equal(logo.props.source, GOOGLE_G, "Google's standard multicolour mark, not a letter in the app font");
+  google.unmount();
+});
+check('secondary actions beside the sign-in buttons share their height and are buttons', () => {
+  const google = Hooks.render(GoogleButton, { onPress() {} });
+  const height = google.element.props.style[0].height;
+  google.unmount();
+  const modal = Hooks.render(SignInModal, { visible: true, onGoogle() {}, onApple() {}, onCancel() {} });
+  const sheet = Hooks.render(ProfileSheet, { visible: true, onClose() {}, user: null, role: 'guest',
+    onGoogle() {}, onApple() {}, onSignOut() {}, onSettings() {}, onAbout() {} });
+  for (const [root, label] of [[modal, 'Cancel'], [sheet, 'Continue as Guest']]) {
+    const action = nodes(root.element).find(n => n.type === 'TouchableOpacity'
+      && nodes(n.props.children).some(c => c.props?.children === label));
+    assert.ok(action, label);
+    assert.equal(action.props.style.minHeight, height, `${label} is not the sign-in buttons' height`);
+    assert.equal(action.props.style.justifyContent, 'center');
+    assert.equal(action.props.accessibilityRole, 'button');
+    const shown = nodes(root.element);
+    const appleAt = shown.findIndex(n => n.type === AppleButton), googleAt = shown.findIndex(n => n.type === GoogleButton);
+    assert.ok(appleAt >= 0 && appleAt < googleAt, 'Apple appears above Google on iOS');
+  }
+  modal.unmount(); sheet.unmount();
 });
 process.exitCode = failures ? 1 : 0;
