@@ -64,7 +64,9 @@ export function nowInZone(timezone: string, date = new Date()): string {
 // Every action is safe to send more than once: reads are reads, refreshLinks
 // applies a revision-guarded snapshot, and start_connect_game and
 // record_connect_default_game return the existing cg_ game instead of creating
-// another (supabase/schema.sql). Content reports use the same 500 ms, 1 s waits.
+// another (supabase/schema.sql). If Connect records the result between two
+// attempts, the bridge answers 409 before reaching them: final, and the game is
+// already saved. Content reports use the same 500 ms, 1 s waits.
 const CONNECT_ATTEMPTS = 3;
 const CONNECT_DEADLINE_MS = 15000;
 

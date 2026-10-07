@@ -428,9 +428,10 @@ export function Toggle({ label, description, value, onChange }:
 // All follow the design tokens; lime stays reserved for live/action signals.
 // ---------------------------------------------------------------------------
 
-// Google's own multicolour "G", cut unscaled from Google's iOS sign-in assets
-// (@1x/@2x/@3x). Google's branding rules require this mark in its standard
-// colours on white; a blue letter "G" in the app font is not that mark.
+// Google's own multicolour "G", cut without resampling from Google's iOS
+// sign-in assets (@1x/@2x/@3x, 20 pt art, drawn below at 16 pt). Google's
+// branding rules require this mark in its standard colours on white; a blue
+// letter "G" in the app font is not that mark.
 const GOOGLE_G = require('../../assets/google-g.png');
 
 // Apple's native control takes no font size: its title is 43% of the button's
@@ -438,17 +439,17 @@ const GOOGLE_G = require('../../assets/google-g.png');
 // was a 22 pt title beside Google's 19 pt, both outsizing the sheet's 15 pt
 // text. 44 pt gives Apple a 19 pt title, is the iOS minimum touch target, and is
 // the height of Google's own iOS button. Google's label follows the same rule,
-// so the pair cannot drift apart again if the height changes.
-export const AUTH_BUTTON_HEIGHT = 44;
-const AUTH_LABEL_SIZE = Math.round(AUTH_BUTTON_HEIGHT * 0.43);
-// Android asks for 48 dp touch targets; this reaches it without a taller button.
-const AUTH_HIT_SLOP = { top: 2, bottom: 2 };
+// so the pair cannot drift apart again if the height changes. Android never
+// shows the Apple button, so it takes Material's 48 dp touch target instead.
+const IOS_AUTH_BUTTON_HEIGHT = 44;
+export const AUTH_BUTTON_HEIGHT = Platform.OS === 'android' ? 48 : IOS_AUTH_BUTTON_HEIGHT;
+const AUTH_LABEL_SIZE = Math.round(IOS_AUTH_BUTTON_HEIGHT * 0.43);
 
 // The one Google CTA used everywhere (modal, sheet, sign-in screens).
 export function GoogleButton({ title = 'Continue with Google', onPress, busy, style }:
   { title?: string; onPress: () => void; busy?: boolean; style?: ViewStyle }) {
   return (
-    <TouchableOpacity activeOpacity={0.75} onPress={onPress} disabled={busy} hitSlop={AUTH_HIT_SLOP}
+    <TouchableOpacity activeOpacity={0.75} onPress={onPress} disabled={busy}
       accessibilityRole="button" accessibilityState={{ disabled: !!busy }}
       style={[{
         width: '100%', height: AUTH_BUTTON_HEIGHT, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
@@ -458,9 +459,10 @@ export function GoogleButton({ title = 'Continue with Google', onPress, busy, st
       {/* Sized to sit level with Apple's logo on the button above, rather than
           at Google's larger standalone size, so the two read as one pair. */}
       <Image source={GOOGLE_G} style={{ width: 16, height: 16 }} />
-      {/* Apple's title cannot grow with the system text size. This one may, but
-          only as far as one line still fits inside the fixed 44 pt frame. */}
-      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75} maxFontSizeMultiplier={1.35}
+      {/* Fixed like Apple's native title beside it, which ignores the system
+          text size: a scaling label put the pair 2 to 4 pt apart again one
+          step either side of the default. It still shrinks to fit narrow screens. */}
+      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75} allowFontScaling={false}
         style={{ flexShrink: 1, fontSize: AUTH_LABEL_SIZE, fontWeight: '500', color: '#000000', textAlign: 'center' }}>
         {busy ? 'Signing in…' : title}
       </Text>
@@ -526,7 +528,7 @@ export function SignInModal({ visible, title = 'Sign in required', message, erro
           {onApple ? <AppleButton onPress={onApple} busy={busy} /> : null}
           <GoogleButton onPress={onGoogle} busy={busy} style={onApple ? { marginTop: 10 } : undefined} />
           {error ? <Txt k="body" color={colors.red} style={{ marginTop: 10, fontSize: 13 }}>{error}</Txt> : null}
-          <TouchableOpacity activeOpacity={0.7} onPress={onCancel} disabled={busy} hitSlop={AUTH_HIT_SLOP} accessibilityRole="button"
+          <TouchableOpacity activeOpacity={0.7} onPress={onCancel} disabled={busy} accessibilityRole="button"
             style={{ marginTop: 10, minHeight: AUTH_BUTTON_HEIGHT, paddingVertical: 10, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center', opacity: busy ? 0.5 : 1 }}>
             <Text style={{ fontFamily: font.bodyBold, fontSize: 15, color: colors.text }}>Cancel</Text>
           </TouchableOpacity>
@@ -989,7 +991,7 @@ export function ProfileSheet({ visible, onClose, user, role, busy, error, onGoog
             {onApple ? <AppleButton onPress={onApple} busy={busy} /> : null}
             <GoogleButton onPress={onGoogle} busy={busy} style={onApple ? { marginTop: 10 } : undefined} />
             {error ? <Txt k="body" color={colors.red} style={{ marginTop: 10, fontSize: 13 }}>{error}</Txt> : null}
-            <TouchableOpacity activeOpacity={0.7} onPress={onClose} disabled={busy} hitSlop={AUTH_HIT_SLOP} accessibilityRole="button"
+            <TouchableOpacity activeOpacity={0.7} onPress={onClose} disabled={busy} accessibilityRole="button"
               style={{ marginTop: 10, minHeight: AUTH_BUTTON_HEIGHT, paddingVertical: 10, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' }}>
               <Text style={{ fontFamily: font.bodyBold, fontSize: 15, color: colors.text }}>Continue as Guest</Text>
             </TouchableOpacity>

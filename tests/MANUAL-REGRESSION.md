@@ -288,9 +288,13 @@ evidence of native presentation):
       and their labels are the same size: Apple sizes its native title from the
       button height, and Google's label follows the same rule. Google shows its
       multicolour G, about level with Apple's logo. "Continue as Guest" and
-      "Cancel" sit at the same height below them. Labels stay centered on one
-      line without clipping at larger text settings (Google's may grow a little;
-      Apple's native title does not). The native white
+      "Cancel" sit at the same height below them. The two labels stay the same
+      size at every Text Size setting, from the smallest to the accessibility
+      sizes: neither follows the system text size, because Apple's native title
+      cannot. Labels stay centered on one line. On a 320 pt wide screen (iPhone
+      SE, or SE 2/3 with Display Zoom) the labels may shrink slightly but must
+      not truncate. On Android the Google, "Continue as Guest" and "Cancel"
+      buttons are 48 dp tall. The native white
       Apple button shows Apple's logo and "Continue with Apple" above Google.
       At normal text size on iPad, both choices are visible together; larger
       text remains reachable by scrolling. Tap Apple and complete the native

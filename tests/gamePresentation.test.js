@@ -193,13 +193,11 @@ check('Google label is the size Apple gives its native title at the shared heigh
   assert.ok(frame.height >= 44, 'iOS minimum touch target');
   assert.equal(label.props.style.fontSize, Math.round(frame.height * 0.43),
     "differs from Apple's title at this height");
-  assert.ok(frame.height + google.element.props.hitSlop.top + google.element.props.hitSlop.bottom >= 48,
-    'Android 48 dp touch target');
   assert.equal(label.props.numberOfLines, 1);
   assert.equal(label.props.adjustsFontSizeToFit, true, 'compact phones shrink rather than clip');
-  // Line height of the system font is about 1.2 em: the largest allowed text
-  // must still fit on one line inside the fixed frame.
-  assert.ok(label.props.style.fontSize * label.props.maxFontSizeMultiplier * 1.2 <= frame.height);
+  // Apple's native title ignores the system text size; a scaling label would
+  // reopen the mismatch one step either side of the default.
+  assert.equal(label.props.allowFontScaling, false);
   assert.equal(logo.type, 'Image');
   assert.equal(logo.props.source, GOOGLE_G, "Google's standard multicolour mark, not a letter in the app font");
   google.unmount();
@@ -223,5 +221,20 @@ check('secondary actions beside the sign-in buttons share their height and are b
     assert.ok(appleAt >= 0 && appleAt < googleAt, 'Apple appears above Google on iOS');
   }
   modal.unmount(); sheet.unmount();
+});
+check('Android has no Apple button, so its sign-in controls take the 48 dp touch target', () => {
+  const android = load('src/components/ui.tsx', {
+    react: Hooks, 'react-native': { ...rn, Image: 'Image', Platform: { OS: 'android' } }, '../theme': theme,
+    'react-native-gesture-handler': {}, 'react-native-safe-area-context': {},
+    'expo-linear-gradient': imports['expo-linear-gradient'], 'expo-apple-authentication': {},
+    '../../assets/sponsor-bpbl-clothing-inverse.png': 1, '../../assets/sponsor-bpbl-clothing.png': 2,
+    '../../assets/google-g.png': GOOGLE_G,
+  });
+  assert.equal(android.AUTH_BUTTON_HEIGHT, 48);
+  assert.equal(Hooks.render(android.AppleButton, { onPress() {} }).element, null);
+  const google = Hooks.render(android.GoogleButton, { onPress() {} });
+  assert.equal(google.element.props.style[0].height, 48);
+  assert.equal(google.element.props.children[1].props.style.fontSize, 19, 'same label on both platforms');
+  google.unmount();
 });
 process.exitCode = failures ? 1 : 0;
