@@ -3,6 +3,11 @@
 // this handler is the whole gate: GET only, the secret compared in constant time,
 // one league, at most 100 final games, and only the columns Reports reads. It
 // never writes: every request it makes is a PostgREST GET.
+//
+// Besides the events, Reports needs to know what each game tracked: the game's own
+// miss and turnover settings (null when it follows its league, whose setting may have
+// changed since), who was present (attendance), and which teams were scored as a team
+// only. It decides from these which categories it can show; nothing is inferred here.
 
 type Row = Record<string, unknown>;
 type Env = (name: string) => string | undefined;
@@ -16,6 +21,7 @@ export interface ReportsDependencies {
 const ID = /^[A-Za-z0-9_-]{1,100}$/;
 const MAX_GAMES = 100;
 const MAX_EVENTS = 20000;
+const MAX_LIST = 200;
 const PAGE = 500;
 const IN_CHUNK = 100;
 
@@ -99,7 +105,7 @@ export async function handleConnectReports(req: Request, deps: ReportsDependenci
     const league = `eq.${leagueId}`;
     // Only finished games count: a live or scheduled one has no final stats yet.
     const games = await rows(base, key, 'games', {
-      select: 'id,league_id,home_team_id,away_team_id,status,default_winner_team_id',
+      select: 'id,league_id,home_team_id,away_team_id,status,default_winner_team_id,track_misses,track_turnovers,attendance',
       league_id: league, status: 'eq.final', id: inList(gameIds),
     }, deps, MAX_GAMES);
     const finalIds = games.map(game => text(game, 'id'));
@@ -108,7 +114,21 @@ export async function handleConnectReports(req: Request, deps: ReportsDependenci
         select: 'id,league_id,game_id,team_id,player_id,type', league_id: league, game_id: inList(finalIds),
       }, deps, MAX_EVENTS)
       : [];
-    const playerIds = [...new Set(events.map(event => text(event, 'player_id')).filter(Boolean))];
+    const teamIds = [...new Set(games.flatMap(game => [text(game, 'home_team_id'), text(game, 'away_team_id')]))];
+    const teams: Row[] = [];
+    for (let i = 0; i < teamIds.length; i += IN_CHUNK) {
+      if (!teamIds.slice(i, i + IN_CHUNK).every(teamId => ID.test(teamId)))
+        throw new ReportsError(502, 'A mobile record could not be read for Reports.');
+      teams.push(...await rows(base, key, 'teams', {
+        select: 'id,league_id,team_only,player_ids', league_id: league, id: inList(teamIds.slice(i, i + IN_CHUNK)),
+      }, deps));
+    }
+    const listed = (value: unknown) => (Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []);
+    // Players who were present but recorded nothing still need their names.
+    const playerIds = [...new Set([
+      ...events.map(event => text(event, 'player_id')),
+      ...games.flatMap(game => listed(game.attendance)),
+    ].filter(Boolean))];
     const players: Row[] = [];
     for (let i = 0; i < playerIds.length; i += IN_CHUNK) {
       if (!playerIds.slice(i, i + IN_CHUNK).every(playerId => ID.test(playerId)))
@@ -123,7 +143,15 @@ export async function handleConnectReports(req: Request, deps: ReportsDependenci
     const finalSet = new Set(finalIds);
     const valid = games.every(game => ['id', 'home_team_id', 'away_team_id'].every(k => id(game, k))
         && text(game, 'league_id') === leagueId && game.status === 'final' && gameIds.includes(text(game, 'id'))
-        && (game.default_winner_team_id == null || id(game, 'default_winner_team_id')))
+        && (game.default_winner_team_id == null || id(game, 'default_winner_team_id'))
+        && (game.track_misses == null || typeof game.track_misses === 'boolean')
+        && (game.track_turnovers == null || typeof game.track_turnovers === 'boolean')
+        && (game.attendance == null || (Array.isArray(game.attendance) && game.attendance.length <= MAX_LIST
+          && game.attendance.every(v => typeof v === 'string' && ID.test(v)))))
+      && teams.every(team => id(team, 'id') && text(team, 'league_id') === leagueId
+        && (team.team_only == null || typeof team.team_only === 'boolean')
+        && (team.player_ids == null || (Array.isArray(team.player_ids) && team.player_ids.length <= MAX_LIST
+          && team.player_ids.every(v => typeof v === 'string' && ID.test(v)))))
       && events.every(event => ['id', 'game_id', 'team_id'].every(k => id(event, k))
         && text(event, 'league_id') === leagueId && finalSet.has(text(event, 'game_id'))
         && (event.player_id == null || id(event, 'player_id'))
@@ -138,6 +166,11 @@ export async function handleConnectReports(req: Request, deps: ReportsDependenci
       games: games.map(game => ({
         id: game.id, league_id: game.league_id, home_team_id: game.home_team_id, away_team_id: game.away_team_id,
         status: game.status, default_winner_team_id: game.default_winner_team_id ?? null,
+        track_misses: game.track_misses ?? null, track_turnovers: game.track_turnovers ?? null,
+        attendance: game.attendance ?? null,
+      })),
+      teams: teams.map(team => ({
+        id: team.id, league_id: team.league_id, team_only: team.team_only === true, player_ids: team.player_ids ?? [],
       })),
       events: events.map(event => ({
         id: event.id, league_id: event.league_id, game_id: event.game_id, team_id: event.team_id,

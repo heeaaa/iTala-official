@@ -14,8 +14,10 @@ const now = () => new Date('2026-10-07T01:00:00.000Z');
 const L = 'lg1abc';
 const data = {
   games: [
-    { id: 'cg_11111111-1111-4111-8111-111111111111', league_id: L, home_team_id: 'th', away_team_id: 'ta', status: 'final', default_winner_team_id: null, period: 4 },
-    { id: 'g2final', league_id: L, home_team_id: 'th', away_team_id: 'ta', status: 'final', default_winner_team_id: null },
+    { id: 'cg_11111111-1111-4111-8111-111111111111', league_id: L, home_team_id: 'th', away_team_id: 'ta', status: 'final', default_winner_team_id: null, period: 4,
+      track_misses: true, track_turnovers: false, attendance: ['p1', 'p4', 'p2'] },
+    { id: 'g2final', league_id: L, home_team_id: 'th', away_team_id: 'ta', status: 'final', default_winner_team_id: null,
+      track_misses: null, track_turnovers: null, attendance: null },
     { id: 'g3live', league_id: L, home_team_id: 'th', away_team_id: 'ta', status: 'live', default_winner_team_id: null },
     { id: 'g4other', league_id: 'otherleague', home_team_id: 'x1', away_team_id: 'x2', status: 'final', default_winner_team_id: null },
     { id: 'g5unasked', league_id: L, home_team_id: 'th', away_team_id: 'ta', status: 'final', default_winner_team_id: null },
@@ -26,6 +28,11 @@ const data = {
     { id: 'e3', league_id: L, game_id: 'g2final', team_id: 'ta', player_id: 'p2', type: 'fg3_make', period: 2, ts: 3 },
     { id: 'e4', league_id: L, game_id: 'g3live', team_id: 'th', player_id: 'p3', type: 'fg2_make', period: 1, ts: 4 },
     { id: 'e5', league_id: 'otherleague', game_id: 'g4other', team_id: 'x1', player_id: 'p9', type: 'fg2_make', period: 1, ts: 5 },
+  ],
+  teams: [
+    { id: 'ta', league_id: L, name: 'Aces', team_only: false, player_ids: ['p2'], color: '#fff' },
+    { id: 'th', league_id: L, name: 'Hawks', team_only: false, player_ids: ['p1', 'p3', 'p4'], color: '#000' },
+    { id: 'x1', league_id: 'otherleague', name: 'Other', team_only: true, player_ids: [] },
   ],
   players: [
     { id: 'p1', league_id: L, name: 'Māia Te Aroha', number: '7' },
@@ -97,28 +104,41 @@ async function body(response) { return response.json(); }
   assert.deepEqual(read, {
     leagueId: L,
     games: [
-      { id: 'cg_11111111-1111-4111-8111-111111111111', league_id: L, home_team_id: 'th', away_team_id: 'ta', status: 'final', default_winner_team_id: null },
-      { id: 'g2final', league_id: L, home_team_id: 'th', away_team_id: 'ta', status: 'final', default_winner_team_id: null },
+      { id: 'cg_11111111-1111-4111-8111-111111111111', league_id: L, home_team_id: 'th', away_team_id: 'ta', status: 'final', default_winner_team_id: null,
+        track_misses: true, track_turnovers: false, attendance: ['p1', 'p4', 'p2'] },
+      { id: 'g2final', league_id: L, home_team_id: 'th', away_team_id: 'ta', status: 'final', default_winner_team_id: null,
+        track_misses: null, track_turnovers: null, attendance: null },
+    ],
+    teams: [
+      { id: 'ta', league_id: L, team_only: false, player_ids: ['p2'] },
+      { id: 'th', league_id: L, team_only: false, player_ids: ['p1', 'p3', 'p4'] },
     ],
     events: [
       { id: 'e1', league_id: L, game_id: 'cg_11111111-1111-4111-8111-111111111111', team_id: 'th', player_id: 'p1', type: 'fg2_make' },
       { id: 'e2', league_id: L, game_id: 'cg_11111111-1111-4111-8111-111111111111', team_id: 'ta', player_id: null, type: 'ft_make' },
       { id: 'e3', league_id: L, game_id: 'g2final', team_id: 'ta', player_id: 'p2', type: 'fg3_make' },
     ],
-    players: [{ id: 'p1', league_id: L, name: 'Māia Te Aroha' }, { id: 'p2', league_id: L, name: 'Rua Parata' }],
+    players: [
+      { id: 'p1', league_id: L, name: 'Māia Te Aroha' },
+      { id: 'p2', league_id: L, name: 'Rua Parata' },
+      { id: 'p4', league_id: L, name: 'Never Scored' },
+    ],
     readAt: '2026-10-07T01:00:00.000Z',
   });
   assert.ok(calls.every(c => c.options.method === 'GET' && !c.options.body), 'only GETs leave the handler');
   assert.ok(calls.every(c => c.url.origin === BASE && c.options.headers.authorization === 'Bearer service-role-test-value'));
-  assert.deepEqual(calls.map(c => c.url.pathname), ['/rest/v1/games', '/rest/v1/events', '/rest/v1/players']);
+  assert.deepEqual(calls.map(c => c.url.pathname), ['/rest/v1/games', '/rest/v1/events', '/rest/v1/teams', '/rest/v1/players']);
+  assert.equal(calls[0].url.searchParams.get('select'),
+    'id,league_id,home_team_id,away_team_id,status,default_winner_team_id,track_misses,track_turnovers,attendance');
+  assert.ok(!calls[2].url.searchParams.get('select').includes('name'), 'teams: only the coverage columns');
   assert.equal(calls[0].url.searchParams.get('status'), 'eq.final');
   assert.equal(calls[0].url.searchParams.get('league_id'), `eq.${L}`);
-  assert.ok(!calls[2].url.searchParams.get('select').includes('number'), 'only the columns Reports uses');
+  assert.ok(!calls[3].url.searchParams.get('select').includes('number'), 'only the columns Reports uses');
 
   // No final game among those asked for: an empty read, without touching events or players.
   calls = [];
   const none = await body(await call(ask(`leagueId=${L}&gameIds=g3live,g4other`)));
-  assert.deepEqual([none.games, none.events, none.players], [[], [], []]);
+  assert.deepEqual([none.games, none.events, none.teams, none.players], [[], [], [], []]);
   assert.deepEqual(calls.map(c => c.url.pathname), ['/rest/v1/games']);
 
   // Events and players are read in full across pages, and player ids in chunks.
@@ -145,6 +165,9 @@ async function body(response) { return response.json(); }
 
   // Upstream trouble and records Connect could not use are refused, never passed on half-read.
   for (const [problem, expected] of [
+    [{ table: 'games', rows: data.games.map(g => (g.id === 'g2final' ? { ...g, track_misses: 'yes' } : g)) }, 'A mobile record could not be read for Reports.'],
+    [{ table: 'games', rows: data.games.map(g => (g.id === 'g2final' ? { ...g, attendance: ['bad id'] } : g)) }, 'A mobile record could not be read for Reports.'],
+    [{ table: 'teams', rows: [{ id: 'th', league_id: L, team_only: false, player_ids: 'p1' }, { id: 'ta', league_id: L, team_only: false, player_ids: [] }] }, 'A mobile record could not be read for Reports.'],
     [{ table: 'games', status: 500 }, 'Could not read the mobile records.'],
     [{ table: 'events', network: true }, 'Could not read the mobile records.'],
     [{ table: 'events', rows: [...data.events, { id: 'bad id', league_id: L, game_id: 'g2final', team_id: 'ta', player_id: null, type: 'tov' }] }, 'A mobile record could not be read for Reports.'],
@@ -162,5 +185,5 @@ async function body(response) { return response.json(); }
   Object.assign(data, saved);
   fail = null;
 
-  console.log('✓ Connect reports reader: GET-only secret gate, one league, final games only, referenced players, complete pagination, 20,000-event bound, refused partial reads');
+  console.log('✓ Connect reports reader: GET-only secret gate, one league, final games only, tracking settings, attendance and team rosters, referenced and present players, complete pagination, 20,000-event bound, refused partial reads');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -41,9 +41,12 @@ Connect) and from `connect-schedule` (which the app calls with a user session).
   least 32 characters). Gateway JWT verification is off for this function in
   `supabase/config.toml`, because Connect sends no user session.
 - **Read.** `?leagueId=<league>&gameIds=<id>,<id>`, at most 100 distinct ids. It
-  returns that league's **final** games among those ids, their events, and only
-  the players those events name (`id`, `league_id`, `name`), with the
-  project's service key, through PostgREST `GET`s only. It never writes.
+  returns that league's **final** games among those ids (with each game's own
+  `track_misses`, `track_turnovers` and `attendance`), their events, the two
+  teams' `team_only` and `player_ids`, and the players those events name or the
+  attendance lists (`id`, `league_id`, `name`), with the project's service
+  key, through PostgREST `GET`s only. It never writes. Connect decides from
+  these which categories it can show (its "Show all player stats" option).
 - **Limits and failures.** More than 20,000 events answers `413`; a records
   read that fails, shifts between pages or breaks Connect's id rules answers
   `502` rather than sending part of a read. Connect checks its own event
