@@ -162,6 +162,9 @@ try { run('node', [path.join('tests', 'substitution.test.js')], { env }); }
 catch { failed++; }
 try { run('node', [path.join('tests', 'gamePresentation.test.js')], { env }); }
 catch { failed++; }
+// Only the provider that was tapped says "Signing in…", at every sign-in entrance.
+try { run('node', [path.join('tests', 'signInProgress.test.js')], { env }); }
+catch { failed++; }
 try { run('node', [path.join('tests', 'defaultGameUi.test.js')], { env }); }
 catch { failed++; }
 try { run('node', [path.join('tests', 'recSetup.test.js')], { env }); }

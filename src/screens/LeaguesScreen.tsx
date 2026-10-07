@@ -40,10 +40,11 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
       setRefreshing(false);
     }
   };
-  const { role, isAdmin, user, unlock, lock, signOut, signInWithGoogle, appleAvailable, signInWithApple, authBusy, errorFor, clearError, isOwner, redeemCode, createCreationCode, canScoreGame } = useAdmin();
+  const { role, isAdmin, user, unlock, lock, signOut, signInWithGoogle, appleAvailable, signInWithApple, authBusy, signingInWith, errorFor, clearError, isOwner, redeemCode, createCreationCode, canScoreGame } = useAdmin();
   const [askPw, setAskPw] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const [query, setQuery] = useState('');
   const [lockRevealed, setLockRevealed] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -205,7 +206,8 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
   };
 
   const onSignOut = async () => {
-    await signOut();
+    setSigningOut(true);
+    try { await signOut(); } finally { setSigningOut(false); }
     setSheetOpen(false);
   };
 
@@ -577,6 +579,8 @@ Share this with the organizer. It can create exactly one league, then expires.`)
         user={user}
         role={role}
         busy={authBusy}
+        signingInWith={signingInWith}
+        signingOut={signingOut}
         error={errorFor('signin')}
         onGoogle={() => { void onGoogle(); }}
         onApple={appleAvailable ? () => { void onApple(); } : undefined}

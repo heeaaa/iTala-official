@@ -25,7 +25,7 @@ export default function RecGameScreen({ navigation }: ScreenProps<'RecGame'>) {
 
 function RecGameEditor({ navigation }: Pick<ScreenProps<'RecGame'>, 'navigation'>) {
   const { state, dispatch, synced } = useStore();
-  const { role, userId, isOwner, signInWithGoogle, appleAvailable, signInWithApple, authBusy, errorFor, reloadMemberships } = useAdmin();
+  const { role, userId, isOwner, signInWithGoogle, appleAvailable, signInWithApple, authBusy, signingInWith, errorFor, reloadMemberships } = useAdmin();
   const [location, setLocation] = useState('');
   const [makePublic, setMakePublic] = useState(false);
   const [trackMisses, setTrackMisses] = useState(true);
@@ -208,8 +208,8 @@ function RecGameEditor({ navigation }: Pick<ScreenProps<'RecGame'>, 'navigation'
           <Txt k="body" color={colors.muted} style={{ textAlign: 'center', marginBottom: space(6) }}>
             Drop-in games are saved to your account — sign in to start one.
           </Txt>
-          {appleAvailable ? <AppleButton onPress={() => { void onSignIn(signInWithApple); }} busy={signInBusy || authBusy} /> : null}
-          <GoogleButton onPress={() => { void onSignIn(signInWithGoogle); }} busy={signInBusy || authBusy} style={{ marginTop: appleAvailable ? 10 : 0 }} />
+          {appleAvailable ? <AppleButton onPress={() => { void onSignIn(signInWithApple); }} busy={signInBusy || authBusy} signingIn={signingInWith === 'apple'} /> : null}
+          <GoogleButton onPress={() => { void onSignIn(signInWithGoogle); }} busy={signInBusy || authBusy} signingIn={signingInWith === 'google'} style={{ marginTop: appleAvailable ? 10 : 0 }} />
           {errorFor('signin') ? <Txt k="body" color={colors.red} style={{ marginTop: 10, fontSize: 13 }}>{errorFor('signin')}</Txt> : null}
           <Button title="Cancel" kind="ghost" onPress={() => navigation.goBack()}
             style={{ alignSelf: 'stretch', marginTop: 10, minHeight: AUTH_BUTTON_HEIGHT, paddingVertical: 10 }} />

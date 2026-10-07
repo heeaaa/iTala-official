@@ -12,6 +12,7 @@ import * as AppleAuthentication from 'expo-apple-authentication';
 import { colors, font, radius, space, brandGradient, wordmarkGradient } from '../theme';
 import { Promo } from '../types';
 import { SyncSummary, SyncTone } from '../sync/syncStatus';
+import type { SignInProvider } from '../store/AdminProvider';
 
 // Team logo if present, else a colored dot. Used everywhere a team name appears.
 export function TeamBadge({ logo, color, size = 12 }: { logo?: string; color: string; size?: number }) {
@@ -444,17 +445,25 @@ const GOOGLE_G = require('../../assets/google-g.png');
 const IOS_AUTH_BUTTON_HEIGHT = 44;
 export const AUTH_BUTTON_HEIGHT = Platform.OS === 'android' ? 48 : IOS_AUTH_BUTTON_HEIGHT;
 const AUTH_LABEL_SIZE = Math.round(IOS_AUTH_BUTTON_HEIGHT * 0.43);
+// Google's label, and the "Signing in…" laid over Apple's native title.
+const AUTH_LABEL_STYLE: TextStyle = { flexShrink: 1, fontSize: AUTH_LABEL_SIZE, fontWeight: '500', color: '#000000', textAlign: 'center' };
+
+// Both sign-in buttons take two flags. `busy` disables them while any auth work
+// runs. `signingIn` marks the provider that was tapped: only that button says
+// "Signing in…". One shared flag used to label Google even when Apple was tapped.
 
 // The one Google CTA used everywhere (modal, sheet, sign-in screens).
-export function GoogleButton({ title = 'Continue with Google', onPress, busy, style }:
-  { title?: string; onPress: () => void; busy?: boolean; style?: ViewStyle }) {
+export function GoogleButton({ title = 'Continue with Google', onPress, busy, signingIn, style }:
+  { title?: string; onPress: () => void; busy?: boolean; signingIn?: boolean; style?: ViewStyle }) {
+  const blocked = !!(busy || signingIn);
   return (
-    <TouchableOpacity activeOpacity={0.75} onPress={onPress} disabled={busy}
-      accessibilityRole="button" accessibilityState={{ disabled: !!busy }}
+    <TouchableOpacity activeOpacity={0.75} onPress={onPress} disabled={blocked}
+      accessibilityRole="button" accessibilityState={{ disabled: blocked, busy: !!signingIn }}
+      accessibilityLabel={signingIn ? 'Signing in with Google' : undefined}
       style={[{
         width: '100%', height: AUTH_BUTTON_HEIGHT, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
         paddingHorizontal: 8, borderRadius: radius.md, backgroundColor: '#FFFFFF',
-        opacity: busy ? 0.6 : 1,
+        opacity: blocked ? 0.6 : 1,
       }, style]}>
       {/* Sized to sit level with Apple's logo on the button above, rather than
           at Google's larger standalone size, so the two read as one pair. */}
@@ -463,8 +472,8 @@ export function GoogleButton({ title = 'Continue with Google', onPress, busy, st
           text size: a scaling label put the pair 2 to 4 pt apart again one
           step either side of the default. It still shrinks to fit narrow screens. */}
       <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75} allowFontScaling={false}
-        style={{ flexShrink: 1, fontSize: AUTH_LABEL_SIZE, fontWeight: '500', color: '#000000', textAlign: 'center' }}>
-        {busy ? 'Signing in…' : title}
+        style={AUTH_LABEL_STYLE}>
+        {signingIn ? 'Signing in…' : title}
       </Text>
     </TouchableOpacity>
   );
@@ -496,19 +505,37 @@ export function SponsorMark({ size = 52, onLight }: { size?: number; onLight?: b
 
 // Apple's native control provides its logo and label. Keep its frame equal to
 // Google's across compact phones, larger phones, and tablet sign-in surfaces.
-export function AppleButton({ onPress, busy, style }:
-  { onPress: () => void; busy?: boolean; style?: ViewStyle }) {
+export function AppleButton({ onPress, busy, signingIn, style }:
+  { onPress: () => void; busy?: boolean; signingIn?: boolean; style?: ViewStyle }) {
   if (Platform.OS !== 'ios') return null;
+  const blocked = !!(busy || signingIn);
   return (
-    <View pointerEvents={busy ? 'none' : 'auto'}
-      style={[{ width: '100%', height: AUTH_BUTTON_HEIGHT, opacity: busy ? 0.6 : 1 }, style]}>
+    <View pointerEvents={blocked ? 'none' : 'auto'}
+      style={[{ width: '100%', height: AUTH_BUTTON_HEIGHT, opacity: blocked ? 0.6 : 1 }, style]}>
       <AppleAuthentication.AppleAuthenticationButton
         buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
         buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
         cornerRadius={radius.md}
         onPress={onPress}
+        // Covered by the progress label below; VoiceOver would still read
+        // "Continue with Apple" from under it.
+        accessibilityElementsHidden={signingIn}
         style={{ width: '100%', height: '100%' }}
       />
+      {/* The native title cannot be changed, so progress is laid over it in
+          the button's own white fill and corners, set like Google's label.
+          It only appears once Apple sign-in has started, and starts nothing. */}
+      {signingIn ? (
+        <View accessible accessibilityRole="button" accessibilityLabel="Signing in with Apple"
+          accessibilityState={{ disabled: true, busy: true }}
+          style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, paddingHorizontal: 8,
+            borderRadius: radius.md, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' }}>
+          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75} allowFontScaling={false}
+            style={AUTH_LABEL_STYLE}>
+            Signing in…
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -516,8 +543,8 @@ export function AppleButton({ onPress, busy, style }:
 // Friendly "Sign in required" prompt shown when a guest taps a gated feature
 // (share cards, admin entry to a live game). Same reliable overlay approach
 // as PasswordModal — absolute fill, TouchableOpacity buttons.
-export function SignInModal({ visible, title = 'Sign in required', message, error, busy, onGoogle, onApple, onCancel }:
-  { visible: boolean; title?: string; message?: string; error?: string; busy?: boolean; onGoogle: () => void; onApple?: () => void; onCancel: () => void }) {
+export function SignInModal({ visible, title = 'Sign in required', message, error, busy, signingInWith, onGoogle, onApple, onCancel }:
+  { visible: boolean; title?: string; message?: string; error?: string; busy?: boolean; signingInWith?: SignInProvider | null; onGoogle: () => void; onApple?: () => void; onCancel: () => void }) {
   if (!visible) return null;
   return (
     <View style={StyleSheet.absoluteFill as ViewStyle} pointerEvents="box-none">
@@ -525,8 +552,8 @@ export function SignInModal({ visible, title = 'Sign in required', message, erro
         <View style={{ width: '100%', maxWidth: 360, backgroundColor: colors.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, padding: space(5) }}>
           <Txt k="h2" style={{ marginBottom: 6 }}>{title}</Txt>
           {message ? <Txt k="body" color={colors.muted} style={{ marginBottom: space(4) }}>{message}</Txt> : <View style={{ height: space(2) }} />}
-          {onApple ? <AppleButton onPress={onApple} busy={busy} /> : null}
-          <GoogleButton onPress={onGoogle} busy={busy} style={onApple ? { marginTop: 10 } : undefined} />
+          {onApple ? <AppleButton onPress={onApple} busy={busy} signingIn={signingInWith === 'apple'} /> : null}
+          <GoogleButton onPress={onGoogle} busy={busy} signingIn={signingInWith === 'google'} style={onApple ? { marginTop: 10 } : undefined} />
           {error ? <Txt k="body" color={colors.red} style={{ marginTop: 10, fontSize: 13 }}>{error}</Txt> : null}
           <TouchableOpacity activeOpacity={0.7} onPress={onCancel} disabled={busy} accessibilityRole="button"
             style={{ marginTop: 10, minHeight: AUTH_BUTTON_HEIGHT, paddingVertical: 10, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center', opacity: busy ? 0.5 : 1 }}>
@@ -877,12 +904,16 @@ export function ProfileButton({ avatarUrl, onPress }:
 
 // Bottom sheet opened from the header profile button. Slides up/down with a
 // short spring; taps on the dimmed backdrop dismiss it.
-export function ProfileSheet({ visible, onClose, user, role, busy, error, onGoogle, onApple, onSignOut, onSettings, onAbout, onEnterCode, onMintCode, onPromos }: {
+export function ProfileSheet({ visible, onClose, user, role, busy, signingInWith, signingOut, error, onGoogle, onApple, onSignOut, onSettings, onAbout, onEnterCode, onMintCode, onPromos }: {
   visible: boolean;
   onClose: () => void;
   user: { name: string; email: string; avatarUrl: string | null } | null;
   role: 'guest' | 'user' | 'admin';
   busy?: boolean;
+  signingInWith?: SignInProvider | null;
+  /** Sign-out in flight. `busy` cannot say so: the account appears while a
+   *  sign-in is still finishing, and the row read "Signing out…" then. */
+  signingOut?: boolean;
   error?: string | null;
   onGoogle: () => void;
   onApple?: () => void;
@@ -978,7 +1009,7 @@ export function ProfileSheet({ visible, onClose, user, role, busy, error, onGoog
                 {onPromos ? (<><RowBtn label="Sponsor promos" onPress={onPromos} /><Line /></>) : null}
               </>
             ) : null}
-            <RowBtn label={busy ? 'Signing out…' : 'Sign out'} color={colors.red} onPress={onSignOut} disabled={busy} />
+            <RowBtn label={signingOut ? 'Signing out…' : 'Sign out'} color={colors.red} onPress={onSignOut} disabled={busy || signingOut} />
           </>
         ) : (
           <View style={{ width: '100%', maxWidth: 400, alignSelf: 'center' }}>
@@ -988,8 +1019,8 @@ export function ProfileSheet({ visible, onClose, user, role, busy, error, onGoog
                 Sign in to share stat cards. Admins are recognized automatically.
               </Txt>
             </View>
-            {onApple ? <AppleButton onPress={onApple} busy={busy} /> : null}
-            <GoogleButton onPress={onGoogle} busy={busy} style={onApple ? { marginTop: 10 } : undefined} />
+            {onApple ? <AppleButton onPress={onApple} busy={busy} signingIn={signingInWith === 'apple'} /> : null}
+            <GoogleButton onPress={onGoogle} busy={busy} signingIn={signingInWith === 'google'} style={onApple ? { marginTop: 10 } : undefined} />
             {error ? <Txt k="body" color={colors.red} style={{ marginTop: 10, fontSize: 13 }}>{error}</Txt> : null}
             <TouchableOpacity activeOpacity={0.7} onPress={onClose} disabled={busy} accessibilityRole="button"
               style={{ marginTop: 10, minHeight: AUTH_BUTTON_HEIGHT, paddingVertical: 10, borderRadius: radius.md, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' }}>

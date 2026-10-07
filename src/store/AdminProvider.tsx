@@ -89,6 +89,8 @@ export const ADMIN_EMAILS: readonly string[] = [
 
 export type Role = 'guest' | 'user' | 'admin';
 
+export type SignInProvider = 'google' | 'apple';
+
 export interface AuthUser {
   id: string;
   email: string;
@@ -199,8 +201,12 @@ interface AdminCtx {
   user: AuthUser | null;
   /** Supabase auth uid (anonymous or Google). Null in local-only mode. */
   userId: string | null;
-  /** True while a Google sign-in round trip is in flight. */
+  /** True while any auth work is in flight: session restore at launch, a
+   *  provider sign-in, sign-out, account deletion or code redemption. */
   authBusy: boolean;
+  /** The provider whose sign-in is in flight, or null. authBusy cannot say
+   *  which button was tapped, and "Signing in…" belongs only on that one. */
+  signingInWith: SignInProvider | null;
   /** The most recent failure IN THIS FLOW, or null.
    *
    *  Scoped rather than global. There used to be one `lastError` string shared
@@ -263,6 +269,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   const [serverAdmin, setServerAdmin] = useState(false);   // profiles.is_admin (synced mode)
   const [localUnlocked, setLocalUnlocked] = useState(false); // password unlock (local-only mode)
   const [authBusy, setAuthBusy] = useState(SYNC_ENABLED);
+  const [signingInWith, setSigningInWith] = useState<SignInProvider | null>(null);
   // Covers restoration, legal review and OAuth, including taps before React renders.
   const authFlow = useRef(SYNC_ENABLED);
   const mounted = useRef(true);
@@ -514,6 +521,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
 
     authFlow.current = true;
     setAuthBusy(true);
+    setSigningInWith('google');
     try {
       // Deep link back into the app. Expo Go → exp://.../--/auth-callback,
       // dev/prod builds → itala://auth-callback (scheme from app.json).
@@ -590,6 +598,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     } finally {
       authFlow.current = false;
       setAuthBusy(false);
+      setSigningInWith(null);
     }
   };
 
@@ -618,6 +627,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
 
     authFlow.current = true;
     setAuthBusy(true);
+    setSigningInWith('apple');
     try {
       const credential = await AppleAuthentication.signInAsync({
         requestedScopes: [
@@ -655,6 +665,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     } finally {
       authFlow.current = false;
       setAuthBusy(false);
+      setSigningInWith(null);
     }
   };
 
@@ -1020,7 +1031,7 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <Ctx.Provider value={{
-      role, isAdmin: role === 'admin', user, userId, authBusy, errorFor, clearError,
+      role, isAdmin: role === 'admin', user, userId, authBusy, signingInWith, errorFor, clearError,
       memberships, canScore, canScoreGame, isOwner, reloadMemberships, redeemCode, createCreationCode,
       getLeagueCodes, regenerateLeagueCode, listMembers, removeMember,
       signInWithGoogle, appleAvailable, signInWithApple, deleteAccount, signOut, unlock, lock,
