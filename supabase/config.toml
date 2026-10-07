@@ -1,3 +1,7 @@
 # This server-to-server endpoint checks its own dedicated secret before reading the body.
 [functions.connect-link-state]
 verify_jwt = false
+
+# iTala Connect Reports reads with its own dedicated secret (x-connect-reports-secret), never a user JWT.
+[functions.connect-reports]
+verify_jwt = false

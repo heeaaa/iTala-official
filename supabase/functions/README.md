@@ -1,6 +1,7 @@
 # Supabase Edge Functions
 
-Two functions live here: **`delete-account`** and **`connect-schedule`**.
+Functions here include **`delete-account`**, **`connect-schedule`**,
+**`connect-link-state`** and **`connect-reports`**.
 
 ## Connect schedule
 
@@ -27,6 +28,49 @@ Schedule tab and disable Start. They do not create mobile stat events or change
 the mobile Standings tab. Fixture dates and times are shown in the Connect
 event's IANA timezone, so a game played in Vancouver does not move to an
 Auckland date on a developer's phone.
+
+## Connect reports
+
+`connect-reports` lets iTala Connect's **Reports** tab read the player stats of
+games whose results Connect approved from this app. It is a server-to-server
+read, separate from `connect-link-state` (which receives link status from
+Connect) and from `connect-schedule` (which the app calls with a user session).
+
+- **Gate.** `GET` only, with the header `x-connect-reports-secret`, compared in
+  constant time with the Edge Function secret `CONNECT_REPORTS_READ_SECRET` (at
+  least 32 characters). Gateway JWT verification is off for this function in
+  `supabase/config.toml`, because Connect sends no user session.
+- **Read.** `?leagueId=<league>&gameIds=<id>,<id>`, at most 100 distinct ids. It
+  returns that league's **final** games among those ids, their events, and only
+  the players those events name (`id`, `league_id`, `name`), with the
+  project's service key, through PostgREST `GET`s only. It never writes.
+- **Limits and failures.** More than 20,000 events answers `413`; a records
+  read that fails, shifts between pages or breaks Connect's id rules answers
+  `502` rather than sending part of a read. Connect checks its own event
+  permission and its approved league, team and game links before it asks, and
+  checks the reply again before using it.
+- **Tests:** `tests/connectReports.test.js` (in `npm test`).
+
+Deploy from the repository root. Generate the secret, keep it out of the
+repository and chat, set it here, and set the **same value** in Connect's
+Netlify environment as `MOBILE_REPORTS_READ_SECRET` (server-only, marked
+secret; Connect also needs `MOBILE_SUPABASE_URL` and
+`MOBILE_SUPABASE_PUBLISHABLE_KEY`). Redeploy Connect afterwards: Netlify
+applies environment changes only to new deploys.
+
+```bash
+REF=YOUR_SUPABASE_PROJECT
+SECRET=$(node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))")
+
+npx supabase@latest secrets set CONNECT_REPORTS_READ_SECRET="$SECRET" --project-ref "$REF"
+npx supabase@latest functions deploy connect-reports \
+  --project-ref "$REF" --use-api --no-verify-jwt
+
+# Without the secret header it must refuse: expect 401.
+curl -s -o /dev/null -w "%{http_code}\n" "https://$REF.supabase.co/functions/v1/connect-reports?leagueId=x&gameIds=y"
+```
+
+Then copy `$SECRET` into Netlify and clear it from the shell (`unset SECRET`).
 
 ## Delete account: why it exists
 
