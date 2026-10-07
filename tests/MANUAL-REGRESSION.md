@@ -77,6 +77,16 @@ Highest probability of defects. Each of these was a real bug at some point.
       published schedule immediately. Check phone/iPad portrait, landscape,
       Split View, and larger text: all text wraps, links remain easy to tap,
       and the tablet content stays in a centered column.
+- [ ] **UI7** Start a scheduled game from Schedule straight after a cold start,
+      and again after the app has been in the background for ten minutes or more.
+      Tip off opens the live tracker, and "Could not load the Connect schedule"
+      never appears under Tip off. If the schedule service is briefly busy, the
+      button stays on "Starting…" a second or two longer and the game still
+      opens. In aeroplane mode, Tip off ends within 15 seconds with "Could not
+      start this game. Check your connection and try again." and can be tapped
+      again; a later Tip off reopens the same game. Default/Forfeit on a
+      scheduled game behaves the same way. The automated half of this, including
+      the service's real 503 answer, is `tests/connectInvoke.test.js`.
 
 ### Drop-in games (most fragile area historically)
 
@@ -274,8 +284,17 @@ evidence of native presentation):
 - [ ] **R54** Sign in with Apple (device build only).
       Check the share-card prompt, profile sheet, Settings, and drop-in sign-in
       on a compact phone, iPhone 17, and iPad portrait/landscape. Apple and Google
-      buttons share the same width, height, light fill, and corner radius; labels
-      stay centered without clipping at larger text settings. The native white
+      buttons share the same 44 pt height, width, light fill, and corner radius,
+      and their labels are the same size: Apple sizes its native title from the
+      button height, and Google's label follows the same rule. Google shows its
+      multicolour G, about level with Apple's logo. "Continue as Guest" and
+      "Cancel" sit at the same height below them. The two labels stay the same
+      size at every Text Size setting, from the smallest to the accessibility
+      sizes: neither follows the system text size, because Apple's native title
+      cannot. Labels stay centered on one line. On a 320 pt wide screen (iPhone
+      SE, or SE 2/3 with Display Zoom) the labels may shrink slightly but must
+      not truncate. On Android the Google, "Continue as Guest" and "Cancel"
+      buttons are 48 dp tall. The native white
       Apple button shows Apple's logo and "Continue with Apple" above Google.
       At normal text size on iPad, both choices are visible together; larger
       text remains reachable by scrolling. Tap Apple and complete the native

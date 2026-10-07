@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, Alert } from 'react-native';
-import { Screen, Txt, Card, Pill, Toggle, GoogleButton, AppleButton, Button, syncToneColor } from '../components/ui';
+import { Screen, Txt, Card, Pill, Toggle, GoogleButton, AppleButton, Button, syncToneColor, AUTH_BUTTON_HEIGHT } from '../components/ui';
 import { useStore } from '../store/StoreProvider';
 import { useAdmin } from '../store/AdminProvider';
 import { LegalLinks } from '../components/LegalAcknowledgement';
@@ -38,7 +38,8 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
           {appleAvailable ? <AppleButton onPress={() => { void onSignIn(signInWithApple); }} busy={busy || authBusy} /> : null}
           <GoogleButton onPress={() => { void onSignIn(signInWithGoogle); }} busy={busy || authBusy} style={{ marginTop: appleAvailable ? 10 : 0 }} />
           {errorFor('signin') ? <Txt k="body" color={colors.red} style={{ marginTop: 10, fontSize: 13 }}>{errorFor('signin')}</Txt> : null}
-          <Button title="Cancel" kind="ghost" onPress={() => navigation.goBack()} style={{ alignSelf: 'stretch', marginTop: 10 }} />
+          <Button title="Cancel" kind="ghost" onPress={() => navigation.goBack()}
+            style={{ alignSelf: 'stretch', marginTop: 10, minHeight: AUTH_BUTTON_HEIGHT, paddingVertical: 10 }} />
         </View>
       </Screen>
     );
