@@ -743,7 +743,7 @@ function MembersSection({ leagueId, leagueName, myUserId, getCodes, regenerate, 
 
   const shareCode = (role: 'owner' | 'scorekeeper', code: string) => {
     const roleLabel = role === 'owner' ? 'co-owner' : 'scorekeeper';
-    void Share.share({ message: `Join "${leagueName}" on iTala as a ${roleLabel}! Sign in with Google or Apple, open the profile menu → Enter invite code, and use: ${code}` });
+    void Share.share({ message: `Join "${leagueName}" on iTala as a ${roleLabel}! Sign in with Apple or Google, open the profile menu → Enter invite code, and use: ${code}` });
   };
 
   const confirmRegen = (role: 'owner' | 'scorekeeper') => {

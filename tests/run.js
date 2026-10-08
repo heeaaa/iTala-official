@@ -165,6 +165,10 @@ catch { failed++; }
 // Only the provider that was tapped says "Signing in…", at every sign-in entrance.
 try { run('node', [path.join('tests', 'signInProgress.test.js')], { env }); }
 catch { failed++; }
+// Apple-first sign-in copy, Home's answer to an offline first launch, and no
+// device id in Settings.
+try { run('node', [path.join('tests', 'reviewPolish.test.js')], { env }); }
+catch { failed++; }
 try { run('node', [path.join('tests', 'defaultGameUi.test.js')], { env }); }
 catch { failed++; }
 try { run('node', [path.join('tests', 'recSetup.test.js')], { env }); }

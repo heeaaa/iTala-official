@@ -2,6 +2,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState, LocalPrefs } from '../types';
 import { OutboxEntry } from '../sync/pendingEvents';
 
+// The `hoops.` prefix on this key, OUTBOX_KEY, PREFS_KEY and the roster-draft
+// and drop-in setup drafts is the app's working name from its first iterations.
+// Keys added since use `itala.`. These are kept on purpose: renaming them
+// without a migration would orphan every installed device's saved state,
+// unsent stats and settings. They never leave the device.
 const KEY = 'hoops.state.v1';
 
 export async function loadState(): Promise<AppState | null> {

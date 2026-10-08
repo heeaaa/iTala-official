@@ -1066,6 +1066,39 @@ build.
       (44x44). Then open a lineup screen with an empty team and confirm the
       blocking line is reached BEFORE the dimmed Tip off button.
 
+## P13 - App Review polish for build 3
+
+`tests/reviewPolish.test.js` checks what each screen hands to React Native. These
+need a device to confirm how it looks.
+
+- [ ] **R172** *Offline first launch.* Delete the app, turn on aeroplane mode,
+      install and open it. *Expect:* within a few seconds Home shows "Can't reach
+      iTala" with a **Try again** button, not a spinner for a minute. Tap Try
+      again. *Expect:* it reads "Trying…", then a "No internet connection" toast
+      within 15 seconds. Repeat on an iPad in landscape: the message and button
+      stay centred.
+- [ ] **R173** *Guest with no leagues.* (Staging or an empty project only.) As a
+      guest, Home with no leagues says "Leagues appear here once they are
+      published" and does not tell the guest to create one.
+- [ ] **R174** *Copy.* The welcome tour's sign-in row, the guest profile sheet
+      and an invite code shared from a league all name Apple before Google.
+      Settings, signed in, shows no "Device:" line under the sync status.
+- [ ] **R175** *Connect link.* On a league with no Connect schedule, tap **Open
+      iTala Connect website**. *Expect:* the browser opens `connect.itala.fyi`. As
+      an owner, **Link this league in Connect** opens the organiser sign-in on
+      `connect.itala.fyi`, and signing in there continues to the import page.
+- [ ] **R176** *Pull-to-refresh with no connection.* With leagues already on
+      Home, turn on aeroplane mode (and again on Wi-Fi with no internet, such as
+      a hotspot with no data), then pull down on Home. *Expect:* the spinner stops
+      within about 15 seconds and a "No internet connection" toast shows. It must
+      never spin for minutes. Reconnect and pull again: the leagues refresh.
+- [ ] **R177** *A long upload is not "No internet".* Score a game in aeroplane
+      mode with plenty of stats (100 or more). Turn aeroplane mode off and pull
+      down on Home straight away. *Expect:* no "No internet connection" toast. If
+      sending takes longer than 15 seconds, the spinner stops and the toast says
+      "Still sending your changes in the background." The sync status then
+      empties, and the box score on a second device shows every stat.
+
 ## Known limitations (not bugs)
 
 - Push notifications are limited in Expo Go. Use a build.

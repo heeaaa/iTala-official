@@ -30,7 +30,7 @@ export interface ConnectSchedule {
 }
 
 export const connectMobileGameId = (connectGameId: string) => `cg_${connectGameId}`;
-export const CONNECT_SITE_URL = 'https://itala-connect.netlify.app';
+export const CONNECT_SITE_URL = 'https://connect.itala.fyi';
 export const connectAdminImportUrl = (leagueId: string) =>
   `${CONNECT_SITE_URL}/admin/import/${encodeURIComponent(leagueId)}`;
 

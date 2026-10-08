@@ -183,7 +183,7 @@ async function ask(body) {
   assert.equal(nowInZone('America/Vancouver', new Date('2026-09-29T05:00:00Z')).slice(0, 10), '2026-09-28');
   assert.equal(nowInZone('Pacific/Auckland', new Date('2026-09-29T05:00:00Z')).slice(0, 10), '2026-09-29');
   assert.ok(!JSON.stringify(schedule.body).includes('connect-service'));
-  assert.equal(CONNECT_SITE_URL, 'https://itala-connect.netlify.app');
+  assert.equal(CONNECT_SITE_URL, 'https://connect.itala.fyi');
   assert.equal(connectAdminImportUrl('mobile 1'), `${CONNECT_SITE_URL}/admin/import/mobile%201`);
   const linkedLeague = { id: 'mobile-1', kind: 'league', connectLink: { events: [{ id: E }], revision: 1, checkedAt: 1 } };
   const requestsBeforePolicy = calls.length;

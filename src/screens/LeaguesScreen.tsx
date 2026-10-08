@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, FlatList, Pressable, Alert, Linking, TextInput, ScrollView, useWindowDimensions, RefreshControl, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -17,8 +17,12 @@ import { PRIVACY_POLICY_URL } from '../lib/legal';
 // the network is unavailable.
 const HIDDEN_LOCK_TAPS = 10;
 
+// How long pull-to-refresh (and Try again) spins before giving up and saying
+// there is no connection. The same 15 s the Connect bridge allows a request.
+const REFRESH_SPINNER_LIMIT_MS = 15000;
+
 export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
-  const { state, ready, prefs, toggleFavLeague, dispatch, refresh, synced, sync, prefsReady, initialSyncDone, dismissOnboarding, liveElsewhere } = useStore();
+  const { state, ready, prefs, toggleFavLeague, dispatch, refresh, synced, sync, net, pendingWrites, prefsReady, initialSyncDone, dismissOnboarding, liveElsewhere } = useStore();
   const [refreshing, setRefreshing] = useState(false);
   const [onboardingClosed, setOnboardingClosed] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -31,12 +35,35 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
   // gets an answer. It also sends anything queued before it reads, so pulling
   // down after a reconnect pushes the offline stats up rather than only
   // fetching the server's older copy.
+  //
+  // With no connection, a request can also go unanswered for minutes (the
+  // client sets no timeout), and the spinner waited with it. It now stops at
+  // REFRESH_SPINNER_LIMIT_MS. The refresh is not cancelled: it keeps running
+  // and still applies whatever it brings back.
+  //
+  // Running out of time is not proof of no connection. `refresh` sends the
+  // outbox first, one request per queued stat, so after an offline game it can
+  // pass the limit on a working connection. If any queued change went out while
+  // we waited, the connection works: say so, or nothing once the queue is empty.
+  const pendingNow = useRef(pendingWrites);
+  useEffect(() => { pendingNow.current = pendingWrites; }, [pendingWrites]);
+  const timedOutMessage = (pendingAtStart: number) =>
+    pendingNow.current >= pendingAtStart ? 'No internet connection. Please try again.'
+      : pendingNow.current > 0 ? 'Still sending your changes in the background.'
+        : null;
   const onRefresh = async () => {
     setRefreshing(true);
+    const pendingAtStart = pendingNow.current;
+    let limit: ReturnType<typeof setTimeout> | undefined;
     try {
-      const [outcome] = await Promise.all([refresh(), reloadPromos()]);
-      setToast(outcome === 'offline' ? 'No internet connection. Please try again.' : null);
+      const outcome = await Promise.race([
+        Promise.all([refresh(), reloadPromos()]).then(([o]) => o),
+        new Promise<'timed-out'>(resolve => { limit = setTimeout(() => resolve('timed-out'), REFRESH_SPINNER_LIMIT_MS); }),
+      ]);
+      setToast(outcome === 'timed-out' ? timedOutMessage(pendingAtStart)
+        : outcome === 'offline' ? 'No internet connection. Please try again.' : null);
     } finally {
+      clearTimeout(limit);
       setRefreshing(false);
     }
   };
@@ -172,6 +199,25 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
     .filter(l => l.kind !== 'recreational' && !l.isArchived)
     .filter(l => !q || l.name.toLowerCase().includes(q) || l.season.toLowerCase().includes(q))
     .sort((a, b) => Number(favLeagues.has(b.id)) - Number(favLeagues.has(a.id)));
+  // Reconnecting sends queued writes but does not re-read leagues. A first
+  // launch that started offline and outlasted the boot retries would otherwise
+  // go from "Can't reach iTala" to "No leagues yet" with nothing fetched. So the
+  // first time the connection comes back while this device has no leagues at
+  // all, refresh once, unless a refresh is already running. Once only: a link
+  // that answers reads but drops writes flips offline and online on every
+  // attempt, and a refresh per flip would loop with no backoff.
+  const prevNet = useRef(net);
+  const reconnectRefreshed = useRef(false);
+  const deviceHasNoLeagues = state.leagues.length === 0;
+  useEffect(() => {
+    const was = prevNet.current;
+    prevNet.current = net;
+    if (reconnectRefreshed.current || refreshing || !synced || !deviceHasNoLeagues) return;
+    if (was === 'offline' && net === 'online') {
+      reconnectRefreshed.current = true;
+      void refresh();
+    }
+  }, [net, synced, deviceHasNoLeagues, refreshing, refresh]);
   const showSearch = visibleLeagues.filter(l => !l.isArchived).length >= 3 || q.length > 0;
   const archivedLeagues = state.leagues.filter(l => l.isArchived && l.kind !== 'recreational');
 
@@ -474,13 +520,24 @@ Share this with the organizer. It can create exactly one league, then expires.`)
           );
         })()}
         ListEmptyComponent={
-          !ready || (!initialSyncDone && !q)
+          // Known offline with nothing on the device answers at once rather
+          // than spinning through the boot retries, which keep running and
+          // fill the list in if the connection comes back.
+          !ready || (!initialSyncDone && !q && net !== 'offline')
             ? <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: space(10) }}>
                 <ActivityIndicator color={colors.brandTeal} size="large" />
               </View>
             : q
               ? <Empty title="No matches" subtitle={`No league matches "${query}".`} />
-              : <Empty title="No leagues yet" subtitle="Create your first league to start tracking games." />
+              : net === 'offline'
+                ? <View>
+                    <Empty title="Can't reach iTala" subtitle="Check your internet connection, then try again." />
+                    <Button title={refreshing ? 'Trying…' : 'Try again'} kind="ghost" disabled={refreshing}
+                      onPress={() => { void onRefresh(); }} style={{ alignSelf: 'center', minWidth: 160 }} />
+                  </View>
+                : <Empty title="No leagues yet" subtitle={role === 'guest'
+                    ? 'Leagues appear here once they are published. Pull down to refresh.'
+                    : 'Create your first league to start tracking games.'} />
         }
         ListFooterComponent={isAdmin && archivedLeagues.length > 0 ? (
           <View style={{ marginTop: space(2) }}>
@@ -609,7 +666,7 @@ Share this with the organizer. It can create exactly one league, then expires.`)
       <PasswordModal
         visible={askPw}
         title="Admin access"
-        message="Backup admin unlock. Enter the admin password to unlock stat tracking without a Google account."
+        message="Backup admin unlock. Enter the admin password to unlock stat tracking without signing in."
         error={errorFor('admin') ?? undefined}
         busy={submitting}
         onSubmit={submitPw}

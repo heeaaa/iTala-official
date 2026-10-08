@@ -9,7 +9,7 @@ import { ScreenProps } from '../navigation';
 
 export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) {
   const { synced, sync, refresh, prefs, setHaptics, setNotifs } = useStore();
-  const { role, isAdmin, user, userId, signInWithGoogle, appleAvailable, signInWithApple, deleteAccount, signOut, authBusy, signingInWith, errorFor } = useAdmin();
+  const { role, isAdmin, user, signInWithGoogle, appleAvailable, signInWithApple, deleteAccount, signOut, authBusy, signingInWith, errorFor } = useAdmin();
   const [busy, setBusy] = useState(false);
   // Separate from `busy`, which labels Delete account "Deleting…": the account
   // appears before a sign-in finishes, so a shared flag read "Deleting…" then.
@@ -189,7 +189,6 @@ export default function SettingsScreen({ navigation }: ScreenProps<'Settings'>) 
                 style={{ marginTop: space(3) }}
               />
             ) : null}
-            {userId ? <Txt k="body" color={colors.muted} style={{ fontSize: 11, marginTop: 8 }}>Device: {userId.slice(0, 8)}…</Txt> : null}
           </>
         ) : (
           <>
