@@ -206,9 +206,6 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
   // all, refresh once, unless a refresh is already running. Once only: a link
   // that answers reads but drops writes flips offline and online on every
   // attempt, and a refresh per flip would loop with no backoff.
-  // It needs a session to read anything. A fresh install that opened offline
-  // never got its guest session (AdminProvider only creates one at launch and
-  // on sign-in flows), so there every read comes back empty until a relaunch.
   const prevNet = useRef(net);
   const reconnectRefreshed = useRef(false);
   const deviceHasNoLeagues = state.leagues.length === 0;

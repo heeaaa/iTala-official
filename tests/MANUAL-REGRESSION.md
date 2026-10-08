@@ -1076,11 +1076,7 @@ need a device to confirm how it looks.
       iTala" with a **Try again** button, not a spinner for a minute. Tap Try
       again. *Expect:* it reads "Trying…", then a "No internet connection" toast
       within 15 seconds. Repeat on an iPad in landscape: the message and button
-      stay centred. Then turn aeroplane mode off. *Known limitation, not this
-      check's failure:* a fresh install that opened offline has no guest session
-      yet (AdminProvider only creates one at launch), so Home ends on "No leagues
-      yet" until the app is relaunched. Relaunch online. *Expect:* the leagues
-      load.
+      stay centred.
 - [ ] **R173** *Guest with no leagues.* (Staging or an empty project only.) As a
       guest, Home with no leagues says "Leagues appear here once they are
       published" and does not tell the guest to create one.
