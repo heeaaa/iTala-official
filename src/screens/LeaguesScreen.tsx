@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, FlatList, Pressable, Alert, Linking, TextInput, ScrollView, useWindowDimensions, RefreshControl, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -31,7 +31,7 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
   // gets an answer. It also sends anything queued before it reads, so pulling
   // down after a reconnect pushes the offline stats up rather than only
   // fetching the server's older copy.
-  const onRefresh = useCallback(async () => {
+  const onRefresh = async () => {
     setRefreshing(true);
     try {
       const [outcome] = await Promise.all([refresh(), reloadPromos()]);
@@ -39,7 +39,7 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
     } finally {
       setRefreshing(false);
     }
-  }, [refresh, reloadPromos]);
+  };
   const { role, isAdmin, user, unlock, lock, signOut, signInWithGoogle, appleAvailable, signInWithApple, authBusy, signingInWith, errorFor, clearError, isOwner, redeemCode, createCreationCode, canScoreGame } = useAdmin();
   const [askPw, setAskPw] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -174,15 +174,23 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
     .sort((a, b) => Number(favLeagues.has(b.id)) - Number(favLeagues.has(a.id)));
   // Reconnecting sends queued writes but does not re-read leagues. A first
   // launch that started offline and outlasted the boot retries would otherwise
-  // go from "Can't reach iTala" to "No leagues yet" with nothing fetched. One
-  // refresh, only on the offline-to-online change and only with an empty list.
+  // go from "Can't reach iTala" to "No leagues yet" with nothing fetched. So the
+  // first time the connection comes back while this device has no leagues at
+  // all, refresh once, unless a refresh is already running. Once only: a link
+  // that answers reads but drops writes flips offline and online on every
+  // attempt, and a refresh per flip would loop with no backoff.
   const prevNet = useRef(net);
-  const homeIsEmpty = leagueList.length === 0;
+  const reconnectRefreshed = useRef(false);
+  const deviceHasNoLeagues = state.leagues.length === 0;
   useEffect(() => {
     const was = prevNet.current;
     prevNet.current = net;
-    if (was === 'offline' && net === 'online' && synced && homeIsEmpty) void onRefresh();
-  }, [net, synced, homeIsEmpty, onRefresh]);
+    if (reconnectRefreshed.current || refreshing || !synced || !deviceHasNoLeagues) return;
+    if (was === 'offline' && net === 'online') {
+      reconnectRefreshed.current = true;
+      void refresh();
+    }
+  }, [net, synced, deviceHasNoLeagues, refreshing, refresh]);
   const showSearch = visibleLeagues.filter(l => !l.isArchived).length >= 3 || q.length > 0;
   const archivedLeagues = state.leagues.filter(l => l.isArchived && l.kind !== 'recreational');
 

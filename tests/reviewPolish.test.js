@@ -283,6 +283,62 @@ check('reconnecting with leagues already showing does not add a refresh', async 
   assert.equal(store.refreshCalls, 0);
 });
 
+// A link that answers reads but drops writes flips offline and online on every
+// attempt: the refresh's write fails (offline), its read answers (online). An
+// automatic refresh on each flip would loop with no backoff.
+check('a link that keeps flipping offline and online gets one automatic refresh, not a loop', async () => {
+  admin = guestAdmin(); store = baseStore({ net: 'offline', initialSyncDone: true });
+  const root = mount(Leagues); await settle(root);
+  for (let i = 0; i < 4; i++) {
+    store = { ...store, net: 'online' }; root.invalidate(); await settle(root);
+    store = { ...store, net: 'offline' }; root.invalidate(); await settle(root);
+  }
+  assert.equal(store.refreshCalls, 1);
+});
+
+check('a search with no matches is not an empty device: reconnecting does not refresh', async () => {
+  const leagues = ['A', 'B', 'C'].map(n => ({ ...cachedLeague, id: n, name: n }));
+  admin = guestAdmin(); store = baseStore({ net: 'offline', state: { leagues } });
+  const root = mount(Leagues);
+  nodes(root.element).find(n => n.type === 'TextInput').props.onChangeText('zzz'); await settle(root);
+  store = { ...store, net: 'online' }; root.invalidate(); await settle(root);
+  assert.equal(store.refreshCalls, 0);
+});
+
+check('a device with only drop-in games is not empty: reconnecting does not refresh', async () => {
+  const dropIn = { ...cachedLeague, id: 'rec', name: 'Community', kind: 'recreational', isShared: true };
+  admin = guestAdmin(); store = baseStore({ net: 'offline', state: { leagues: [dropIn] } });
+  const root = mount(Leagues); await settle(root);
+  store = { ...store, net: 'online' }; root.invalidate(); await settle(root);
+  assert.equal(store.refreshCalls, 0);
+});
+
+check('Try again that finds the connection back runs one refresh, not two', async () => {
+  const gate = deferred();
+  admin = guestAdmin(); store = baseStore({ net: 'offline', initialSyncDone: true });
+  let root;
+  // The real refresh pings first; an answer flips the status to online while it runs.
+  store.refresh = async () => {
+    store.refreshCalls++;
+    store = { ...store, net: 'online' }; root.invalidate();
+    await gate.promise;
+    return 'refreshed';
+  };
+  root = mount(Leagues); await settle(root);
+  homeList(root).button.onPress(); await settle(root);
+  gate.resolve(); await settle(root);
+  assert.equal(store.refreshCalls, 1);
+});
+
+check('the automatic refresh never pops a toast nobody asked for', async () => {
+  admin = guestAdmin(); store = baseStore({ net: 'offline', initialSyncDone: true });
+  store.refresh = async () => { store.refreshCalls++; return 'offline'; };
+  const root = mount(Leagues); await settle(root);
+  store = { ...store, net: 'online' }; root.invalidate(); await settle(root);
+  assert.equal(store.refreshCalls, 1);
+  assert.equal(toastOf(root), null);
+});
+
 // ---- Settings ----------------------------------------------------------------
 
 check('Settings, signed in: no "Device: …" id under the sync status', async () => {
