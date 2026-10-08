@@ -22,7 +22,7 @@ const HIDDEN_LOCK_TAPS = 10;
 const REFRESH_SPINNER_LIMIT_MS = 15000;
 
 export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
-  const { state, ready, prefs, toggleFavLeague, dispatch, refresh, synced, sync, net, prefsReady, initialSyncDone, dismissOnboarding, liveElsewhere } = useStore();
+  const { state, ready, prefs, toggleFavLeague, dispatch, refresh, synced, sync, net, pendingWrites, prefsReady, initialSyncDone, dismissOnboarding, liveElsewhere } = useStore();
   const [refreshing, setRefreshing] = useState(false);
   const [onboardingClosed, setOnboardingClosed] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -38,17 +38,30 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
   //
   // With no connection, a request can also go unanswered for minutes (the
   // client sets no timeout), and the spinner waited with it. It now stops at
-  // REFRESH_SPINNER_LIMIT_MS and says the same thing. The refresh is not
-  // cancelled: it keeps running and still applies whatever it brings back.
+  // REFRESH_SPINNER_LIMIT_MS. The refresh is not cancelled: it keeps running
+  // and still applies whatever it brings back.
+  //
+  // Running out of time is not proof of no connection. `refresh` sends the
+  // outbox first, one request per queued stat, so after an offline game it can
+  // pass the limit on a working connection. If any queued change went out while
+  // we waited, the connection works: say so, or nothing once the queue is empty.
+  const pendingNow = useRef(pendingWrites);
+  useEffect(() => { pendingNow.current = pendingWrites; }, [pendingWrites]);
+  const timedOutMessage = (pendingAtStart: number) =>
+    pendingNow.current >= pendingAtStart ? 'No internet connection. Please try again.'
+      : pendingNow.current > 0 ? 'Still sending your changes in the background.'
+        : null;
   const onRefresh = async () => {
     setRefreshing(true);
+    const pendingAtStart = pendingNow.current;
     let limit: ReturnType<typeof setTimeout> | undefined;
     try {
       const outcome = await Promise.race([
         Promise.all([refresh(), reloadPromos()]).then(([o]) => o),
         new Promise<'timed-out'>(resolve => { limit = setTimeout(() => resolve('timed-out'), REFRESH_SPINNER_LIMIT_MS); }),
       ]);
-      setToast(outcome === 'offline' || outcome === 'timed-out' ? 'No internet connection. Please try again.' : null);
+      setToast(outcome === 'timed-out' ? timedOutMessage(pendingAtStart)
+        : outcome === 'offline' ? 'No internet connection. Please try again.' : null);
     } finally {
       clearTimeout(limit);
       setRefreshing(false);
@@ -193,6 +206,9 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
   // all, refresh once, unless a refresh is already running. Once only: a link
   // that answers reads but drops writes flips offline and online on every
   // attempt, and a refresh per flip would loop with no backoff.
+  // It needs a session to read anything. A fresh install that opened offline
+  // never got its guest session (AdminProvider only creates one at launch and
+  // on sign-in flows), so there every read comes back empty until a relaunch.
   const prevNet = useRef(net);
   const reconnectRefreshed = useRef(false);
   const deviceHasNoLeagues = state.leagues.length === 0;

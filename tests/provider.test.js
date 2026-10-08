@@ -895,6 +895,51 @@ async function p12_bulk_transport_failure_recovers() {
 
 /* ------------------------------------------------------------------ runner -- */
 
+// Home's pull-to-refresh stops spinning after 15 s. It then says "No internet
+// connection" only if no queued change went out while it waited, and "Still
+// sending your changes" if some did (LeaguesScreen.tsx, onRefresh). That rests
+// on this: a manual refresh, which sends the outbox before it reads, lowers
+// pendingWrites as EACH write is confirmed, not once when the whole drain ends.
+async function p14_refresh_lowers_pending_writes_as_it_sends() {
+  wipeDisk();
+  const server = new FakeServer();
+  const A = new Phone(server);
+  await A.settle();
+  await seed(A);
+
+  server.offline(true);
+  for (let i = 0; i < 6; i++) A.ctx.dispatch(score('fg2_make'));
+  await A.settle();
+  eq('P14.1 six stats are queued', A.ctx.pendingWrites, 6);
+  eq('P14.2 the provider knows it is offline', A.ctx.net, 'offline');
+
+  // The signal is back but the app has not noticed yet; the person pulls down.
+  // Each insert takes a moment, as a real one does, so the count can be watched.
+  server.offline(false);
+  // The outbox replays events with upsert (sync.ts, REPLAY_events).
+  server.latency['upsert:events'] = 30;
+  server.latency['insert:events'] = 30;
+  let settled = false;
+  const run = A.ctx.refresh().then(outcome => { settled = true; return outcome; });
+  const seen = [];
+  const deadline = Date.now() + 5000;
+  while (!settled && Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 5));
+    A.root.flush();
+    if (!settled) seen.push(A.ctx.pendingWrites);
+  }
+  const outcome = await run;
+  await A.settle();
+
+  ok('P14.3 pendingWrites fell below six while the refresh was still running',
+     seen.some(n => n < 6), JSON.stringify(seen));
+  ok('P14.4 one confirmation at a time: it passed through counts between six and none',
+     seen.some(n => n > 0 && n < 6), JSON.stringify(seen));
+  eq('P14.5 the refresh reports success', outcome, 'refreshed');
+  eq('P14.6 every queued stat reached the server', server.count('events'), 6);
+  eq('P14.7 nothing is left waiting', A.ctx.pendingWrites, 0);
+}
+
 async function p13_dropin_legacy_race_and_confirmed_publish() {
   wipeDisk();
   const server = new FakeServer();
@@ -944,6 +989,7 @@ const groups = [
   ['P9 tip off writes a complete game', p9_tip_off_writes_a_complete_game],
   ['P10 tip off offline keeps its starting fives', p10_tip_off_offline_keeps_its_starting_fives],
   ['P11 KNOWN GAP: offline roster writes are not queued', p11_known_gap_offline_roster_writes_are_not_queued],
+  ['P14 a manual refresh lowers pendingWrites as it sends', p14_refresh_lowers_pending_writes_as_it_sends],
 ];
 
 (async () => {

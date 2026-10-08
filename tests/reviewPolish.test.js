@@ -91,7 +91,7 @@ let store = {};
 const baseStore = (over = {}) => ({
   state: { leagues: [] }, ready: true, prefs: { favLeagueIds: [], seenOnboarding: true }, prefsReady: true,
   synced: true, sync: { tone: 'ok', label: 'Synced', detail: '', pending: 0, phase: 'idle' },
-  initialSyncDone: true, net: 'online', liveElsewhere: [], dispatch() {},
+  initialSyncDone: true, net: 'online', pendingWrites: 0, liveElsewhere: [], dispatch() {},
   refreshCalls: 0, refresh: async () => { store.refreshCalls++; return 'refreshed'; },
   toggleFavLeague() {}, dismissOnboarding() {}, setHaptics() {}, setNotifs() {},
   ...over,
@@ -367,8 +367,9 @@ check('the automatic refresh never pops a toast nobody asked for', async () => {
 
 const spinnerOf = root => nodes(root.element).find(n => n.type === 'FlatList').props.refreshControl;
 
+// A dead link: nothing answers, so the status never settles to online or offline.
 check('pull-to-refresh that never answers stops spinning after 15 s and says there is no connection', async () => {
-  admin = guestAdmin(); store = baseStore({ state: { leagues: [cachedLeague] } });
+  admin = guestAdmin(); store = baseStore({ net: 'unknown', state: { leagues: [cachedLeague] } });
   store.refresh = () => { store.refreshCalls++; return new Promise(() => {}); };
   const root = mount(TimedLeagues);
   spinnerOf(root).props.onRefresh(); await settle(root);
@@ -379,6 +380,46 @@ check('pull-to-refresh that never answers stops spinning after 15 s and says the
   assert.equal(spinnerOf(root).props.refreshing, false, 'stopped at the limit');
   assert.equal(toastOf(root), 'No internet connection. Please try again.');
   assert.equal(store.refreshCalls, 1);
+});
+
+check('a dead link with stats queued: none are sent, so at 15 s it still says there is no connection', async () => {
+  admin = guestAdmin(); store = baseStore({ net: 'unknown', pendingWrites: 5, state: { leagues: [cachedLeague] } });
+  store.refresh = () => { store.refreshCalls++; return new Promise(() => {}); };
+  const root = mount(TimedLeagues);
+  spinnerOf(root).props.onRefresh(); await settle(root);
+  clock.advance(15000); await settle(root);
+  assert.equal(spinnerOf(root).props.refreshing, false);
+  assert.equal(toastOf(root), 'No internet connection. Please try again.');
+});
+
+// refresh() sends the outbox before it reads, one request per queued stat, so
+// after a game scored with no signal it can run past 15 s on a working
+// connection. pendingWrites falls as each one is confirmed.
+check('a long upload on a working connection: at 15 s it says changes are still sending, not "No internet"', async () => {
+  const done = deferred();
+  admin = guestAdmin(); store = baseStore({ pendingWrites: 150, state: { leagues: [cachedLeague] } });
+  store.refresh = () => { store.refreshCalls++; return done.promise; };
+  const root = mount(TimedLeagues);
+  spinnerOf(root).props.onRefresh(); await settle(root);
+  store = { ...store, pendingWrites: 11 }; root.invalidate(); await settle(root); // 139 of 150 sent
+  clock.advance(15000); await settle(root);
+  assert.equal(spinnerOf(root).props.refreshing, false, 'the spinner is still limited');
+  assert.equal(toastOf(root), 'Still sending your changes in the background.');
+  store = { ...store, pendingWrites: 0 }; root.invalidate();
+  clock.advance(1000); done.resolve('refreshed'); await settle(root);
+  assert.equal(spinnerOf(root).props.refreshing, false);
+  assert.equal(toastOf(root), 'Still sending your changes in the background.', 'the late answer adds no toast of its own');
+});
+
+check('the upload finished and only the read is left at 15 s: no toast at all', async () => {
+  admin = guestAdmin(); store = baseStore({ pendingWrites: 150, state: { leagues: [cachedLeague] } });
+  store.refresh = () => { store.refreshCalls++; return new Promise(() => {}); };
+  const root = mount(TimedLeagues);
+  spinnerOf(root).props.onRefresh(); await settle(root);
+  store = { ...store, pendingWrites: 0 }; root.invalidate(); await settle(root);
+  clock.advance(15000); await settle(root);
+  assert.equal(spinnerOf(root).props.refreshing, false);
+  assert.equal(toastOf(root), null);
 });
 
 check('a refresh that answers in time is unchanged: no toast, and the limit is cleared', async () => {
