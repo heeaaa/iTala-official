@@ -14,13 +14,29 @@ const vm = require('node:vm');
 const ts = require('typescript');
 const Hooks = require('./harness/pkg/react-live');
 
-function load(file, imports = {}) {
+function load(file, imports = {}, globals = {}) {
   const exports = {};
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(file, 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.React },
-  }).outputText, { exports, Map, Set, Promise, setTimeout, clearTimeout,
+  }).outputText, { exports, Map, Set, Promise, setTimeout, clearTimeout, ...globals,
     require: name => { if (!(name in imports)) throw Error(`Missing import ${name}`); return imports[name]; } });
   return exports;
+}
+// A clock the test moves by hand, so a 15 s limit is checked without waiting 15 s.
+function fakeClock() {
+  let now = 0, seq = 0;
+  const timers = new Map();
+  return {
+    setTimeout: (fn, ms) => { const id = ++seq; timers.set(id, { fn, at: now + (ms || 0) }); return id; },
+    clearTimeout: id => { timers.delete(id); },
+    advance(ms) {
+      now += ms;
+      for (const [id, t] of [...timers].sort((a, b) => a[1].at - b[1].at)) {
+        if (t.at <= now) { timers.delete(id); t.fn(); }
+      }
+    },
+    pending: () => timers.size,
+  };
 }
 function nodes(n) {
   if (!n || typeof n !== 'object') return [];
@@ -87,10 +103,15 @@ const common = {
   '../store/StoreProvider': { useStore: () => store, reducer: x => x },
   '../lib/stats': stats, '../lib/format': format,
 };
-const Leagues = load('src/screens/LeaguesScreen.tsx', { ...common,
+const leaguesImports = { ...common,
   'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) },
   '../lib/usePromos': { usePromos: () => ({ activePromos: [], reload: async () => {} }), onPromoTap() {} },
-  '../lib/legal': { PRIVACY_POLICY_URL: 'https://example.invalid/privacy' } }).default;
+  '../lib/legal': { PRIVACY_POLICY_URL: 'https://example.invalid/privacy' } };
+const Leagues = load('src/screens/LeaguesScreen.tsx', leaguesImports).default;
+// The same screen on the hand-moved clock, for the pull-to-refresh time limit.
+const clock = fakeClock();
+const TimedLeagues = load('src/screens/LeaguesScreen.tsx', leaguesImports,
+  { setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout }).default;
 const Settings = load('src/screens/SettingsScreen.tsx', { ...common,
   '../components/LegalAcknowledgement': { LegalLinks: 'LegalLinks' } }).default;
 
@@ -337,6 +358,76 @@ check('the automatic refresh never pops a toast nobody asked for', async () => {
   store = { ...store, net: 'online' }; root.invalidate(); await settle(root);
   assert.equal(store.refreshCalls, 1);
   assert.equal(toastOf(root), null);
+});
+
+// ---- Pull-to-refresh has a time limit ---------------------------------------
+// With no connection the client's requests can go unanswered for minutes, and
+// the spinner used to wait with them. It now stops after 15 s and says so; the
+// refresh itself keeps running and still applies whatever it brings back.
+
+const spinnerOf = root => nodes(root.element).find(n => n.type === 'FlatList').props.refreshControl;
+
+check('pull-to-refresh that never answers stops spinning after 15 s and says there is no connection', async () => {
+  admin = guestAdmin(); store = baseStore({ state: { leagues: [cachedLeague] } });
+  store.refresh = () => { store.refreshCalls++; return new Promise(() => {}); };
+  const root = mount(TimedLeagues);
+  spinnerOf(root).props.onRefresh(); await settle(root);
+  assert.equal(spinnerOf(root).props.refreshing, true, 'spinning while the refresh runs');
+  clock.advance(14999); await settle(root);
+  assert.equal(spinnerOf(root).props.refreshing, true, 'still spinning just before the limit');
+  clock.advance(1); await settle(root);
+  assert.equal(spinnerOf(root).props.refreshing, false, 'stopped at the limit');
+  assert.equal(toastOf(root), 'No internet connection. Please try again.');
+  assert.equal(store.refreshCalls, 1);
+});
+
+check('a refresh that answers in time is unchanged: no toast, and the limit is cleared', async () => {
+  admin = guestAdmin(); store = baseStore({ state: { leagues: [cachedLeague] } });
+  const root = mount(TimedLeagues);
+  const before = clock.pending();
+  spinnerOf(root).props.onRefresh(); await settle(root);
+  assert.equal(spinnerOf(root).props.refreshing, false);
+  assert.equal(toastOf(root), null);
+  assert.equal(clock.pending(), before, 'no limit timer left behind');
+  clock.advance(20000); await settle(root);
+  assert.equal(toastOf(root), null, 'nothing fires later');
+});
+
+check('an offline answer in time still shows the same toast, as before', async () => {
+  admin = guestAdmin(); store = baseStore({ state: { leagues: [cachedLeague] } });
+  store.refresh = async () => 'offline';
+  const root = mount(TimedLeagues);
+  spinnerOf(root).props.onRefresh(); await settle(root);
+  assert.equal(spinnerOf(root).props.refreshing, false);
+  assert.equal(toastOf(root), 'No internet connection. Please try again.');
+});
+
+check('a refresh that answers after the limit leaves the spinner stopped, and pull-to-refresh works again', async () => {
+  const late = deferred();
+  admin = guestAdmin(); store = baseStore({ state: { leagues: [cachedLeague] } });
+  store.refresh = () => { store.refreshCalls++; return late.promise; };
+  const root = mount(TimedLeagues);
+  spinnerOf(root).props.onRefresh(); await settle(root);
+  clock.advance(15000); await settle(root);
+  late.resolve('refreshed'); await settle(root);
+  assert.equal(spinnerOf(root).props.refreshing, false);
+  store.refresh = async () => { store.refreshCalls++; return 'refreshed'; };
+  spinnerOf(root).props.onRefresh(); await settle(root);
+  assert.equal(store.refreshCalls, 2, 'a second pull runs');
+  assert.equal(spinnerOf(root).props.refreshing, false);
+  assert.equal(toastOf(root), null, 'a good answer clears the earlier toast');
+});
+
+check('Try again on the offline Home has the same 15 s limit', async () => {
+  admin = guestAdmin(); store = baseStore({ net: 'offline', initialSyncDone: true });
+  store.refresh = () => { store.refreshCalls++; return new Promise(() => {}); };
+  const root = mount(TimedLeagues);
+  homeList(root).button.onPress(); await settle(root);
+  assert.equal(homeList(root).button.title, 'Trying…');
+  clock.advance(15000); await settle(root);
+  assert.deepEqual({ title: homeList(root).button.title, disabled: homeList(root).button.disabled },
+    { title: 'Try again', disabled: false });
+  assert.equal(toastOf(root), 'No internet connection. Please try again.');
 });
 
 // ---- Settings ----------------------------------------------------------------

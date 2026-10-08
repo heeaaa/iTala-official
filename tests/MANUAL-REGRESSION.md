@@ -1088,6 +1088,11 @@ need a device to confirm how it looks.
       iTala Connect website**. *Expect:* the browser opens `connect.itala.fyi`. As
       an owner, **Link this league in Connect** opens the organiser sign-in on
       `connect.itala.fyi`, and signing in there continues to the import page.
+- [ ] **R176** *Pull-to-refresh with no connection.* With leagues already on
+      Home, turn on aeroplane mode (and again on Wi-Fi with no internet, such as
+      a hotspot with no data), then pull down on Home. *Expect:* the spinner stops
+      within about 15 seconds and a "No internet connection" toast shows. It must
+      never spin for minutes. Reconnect and pull again: the leagues refresh.
 
 ## Known limitations (not bugs)
 

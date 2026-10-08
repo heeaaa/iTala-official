@@ -17,6 +17,10 @@ import { PRIVACY_POLICY_URL } from '../lib/legal';
 // the network is unavailable.
 const HIDDEN_LOCK_TAPS = 10;
 
+// How long pull-to-refresh (and Try again) spins before giving up and saying
+// there is no connection. The same 15 s the Connect bridge allows a request.
+const REFRESH_SPINNER_LIMIT_MS = 15000;
+
 export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
   const { state, ready, prefs, toggleFavLeague, dispatch, refresh, synced, sync, net, prefsReady, initialSyncDone, dismissOnboarding, liveElsewhere } = useStore();
   const [refreshing, setRefreshing] = useState(false);
@@ -31,12 +35,22 @@ export default function LeaguesScreen({ navigation }: ScreenProps<'Leagues'>) {
   // gets an answer. It also sends anything queued before it reads, so pulling
   // down after a reconnect pushes the offline stats up rather than only
   // fetching the server's older copy.
+  //
+  // With no connection, a request can also go unanswered for minutes (the
+  // client sets no timeout), and the spinner waited with it. It now stops at
+  // REFRESH_SPINNER_LIMIT_MS and says the same thing. The refresh is not
+  // cancelled: it keeps running and still applies whatever it brings back.
   const onRefresh = async () => {
     setRefreshing(true);
+    let limit: ReturnType<typeof setTimeout> | undefined;
     try {
-      const [outcome] = await Promise.all([refresh(), reloadPromos()]);
-      setToast(outcome === 'offline' ? 'No internet connection. Please try again.' : null);
+      const outcome = await Promise.race([
+        Promise.all([refresh(), reloadPromos()]).then(([o]) => o),
+        new Promise<'timed-out'>(resolve => { limit = setTimeout(() => resolve('timed-out'), REFRESH_SPINNER_LIMIT_MS); }),
+      ]);
+      setToast(outcome === 'offline' || outcome === 'timed-out' ? 'No internet connection. Please try again.' : null);
     } finally {
+      clearTimeout(limit);
       setRefreshing(false);
     }
   };
