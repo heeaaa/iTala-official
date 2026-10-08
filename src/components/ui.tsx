@@ -652,7 +652,7 @@ export function OnboardingSheet({ visible, onClose, onNeverShow }:
               </Pressable>
             </View>
             <Row icon="👀" title="Anyone can watch" body="Browse leagues, standings, and live games — no account needed." />
-            <Row icon="🏀" title="Sign in to run games" body="Sign in with Google or Apple to setup leagues and share box scores or player cards." />
+            <Row icon="🏀" title="Sign in to run games" body="Sign in with Apple or Google to set up leagues and share box scores or player cards." />
             <Row icon="🎟" title="Leagues start with a code" body="Creating a league needs a one-time code from an Admin. Owners then invite co-owners and scorekeepers with their own share codes." />
             <Row icon="⚡" title="Offline stat sync" body="Keep the game moving even when the connection drops." />
             <Pressable onPress={onNeverShow} hitSlop={8} style={{ alignSelf: 'center', paddingVertical: 6 }}>
@@ -1016,7 +1016,7 @@ export function ProfileSheet({ visible, onClose, user, role, busy, signingInWith
             <View style={{ marginBottom: space(4) }}>
               <Txt k="h2">You're browsing as a guest</Txt>
               <Txt k="body" color={colors.muted} style={{ marginTop: 4 }}>
-                Sign in to share stat cards. Admins are recognized automatically.
+                Sign in to run games, create a league with a code, and share stat cards.
               </Txt>
             </View>
             {onApple ? <AppleButton onPress={onApple} busy={busy} signingIn={signingInWith === 'apple'} /> : null}
